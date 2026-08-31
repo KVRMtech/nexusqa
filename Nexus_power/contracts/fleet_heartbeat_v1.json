@@ -1,0 +1,117 @@
+{
+  "$comment": [
+    "TEAM A / PHASE A - THE FROZEN WIRE SHAPE OF A WORKER ANNOUNCING ITSELF.",
+    "",
+    "WHY THIS FILE EXISTS. The fleet registry (qe-central explorer_workers,",
+    "qec_022) was designed around heartbeats but no heartbeat route existed and",
+    "the explorer never heartbeated, so the registry was EMPTY on the VM, the",
+    "queue drainer stayed off, and every dispatch fell back to the single static",
+    "slot - two gate collisions in one day (gap G1). This seam crosses two",
+    "services that cannot share an interpreter (both ship a top-level app",
+    "package), so the payload is frozen HERE as data and each side asserts",
+    "against it in its own process:",
+    "",
+    "    qe-explorer  app/heartbeat.py                   (produces register + heartbeat)",
+    "        -> POST /internal/fleet/workers/register",
+    "        -> POST /internal/fleet/workers/{worker_id}/heartbeat",
+    "    qe-central   app/routers/fleet.py               (consumes; writes explorer_workers)",
+    "    qe-central   app/controlplane/scheduling/worker_registry.py (register_worker, heartbeat)",
+    "",
+    "AUTHENTICATION. Both requests carry the per-fleet X-QEC-Token (the /internal",
+    "boundary check, M0.5 T-SEC-02) AND the v2 X-QEC-Signature envelope over the",
+    "exact request bytes (hmac_auth.sign: key id, timestamp, single-use nonce,",
+    "body hash, scope). The SCOPE binds the signature to one worker id, so a",
+    "captured heartbeat cannot be replayed as a different worker's.",
+    "",
+    "WORKER IDENTITY (the Team F seam, stated plainly). Under this version the",
+    "worker_id is a CLAIM signed with the shared fleet secret: any holder of the",
+    "fleet secret can announce any worker id. That is the same trust level as a",
+    "completion callback today. A per-worker credential (Team F) replaces",
+    "worker_identity=fleet-secret with a per-worker key id in a later schema",
+    "version; nothing in this file assumes it.",
+    "",
+    "CHANGING THIS FILE IS A PROTOCOL CHANGE. Bump schema_version, ship the",
+    "reader on both sides FIRST, and add the new version beside this one."
+  ],
+  "schema_version": 1,
+  "headers": {
+    "token": "X-QEC-Token",
+    "signature": "X-QEC-Signature"
+  },
+  "routes": {
+    "register": {
+      "method": "POST",
+      "path": "/internal/fleet/workers/register",
+      "scope": "worker-register:{worker_id}"
+    },
+    "heartbeat": {
+      "method": "POST",
+      "path": "/internal/fleet/workers/{worker_id}/heartbeat",
+      "scope": "worker-heartbeat:{worker_id}"
+    }
+  },
+  "worker_id_pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+  "url_schemes": ["http", "https"],
+  "capacity_range": [1, 64],
+  "statuses": ["active", "draining", "disabled"],
+  "worker_identity": "fleet-secret",
+  "register_request": {
+    "required_fields": ["schema_version", "worker_id", "url", "allowlist_path", "capacity"],
+    "optional_fields": ["tenant_affinity", "meta"],
+    "sample": {
+      "schema_version": 1,
+      "worker_id": "qe-explorer-1",
+      "url": "http://qe-explorer:8210",
+      "allowlist_path": "/qec/egress-allowlist/allowed_domains.txt",
+      "capacity": 2,
+      "tenant_affinity": "",
+      "meta": {
+        "explorer_version": "1.0.0",
+        "refuse_pack_version": "2026.08",
+        "fence_mode": "per-crawl",
+        "hostname": "qe-explorer"
+      }
+    }
+  },
+  "register_response": {
+    "required_fields": ["worker_id", "registered", "capacity", "heartbeat_interval_s", "heartbeat_ttl_s", "worker_identity"],
+    "sample": {
+      "worker_id": "qe-explorer-1",
+      "registered": true,
+      "capacity": 2,
+      "heartbeat_interval_s": 30.0,
+      "heartbeat_ttl_s": 90.0,
+      "worker_identity": "fleet-secret"
+    }
+  },
+  "heartbeat_request": {
+    "required_fields": ["schema_version", "worker_id", "in_flight", "capacity", "status"],
+    "sample": {
+      "schema_version": 1,
+      "worker_id": "qe-explorer-1",
+      "in_flight": 1,
+      "capacity": 2,
+      "status": "active"
+    }
+  },
+  "heartbeat_response": {
+    "required_fields": ["worker_id", "acknowledged", "heartbeat_interval_s", "heartbeat_ttl_s"],
+    "sample": {
+      "worker_id": "qe-explorer-1",
+      "acknowledged": true,
+      "heartbeat_interval_s": 30.0,
+      "heartbeat_ttl_s": 90.0
+    }
+  },
+  "unknown_worker": {
+    "status": 404,
+    "action": "re-register",
+    "$comment": "A heartbeat for a worker id the registry does not hold answers 404. The worker MUST re-register (declaring capacity and affinity) rather than be resurrected with defaults nobody chose - the registry may have been reset under it."
+  },
+  "timing": {
+    "$comment": "The worker beats every heartbeat_interval_s as ADVERTISED in the register/heartbeat response (one place: worker_registry.heartbeat_interval_seconds). qe-central judges a worker stale after heartbeat_ttl_s without a beat, retires it (status -> stale, unschedulable) and deletes the row after its retention window.",
+    "default_heartbeat_interval_s": 30.0,
+    "default_heartbeat_ttl_s": 90.0,
+    "retired_status": "stale"
+  }
+}

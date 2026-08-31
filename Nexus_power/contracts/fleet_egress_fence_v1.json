@@ -1,0 +1,90 @@
+{
+  "$comment": [
+    "TEAM A / PHASE A - THE FROZEN SHAPE OF A PER-CRAWL EGRESS FENCE.",
+    "",
+    "THE DEFECT THIS CLOSES (R2 / G2). The squid allowlist was ONE FILE PER",
+    "WORKER: qe-central wrote allowed_domains.txt, squid matched a single",
+    "dstdomain ACL against it for every request. At capacity > 1 the second",
+    "crawl dispatched to a worker overwrote the first crawl's live fence - a",
+    "cross-tenant egress leak, recorded by the strict xfail in",
+    "tests/fleet/test_t_fl_08_concurrency_redteam.py and made unreachable only",
+    "by the admission clamp (FENCE_IS_PER_WORKER). The ARB record",
+    "(QECentral/docs/ARB_EGRESS_FENCE_DECISION.md) is right that per-crawl FILES",
+    "alone fix nothing: squid must SELECT the fence per crawl, which needs a",
+    "per-request identity. That identity is the PROXY LOGIN.",
+    "",
+    "THE MECHANISM, across three parties that cannot share a test process:",
+    "",
+    "    qe-central   routers/explorations._write_egress_allowlist(domains, allowlist_path, crawl_id=...)",
+    "                 writes  <root>/crawls/allowlist.<crawl_id>.txt   (one dstdomain file per crawl)",
+    "                 regenerates <root>/crawls.conf                   (one ACL pair + one allow per live crawl)",
+    "                 rewrites <root>/reload.stamp                     (content changes -> squid is HUP'd)",
+    "    squid        engines/qe-explorer/squid.conf",
+    "                 include /etc/squid/allowlist/crawls.conf; every crawl must authenticate to the",
+    "                 proxy (basic_fake_auth accepts any password; the USERNAME is the crawl id), and the",
+    "                 http_access line for crawl X allows ONLY the fence of X. Unauthenticated -> 407.",
+    "                 Authenticated to a foreign host -> 403. No shared file is consulted at all.",
+    "    qe-explorer  app/fence.py -> the browser CONTEXT for crawl X is created with proxy credentials",
+    "                 username = X, so every request the crawl makes carries its own identity.",
+    "",
+    "<root> is the DIRECTORY of the worker's registered allowlist_path (qec_022",
+    "column): qe-central sees it at /qec/egress-allowlist, squid at",
+    "/etc/squid/allowlist - the same volume. Two workers registering the same",
+    "allowlist_path still share a root and are still refused together (T-FL-04",
+    "fence_conflicts): the per-crawl fence isolates crawls WITHIN a worker; the",
+    "per-worker root isolates workers.",
+    "",
+    "FAIL-CLOSED BY CONSTRUCTION. A crawl whose file was never written has no ACL",
+    "line and reaches nothing. A browser context without credentials is 407'd and",
+    "reaches nothing. A missing crawls.conf is seeded EMPTY by the proxy's",
+    "entrypoint, which is deny-all. An old explorer image (no credentials) against",
+    "the new squid.conf reaches nothing - the safe direction for a mixed deploy.",
+    "",
+    "CHANGING THIS FILE IS A PROTOCOL CHANGE across three deployables. Bump",
+    "schema_version and add the new version beside this one."
+  ],
+  "schema_version": 1,
+  "roots": {
+    "qe_central_view": "/qec/egress-allowlist",
+    "squid_view": "/etc/squid/allowlist",
+    "$comment": "Derived at runtime as dirname(allowlist_path); these literals are the shipped compose values and what the tests assert the shipped squid.conf uses."
+  },
+  "layout": {
+    "per_crawl_dir": "crawls",
+    "per_crawl_file": "allowlist.{crawl_id}.txt",
+    "acl_include": "crawls.conf",
+    "reload_stamp": "reload.stamp"
+  },
+  "crawl_id_pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,49}$",
+  "proxy_identity": {
+    "username": "{crawl_id}",
+    "password": "fenced",
+    "$comment": "basic_fake_auth accepts any password; the username is the whole identity. The password is a constant, NOT a secret, and is documented as such - a per-crawl secret would be theatre while the helper does not verify it."
+  },
+  "acl_template": [
+    "acl crawl_{tag} proxy_auth {crawl_id}",
+    "acl fence_{tag} dstdomain \"{squid_root}/crawls/allowlist.{crawl_id}.txt\"",
+    "http_access allow crawl_{tag} fence_{tag}"
+  ],
+  "tag_rule": "crawl_id with every character outside [A-Za-z0-9] replaced by underscore",
+  "squid_conf_must_contain": [
+    "auth_param basic program /usr/lib/squid/basic_fake_auth",
+    "acl fenced_crawl proxy_auth REQUIRED",
+    "http_access deny !fenced_crawl",
+    "include /etc/squid/allowlist/crawls.conf",
+    "http_access deny all"
+  ],
+  "squid_conf_must_not_contain": [
+    "http_access allow allowed_domains"
+  ],
+  "sample": {
+    "crawl_id": "9c21b4e0a1b2c3d4e5f60718293a4b5c",
+    "domains": [".acmelife.example", "cdn.acmelife.example"],
+    "per_crawl_file_body": "# fence for crawl 9c21b4e0a1b2c3d4e5f60718293a4b5c (written by qe-central at dispatch, fail-closed)\n.acmelife.example\ncdn.acmelife.example\n",
+    "crawls_conf_lines": [
+      "acl crawl_9c21b4e0a1b2c3d4e5f60718293a4b5c proxy_auth 9c21b4e0a1b2c3d4e5f60718293a4b5c",
+      "acl fence_9c21b4e0a1b2c3d4e5f60718293a4b5c dstdomain \"/etc/squid/allowlist/crawls/allowlist.9c21b4e0a1b2c3d4e5f60718293a4b5c.txt\"",
+      "http_access allow crawl_9c21b4e0a1b2c3d4e5f60718293a4b5c fence_9c21b4e0a1b2c3d4e5f60718293a4b5c"
+    ]
+  }
+}
