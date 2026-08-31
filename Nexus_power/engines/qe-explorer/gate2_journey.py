@@ -136,7 +136,7 @@ APPS: dict[str, dict[str, Any]] = {
 }
 
 
-def grants_for(app: str) -> list[dict[str, Any]]:
+def grants_for(app: str, base_url: str = "") -> list[dict[str, Any]]:
     """The ONLY grant this journey carries: the one control that COMMITS.
 
     ``transits`` are deliberately NOT granted, and the reason is a defect this
@@ -167,7 +167,18 @@ def grants_for(app: str) -> list[dict[str, Any]]:
     grant = {"control": APPS[app]["commit"], "approved_by": "gate2-operator",
              "max_crossings": 1, "role": "commit"}
     if APPS[app].get("commit_url"):
-        grant["url"] = APPS[app]["commit_url"]
+        commit_url = APPS[app]["commit_url"]
+        # The PATH is the app's own and stays pinned; the ORIGIN follows the
+        # --url the operator actually served the container on. Measured: the
+        # container came up on :8123 while this table said :8103, the grant's
+        # url narrowing matched nothing, and the commit was refused for a
+        # reason that had nothing to do with the application.
+        if base_url:
+            from urllib.parse import urlsplit, urlunsplit
+            want, have = urlsplit(commit_url), urlsplit(base_url)
+            commit_url = urlunsplit(
+                (have.scheme, have.netloc, want.path, want.query, ""))
+        grant["url"] = commit_url
     return [grant]
 
 #: Forward-shaped label fragments the stand-in recognises. Generic funnel
@@ -326,7 +337,7 @@ async def run(app: str, url: str, *, oracle_kind: str, out_root: Path,
             boundary_approvals=[{k: v for k, v in g.items()
                                  if k in ("control", "approved_by",
                                           "max_crossings", "url")}
-                                for g in grants_for(app)],
+                                for g in grants_for(app, url)],
             credentials=Credentials.from_payload(cfg["credentials"]),
         )
         await crawler.run()
@@ -396,7 +407,7 @@ def verdict_of(app: str, url: str, result: Mapping[str, Any]) -> dict[str, Any]:
         #: wrong -- see _producing_code.
         "produced_by": _producing_code(),
         "commit_control": APPS[app]["commit"],
-        "grants": grants_for(app),
+        "grants": grants_for(app, url),
         #: Controls the funnel cannot be walked past, which this journey
         #: deliberately did NOT grant -- see grants_for.__doc__.
         "known_blockers": [{"control": n, "reason": r}
