@@ -26,6 +26,31 @@ from .auth import (AUTH_NO_CREDENTIALS, AUTH_NOT_PERSISTED,
                    AUTH_SESSION_EXPIRED)
 
 
+def _seed_near_misses(ledger) -> list[dict[str, str]]:
+    """THE ASK, not a guess: fields an operator seed nearly reached.
+
+    B4's honest half. A seed whose label is CLOSE to an unfilled field but does
+    not match it is not applied — carrying the wrong operator value is worse
+    than carrying none — so instead the pair is named here, once per (field,
+    url), for the operator to confirm. Labels only; the seed's value never
+    travels.
+    """
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in ledger or ():
+        near = str((row or {}).get("seed_near_miss") or "").strip()
+        if not near:
+            continue
+        field_label = str(row.get("label") or row.get("name") or "").strip()
+        url = str(row.get("url") or "")[:300]
+        key = (field_label.lower(), url)
+        if not field_label or key in seen:
+            continue
+        seen.add(key)
+        out.append({"field": field_label[:120], "seed": near[:120], "url": url})
+    return out[:50]
+
+
 def _provenance_counts(ledger) -> dict[str, int]:
     """How many fields each rung answered. COUNTS, never values.
 
@@ -485,6 +510,9 @@ class CoverageLedger:
             # above: a 500-row cap on what an operator reads must not silently
             # become a cap on what the account counts.
             "data_account": _provenance_counts(c._field_ledger),
+            # B4's ask: seeds that NEARLY reached a field, named for the
+            # operator to confirm rather than applied on a guess.
+            "seed_near_misses": _seed_near_misses(c._field_ledger),
             # TIER-3 LIVENESS + TELEMETRY (Track 3.1/3.3). `configured` says the
             # mechanism was WIRED; the counts say whether it was ever asked and
             # what it answered. Without this, "is tier-3 alive" is an inference

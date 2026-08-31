@@ -143,7 +143,10 @@ def test_a_partial_mask_is_refused_because_it_is_worse_than_none():
     complete phone number FAILS. A fragment is refused, so the field falls to
     an honest ASK.
 
-    NOT CLAIMED: this format is still not READ. Refusing it is correct; parsing
-    it needs telling format-parens from wrapper-parens, which is not done."""
-    assert mask_pattern("Phone must be (999) 999-9999") == ""
-    assert interpret("Phone must be (999) 999-9999").actionable is False
+    LIMIT CLOSED in the follow-up: the area-code shape is now matched as ONE
+    complete token BEFORE the general branches (_AREA_RE), so the fragment path
+    is never reached for it. The fragment refusal itself still stands and is
+    asserted in test_an_area_code_mask_is_one_complete_format.py against a
+    parenthetical that is NOT an area code."""
+    assert mask_pattern("Phone must be (999) 999-9999") == r"^\(\d{3}\) \d{3}\-\d{4}$"
+    assert interpret("Phone must be (999) 999-9999").actionable is True

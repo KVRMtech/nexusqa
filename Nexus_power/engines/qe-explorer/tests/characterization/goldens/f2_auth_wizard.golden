@@ -220,6 +220,7 @@
       "misses": 0,
       "reuse_rate": 0.0
     },
+    "seed_near_misses": [],
     "states": [
       {
         "ax_fingerprint": "369e78fce9cf9af37043129137fee54eaeaddf91d7e034353ccc72e986e386e5",

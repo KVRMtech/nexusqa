@@ -200,6 +200,7 @@
       "misses": 0,
       "reuse_rate": 0.0
     },
+    "seed_near_misses": [],
     "states": [
       {
         "ax_fingerprint": "9167cb7e452d9cea69d008e70ffcc201a4dd96d2a81407a69fa57a718406033e",

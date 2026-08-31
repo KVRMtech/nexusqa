@@ -596,6 +596,48 @@ def _seed_by_label(recalled: Mapping[str, str], label: str) -> Optional[str]:
     return None                            # nothing, or an ambiguous pair
 
 
+#: Words that carry no meaning for deciding whether two labels are the same
+#: question. Short and deliberately small — every word here is one a label can
+#: differ by without the QUESTION differing.
+_SEED_STOPWORDS = frozenset({"the", "a", "an", "of", "and", "or", "your",
+                             "please", "enter", "your", "number", "no"})
+
+
+def _seed_tokens(text: Any) -> set[str]:
+    return {t for t in _norm_seed_label(text).split()
+            if len(t) >= 3 and t not in _SEED_STOPWORDS}
+
+
+def _seed_near_miss(recalled: Mapping[str, str], label: str) -> str:
+    """The LABEL of a seed that is close to this field but does NOT match — or "".
+
+    B4's second measured pair, `Last Physical Exam` against `Last Exam Date`,
+    differs by reordered and different words. No containment rule reaches one
+    from the other, and loosening the matcher until it did would put an
+    operator's value into a field it may not answer. So the walk does the one
+    honest thing left: it NAMES the near-miss on the record, so the operator
+    is ASKED "did you mean this field?" rather than guessed at.
+
+    Value-free by construction: only the seed's LABEL is returned, never its
+    value, and only when exactly one seed is close — two close seeds are two
+    questions for the operator, not one guess by the crawl.
+    """
+    want = _seed_tokens(label)
+    if len(want) < 2:
+        return ""
+    close: list[str] = []
+    for key, value in (recalled or {}).items():
+        if _SIGNATURE_KEY_RE.match(str(key or "")) or value in (None, ""):
+            continue
+        have = _seed_tokens(key)
+        if len(have) < 2:
+            continue
+        shared = len(want & have)
+        if shared >= 2 and shared / min(len(want), len(have)) >= 0.5:
+            close.append(str(key))
+    return close[0] if len(close) == 1 else ""
+
+
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
                   *, recalled: Optional[Mapping[str, str]] = None,
@@ -765,6 +807,14 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
             # weaker than the signature and consulted only after it, so every
             # existing seed resolves exactly as it did.
             prior_value = _seed_by_label(recalled, name)
+            if prior_value in (None, ""):
+                # B4 — a seed that is CLOSE but not a match is a question for
+                # the operator, not a guess by the crawl. Recorded on the
+                # field's own ledger row (label only, never a value) and rolled
+                # up by coverage into `seed_near_misses`, which is the ask.
+                near = _seed_near_miss(recalled, name)
+                if near:
+                    entry["seed_near_miss"] = near[:120]
         if prior_value not in (None, ""):
             entry.update(provenance=PROV_RECALLED, filled=True)
             return {"value": str(prior_value), "entry": entry}

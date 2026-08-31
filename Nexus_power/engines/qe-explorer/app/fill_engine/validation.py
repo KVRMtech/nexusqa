@@ -362,6 +362,18 @@ _MASK_RE = re.compile(
 _MASK_CLASS = {"A": "[A-Za-z]", "a": "[A-Za-z]"}
 
 
+#: THE AREA-CODE SHAPE. "(999) 999-9999" has parentheses that are PART of the
+#: format, not a wrapper around it — the case the first cut could only refuse.
+#: Recognised as one complete token: a short parenthesised run, then a run,
+#: then one or more separated runs. Matched before the general branches so
+#: the general parenthesised branch never sees "(999)" alone and the bare
+#: branch never sees the tail as a fragment.
+_AREA_RE = re.compile(
+    r"(?:^|\s)(\(\s*[" + _MASK_CHARS + r"]{2,4}\s*\)[ ]?[" + _MASK_CHARS +
+    r"]{2,6}(?:[" + re.escape("-./") + r"][" + _MASK_CHARS + r"]{2,6}){1,4})"
+    r"(?=$|[\s.,;])")
+
+
 def mask_pattern(message: str) -> str:
     """The regex a FORMAT MASK inside ``message`` describes, or "".
 
@@ -373,11 +385,19 @@ def mask_pattern(message: str) -> str:
     body = _norm(message)
     if not body:
         return ""
-    found = _MASK_RE.search(body)
-    if not found:
-        return ""
-    mask = (found.group(1) or found.group(2) or "").strip()
-    if found.group(2):
+    area = _AREA_RE.search(body)
+    if area:
+        # One complete format; inner whitespace normalised so "( 999 )" and
+        # "(999)" draw the same shape. Parentheses reach the run/flush loop as
+        # separators and are escaped there.
+        mask = re.sub(r"\s+", " ", area.group(1)).replace("( ", "(").replace(" )", ")")
+        found = None
+    else:
+        found = _MASK_RE.search(body)
+        if not found:
+            return ""
+        mask = (found.group(1) or found.group(2) or "").strip()
+    if found is not None and found.group(2):
         # A BARE TOKEN THAT IS ONLY PART OF A FORMAT IS WORSE THAN NO FORMAT.
         # Measured: "(999) 999-9999" — the parenthesised branch rejects "999"
         # as too short, and the bare branch then matched the TAIL, yielding
@@ -408,7 +428,7 @@ def mask_pattern(message: str) -> str:
             run_char, run_len = ch, run_len + 1
         elif ch in _MASK_SEPARATORS:
             _flush()
-            out.append(re.escape(ch))
+            out.append(" " if ch == " " else re.escape(ch))
         else:
             return ""                    # not a mask after all
     _flush()
