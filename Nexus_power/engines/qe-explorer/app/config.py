@@ -135,6 +135,14 @@ class Settings(BaseSettings):
     #: control at 2857ms, so 3000 leaves headroom over the real gap. 0 disables.
     undecided_settle_ms: int = Field(default=3_000,
                                      alias="QEC_UNDECIDED_SETTLE_MS")
+    #: B1-S — how many times the rejection reader may step BACK through a
+    #: multi-step form after a commit that was refused silently, looking for the
+    #: step the refused field (and therefore its message node) lives on.
+    #: MEASURED on summit-life-carrier 2026-08-31: the wizard's review step
+    #: renders no message node at all and its four field steps sit 1-4 clicks
+    #: behind it, so 4 reaches every one of them. 0 disables the mechanism
+    #: entirely and restores the previous behaviour exactly.
+    step_back_max: int = Field(default=4, alias="QEC_STEP_BACK_MAX")
     #: Re-login attempts on session expiry (design §3.2 auth.py: ≤3).
     max_relogins: int = Field(default=3, alias="QEC_MAX_RELOGINS")
 

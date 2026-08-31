@@ -16,12 +16,20 @@ the cycle it was dodging.  A lazy import does not remove a cycle; it hides it.
 Both modules now import that helper DOWNWARD from here, and the
 ``crawler -> forms -> crawler`` cycle is gone rather than deferred.
 
-THE PHASE-1 SEAM.  :meth:`StateFingerprinter.fingerprint` accepts a
-``perceptual_hash`` and threads it to the hasher.  Nothing computes one yet, so
-it is always empty and every digest is bit-identical to today's.  M1.1 supplies
-a real value without moving a signature or a call site.  ``None`` and ``""``
-are normalised to the same request, which is what lets perceptual hashing be
-switched on per-tenant without invalidating states already visited.
+THE PHASE-1 SEAM, NOW CLOSED.  :meth:`StateFingerprinter.fingerprint` accepts a
+``perceptual_hash`` and threads it to the hasher.  That value is now REAL:
+:mod:`app.walker` computes it with :func:`app.perception.perceptual_hash_png`
+and passes it into the walk's identity ladder, which is what closed F1 (a
+same-shape wizard whose twenty steps hashed to one state).  ``None`` and ``""``
+are still normalised to the same request, which is what lets perceptual hashing
+be switched off per-tenant without invalidating states already visited — a
+digest computed with no pixels is bit-identical to every digest ever persisted
+before the seam was filled.
+
+WHAT IS STILL DELIBERATELY OUT.  ``step_ordinal`` exists on the hasher and the
+walk does NOT use it; see :class:`WalkIdentity` below for the measurement that
+decided that, and ``test_indistinguishable_steps_stop_honestly`` for the
+negative control that fails if someone reintroduces it.
 """
 from __future__ import annotations
 

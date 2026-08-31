@@ -41,6 +41,7 @@ from . import network_evidence as net_evidence
 from . import matcher
 from . import perception
 from . import rules
+from . import step_back as _step_back
 from . import value_infer
 from . import vocab
 from .advance_signature import compute_signature
@@ -781,6 +782,7 @@ class WalkerMixin:
     async def _name_validation_rejections(
         self, url: str, trigger: str,
         before_texts: "Sequence[str]" = (),
+        steps_back: int = 0,
     ) -> int:
         """BLOCKER 3 — name the field the APP rejected, and the rule it cited.
 
@@ -812,6 +814,13 @@ class WalkerMixin:
         anchored to nothing is page context and never becomes a verdict on a
         field. A page whose cookie banner is ``role=alert`` produces no
         rejections here.
+
+        ``steps_back`` (B1-S) is the number of step-back clicks that separate
+        this read from the page the commit was refused on. It is PROVENANCE,
+        not behaviour: every record this call appends carries it, so a reader
+        can tell a message read where the commit happened from one read on an
+        earlier wizard step. Zero — the ordinary case — adds nothing to the
+        record and every existing bundle stays byte-identical.
 
         Returns the number of rejections named.
         """
@@ -853,6 +862,10 @@ class WalkerMixin:
                 "anchored_by": str(best.source or ""),
                 "rejected_on": trigger[:120],
             }
+            if steps_back:
+                # B1-S provenance. Present ONLY on a stepped-back read, so no
+                # existing record grows a key and no golden moves.
+                record["steps_back"] = int(steps_back)
             if not any(r.get("url") == record["url"]
                        and r.get("field") == record["field"]
                        for r in self._validation_rejections):
@@ -982,6 +995,8 @@ class WalkerMixin:
             "anchored_by": "page",
             "rejected_on": trigger[:120],
         }
+        if steps_back:
+            record["steps_back"] = int(steps_back)
         if not any(r.get("url") == record["url"] and r.get("rule") == record["rule"]
                    for r in self._validation_rejections):
             self._validation_rejections.append(record)
@@ -992,6 +1007,186 @@ class WalkerMixin:
                 url[:120], trigger[:40], rule[:80])
             return 1
         return 0
+
+    async def _read_rejections_by_stepping_back(
+        self, *, url: str, trigger: str, max_steps: "Optional[int]" = None,
+    ) -> int:
+        """B1-S — GO WHERE THE MESSAGE LIVES.
+
+        THE STEP THIS EXISTS FOR, measured in the application's own source
+        rather than imagined. summit-life-carrier's new-application wizard is
+        five steps inside ONE ``<form>``. ``handleSubmit`` runs a zod resolver
+        over the whole schema before the submit handler is reached, so a refusal
+        populates ``formState.errors`` and never fires a request. Each error
+        renders through a ``<FormMessage/>`` that lives inside its own field's
+        ``<FormItem>`` — and the review step, where ``Submit Application`` is
+        the only control, declares no field and therefore renders no message
+        node at all:
+
+            crossed 1 ['Submit Application']   outcome "none"   navigated false
+            /api/v1/ calls fired: 0            rejections named: 0
+
+        Standing on the review step, the reader is looking at a page that
+        genuinely says nothing. Every refusal is on a step that is UNMOUNTED.
+        B1 closed the "the app spoke in plain text" gap; this closes the "the
+        app spoke on a page we had already left" gap, and the two are different
+        failures with the same symptom.
+
+        WHAT IT DOES. Clicks the step-back control, re-reads through the SAME
+        attribution ladder, and stops the moment a field is named. It never
+        walks forward again: the boundary is spent, the milestone is minted,
+        and there is nothing on the far side of a re-advance except a second
+        chance to click a commit. :mod:`app.step_back` owns every decision;
+        this method owns only the clicking, the same split the rest of the
+        engine uses.
+
+        WHAT IT MAY CLAIM. Anchored rejections only. ``before_texts`` is
+        deliberately NOT passed: the plain-text rung is licensed by ACT-THEN-DIFF
+        and there is no before-snapshot for a step the reader was not standing
+        on when the commit was refused. Offering it here would let a step's
+        ordinary helper text — "All fields are required" — be read as a verdict
+        the commit produced. Anchored or nothing, and the record says which.
+
+        Returns the number of rejections named across every step visited.
+        """
+        # ``None`` means "use the shipped default"; ZERO MEANS DISABLED and
+        # must not fall through to it. Writing this as ``max_steps or DEFAULT``
+        # made ``QEC_STEP_BACK_MAX=0`` silently run four steps — the config
+        # promises 0 restores the previous behaviour exactly, and the promise
+        # has to hold at the driver too, not only at the gate that calls it.
+        budget = (_step_back.DEFAULT_MAX_STEPS_BACK if max_steps is None
+                  else int(max_steps))
+        if budget <= 0:
+            logger.info(
+                "qec.stepback.disabled url=%s budget=%d — the mechanism is "
+                "switched off; the crossing's silence stands as measured",
+                url[:120], budget)
+            return 0
+        clicks = 0
+        try:
+            named_total, clicks = await self._step_back_scan(
+                url=url, trigger=trigger, budget=budget)
+            return named_total
+        finally:
+            # ── LEAVE THE PAGE AS IT WAS FOUND ──────────────────────────
+            # ONLY when something was actually clicked. `_discover` still has
+            # work queued against THIS state (`_tab_views` clicks a tab and
+            # records what it finds as a view of this page), and acting on a
+            # stepped-back DOM would file those observations under the wrong
+            # parent. But a restore that fires when the reader never moved is
+            # a page load and a request spent for nothing — measured: it moved
+            # `requests 2 -> 3` in the f3_questionnaire_submit characterization
+            # golden, on a crawl where no step-back control existed at all.
+            # A mechanism must be free when it declines.
+            #
+            # `_goto_keeping_login`, never a raw goto: an app that drops its
+            # session per page load answers the raw form with its SIGN-IN WALL
+            # — the exact failure that once put five sign-in "pages" into a
+            # journey where business pages belonged.
+            if clicks:
+                navigator = getattr(self, "_goto_keeping_login", None)
+                if navigator is None:
+                    logger.warning(
+                        "qec.stepback.no_navigator url=%s clicks=%d — the "
+                        "browser is left on an earlier step", url[:120], clicks)
+                else:
+                    try:
+                        await navigator(url)
+                    except Exception as exc:           # noqa: BLE001
+                        logger.warning(
+                            "qec.stepback.restore_failed url=%s %s: %s — the "
+                            "browser is left on an earlier step; later "
+                            "observations of this state are not trustworthy",
+                            url[:120], type(exc).__name__, str(exc)[:120])
+
+    async def _step_back_scan(
+        self, *, url: str, trigger: str, budget: int,
+    ) -> "tuple[int, int]":
+        """The loop itself: step back, read, stop when named.
+
+        Split from :meth:`_read_rejections_by_stepping_back` so that method's
+        ``finally`` can restore the page on EVERY exit path — the early returns
+        below are the ordinary case, not the exception.
+
+        Returns ``(rejections_named, clicks_made)``. The click count is what
+        decides whether a restore is owed: a scan that clicked nothing left the
+        browser exactly where it found it and owes nothing.
+        """
+        named_total = 0
+        clicks = 0
+        seen_signatures: set[str] = set()
+        for depth in range(1, budget + 1):
+            try:
+                obs = await self._observe()
+                controls = build_inventory(obs.raw_controls, self._refuse_pack,
+                                           url=obs.url)
+            except Exception as exc:                   # never fail a crossing
+                logger.warning(
+                    "qec.stepback.observe_failed url=%s depth=%d %s: %s",
+                    url[:120], depth, type(exc).__name__, str(exc)[:120])
+                return named_total, clicks
+
+            pick, verdicts = _step_back.pick_step_back_control(controls)
+            if pick is None:
+                # LOGGED, not silent — the same doctrine
+                # ``_commit_subform_to_unblock`` adopted after a silent decline
+                # was indistinguishable from a mechanism that never ran.
+                logger.info(
+                    "qec.stepback.no_control url=%s depth=%d verdicts=%s "
+                    "— nothing on this page steps back; the walk stops here "
+                    "and the silence stands as measured",
+                    url[:120], depth, verdicts[:8])
+                return named_total, clicks
+
+            # A "Back" that does not move is a hang waiting to happen. The
+            # actionable-control signature is the same discriminator
+            # ``_candidate_sig`` uses for a stalled advance, and for the same
+            # reason: a page fingerprint cannot see a step change that swaps
+            # fields without changing structure.
+            signature = _candidate_sig(controls)
+            if signature in seen_signatures:
+                logger.info(
+                    "qec.stepback.no_movement url=%s depth=%d — the step-back "
+                    "control did not change the actionable set; stopping "
+                    "rather than clicking it again",
+                    url[:120], depth)
+                return named_total, clicks
+            seen_signatures.add(signature)
+
+            pick_name = str(pick.get("name") or "").strip()
+            try:
+                await self._port.click(dict(pick))
+            except Exception as exc:                   # never fail a crossing
+                logger.warning(
+                    "qec.stepback.click_failed url=%s depth=%d pick=%r %s: %s",
+                    url[:120], depth, pick_name[:40], type(exc).__name__,
+                    str(exc)[:120])
+                return named_total, clicks
+            clicks += 1
+            self._tracker.note_action()
+
+            named = await self._name_validation_rejections(
+                url, trigger, steps_back=depth)
+            named_total += named
+            logger.info(
+                "qec.stepback.read url=%s depth=%d pick=%r named=%d "
+                "— read on the step the FIELD lives on, not the step the "
+                "commit lives on", url[:120], depth, pick_name[:40], named)
+            if named:
+                # The message has been found. Every further step back is
+                # another click this crawl would have to own for no new fact.
+                logger.warning(
+                    "qec.stepback.named url=%s depth=%d count=%d — a commit "
+                    "that looked silent was refused with reasons %d step(s) "
+                    "back; the reader went to where the message lives",
+                    url[:120], depth, named, depth)
+                return named_total, clicks
+        logger.info(
+            "qec.stepback.exhausted url=%s budget=%d named=%d — every step "
+            "back was read and the application anchored no rejection anywhere; "
+            "the silence is a fact about its markup",
+            url[:120], budget, named_total)
+        return named_total, clicks
 
     async def _commit_subform_to_unblock(
         self, controls: "Sequence[dict[str, Any]]", url: str,

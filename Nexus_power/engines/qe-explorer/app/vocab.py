@@ -143,6 +143,58 @@ def compile_negative_option_re() -> re.Pattern[str]:
 NEGATIVE_OPTION_RE = compile_negative_option_re()
 
 
+#: B1-S — STEP-BACK vocabulary: a control whose whole purpose is to return the
+#: user to the PREVIOUS step of a multi-step form without committing anything.
+#:
+#: Deliberately OUTSIDE ``LANGUAGE_PACKS`` for the same reason as
+#: ``PERSISTENCE_PACKS`` and ``NEGATIVE_OPTION_PACKS``: that table is mirrored
+#: byte-for-byte in qe-central and pinned by parity tests in both suites, and
+#: this vocabulary has no counterpart there.
+#:
+#: WHY THE PRODUCT NEEDS IT. Measured on summit-life-carrier: a five-step
+#: wizard renders its per-field refusals with ``<FormMessage/>`` inside each
+#: step, and the REVIEW step where ``Submit Application`` lives renders none.
+#: The schema refuses on submit, the messages belong to fields on earlier steps
+#: whose message nodes are unmounted, and a reader standing on the review step
+#: sees a blank page and truthfully reports nothing. The message lives where the
+#: field lives, so the reader has to go there.
+#:
+#: MATCHING THIS LIST GRANTS NOTHING. It only makes a control ELIGIBLE to be
+#: clicked by the post-crossing rejection reader, which additionally requires a
+#: button kind, no danger flag, no commit word, no advance word, and a boundary
+#: that is already spent. The list widens what the reader will TRY, never what
+#: the guard will ALLOW.
+BACK_PACKS: dict[str, list[str]] = {
+    "en": [
+        r"back", r"go\s*back", r"back\s*(?:a\s*)?step",
+        r"previous", r"prev", r"previous\s*step", r"go\s*to\s*previous",
+        r"back\s*to\s*(?:the\s*)?previous(?:\s*step)?",
+        r"return\s*to\s*(?:the\s*)?previous(?:\s*step)?",
+    ],
+}
+
+
+def compile_back_re() -> re.Pattern[str]:
+    """FULL-STRING match, like the persistence and negative-option rules.
+
+    A substring rule would read "Back" inside "Back to Dashboard" — a control
+    that LEAVES the funnel rather than stepping one page up it — and inside
+    "Roll Back Payment", which is a mutation wearing a navigation word. The
+    whole label has to say step-back and nothing else.
+
+    Bare ``return`` is deliberately absent: on a commerce application "Return"
+    alone is a product return, which is a mutation. Only the phrase forms that
+    name the previous STEP are admitted.
+    """
+    alts: list[str] = []
+    for pack in BACK_PACKS.values():
+        alts.extend(pack)
+    return re.compile(r"^(?:" + "|".join(alts) + r")$", re.I)
+
+
+BACK_RE = compile_back_re()
+
+
 def _union(kind: str) -> list[str]:
     """All alternatives of ``kind`` across every pack, order-preserving and
     de-duplicated (first pack wins the position — 'en' stays byte-stable)."""

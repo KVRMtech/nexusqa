@@ -25,6 +25,13 @@ from . import flow_ledger
 from .auth import (AUTH_NO_CREDENTIALS, AUTH_NOT_PERSISTED,
                    AUTH_SESSION_EXPIRED)
 
+#: B4 — how many pages one ledger row may name in ``also_seen_at`` /
+#: ``unresolved_at``.  A field the crawl meets on two hundred pages must not
+#: turn one row into a two-hundred-entry list: the bundle is evidence an
+#: operator reads, not a log.  Twelve is comfortably more than the deepest
+#: funnel measured here (summit's wizard is five steps) and still scannable.
+_MAX_LEDGER_URLS = 12
+
 
 def _seed_near_misses(ledger) -> list[dict[str, str]]:
     """THE ASK, not a guess: fields an operator seed nearly reached.
@@ -153,17 +160,86 @@ class CoverageLedger:
         Deduped because the same field on ten pages is ONE thing to ask the client
         about — a residue list that repeats itself is the reason operators stop
         reading it. The first sighting wins and keeps its page, which is what lets
-        the ask say WHICH flow the field belongs to."""
+        the ask say WHICH flow the field belongs to.
+
+        ── B4 · LEDGER COMPLETENESS ────────────────────────────────────────
+        THE MEASURED GAP, and it is not the one the Phase-1 exit re-scope
+        named. That document recorded five summit-life-carrier wizard fields —
+        ``First Name``, ``Last Name``, ``Date of Birth``, ``Email Address``,
+        ``Gender`` — as "absent from the field ledger entirely, so they have no
+        signature to seed against at all", and proposed making unfillable
+        custom widgets ledger-visible. Both halves of that are wrong, and the
+        proposed remedy could not have worked: four of the five are plain
+        ``<Input>``s that filled successfully, and all five ARE ledgered by
+        ``fill_form_phase_a``.
+
+        What actually happens is HERE. A field signature is deliberately
+        URL-free (``app.field_signature`` — that is what lets an answer learned
+        once be reused), so the wizard's ``First Name`` hashes to exactly the
+        same 32 hex digits as the ``First Name`` on ``/customers/profile``,
+        which the crawl visits first. Verified by recomputation, not inferred:
+
+            wizard  First Name -> f1f681ea2d53613c865959331447d2e2
+            profile First Name -> f1f681ea2d53613c865959331447d2e2   (identical)
+
+        The ``continue`` below then dropped the wizard's row, and the crawl-wide
+        ledger ended with 28 rows across five URLs and NOT ONE from the
+        application funnel it had just walked. An operator reading that ledger
+        sees ``First Name`` filed under a profile page and has no way to know
+        the same field governs the funnel that is blocking.
+
+        THE FIX KEEPS THE PROPERTY THE DOCSTRING ABOVE IS RIGHT ABOUT. One row
+        per field, so the ask never repeats; but the row now carries every page
+        the field was MET on, and — separately — every page where it was NOT
+        resolved. Those are different facts and conflating them is what hid the
+        blocker: a first sighting that filled cleanly must never be allowed to
+        report on behalf of a later sighting that did not.
+
+        Both keys are ADDITIVE AND CONDITIONAL: a field seen on exactly one
+        page grows neither, so every existing row stays byte-identical and no
+        golden moves for a single-page field.
+        """
         ledger = self._c._field_ledger
-        seen = {e.get("signature") for e in ledger}
+        by_signature: dict[Any, dict[str, Any]] = {}
+        for existing in ledger:
+            sig = existing.get("signature")
+            if sig and sig not in by_signature:
+                by_signature[sig] = existing
         for entry in entries or ():
             sig = entry.get("signature")
-            if not sig or sig in seen:
+            if not sig:
                 continue
-            seen.add(sig)
-            row = dict(entry)
-            row["url"] = url
-            ledger.append(row)
+            row = by_signature.get(sig)
+            if row is None:
+                fresh = dict(entry)
+                fresh["url"] = url
+                ledger.append(fresh)
+                by_signature[sig] = fresh
+                continue
+            # A LATER SIGHTING OF A FIELD THE LEDGER ALREADY HOLDS.
+            if url and url != row.get("url"):
+                self._note_url(row, "also_seen_at", url)
+            # THE COMPLETENESS HALF. `filled` on the canonical row is a fact
+            # about the page that row names, and about no other page. When this
+            # sighting did NOT resolve, the ledger says so against THIS url
+            # rather than inheriting the first sighting's success.
+            if not entry.get("filled") and url:
+                self._note_url(row, "unresolved_at", url)
+
+    @staticmethod
+    def _note_url(row: dict[str, Any], key: str, url: str) -> None:
+        """Append ``url`` to ``row[key]`` once, creating the key on first use.
+
+        BOUNDED (``_MAX_LEDGER_URLS``): a crawl that meets one field on two
+        hundred pages must not turn one ledger row into a two-hundred-entry
+        list — the bundle is evidence an operator reads, not a log.
+        """
+        urls = row.get(key)
+        if urls is None:
+            urls = []
+            row[key] = urls
+        if url not in urls and len(urls) < _MAX_LEDGER_URLS:
+            urls.append(url)
 
     def note_fills_by_kind(self, counts: Mapping[str, int]) -> None:
         """Roll one page's committed fills into the crawl-wide count.

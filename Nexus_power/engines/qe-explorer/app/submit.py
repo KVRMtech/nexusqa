@@ -43,6 +43,7 @@ from . import danger_signals
 from . import emit
 from . import matcher
 from . import perception
+from . import step_back
 from . import value_infer
 from . import vocab
 from .auth import (
@@ -564,19 +565,68 @@ class SubmitMixin:
         if milestone is not None and not (milestone.confirmation_rung or ""):
             namer = getattr(self, "_name_validation_rejections", None)
             if namer is not None:
+                named_on_landing = 0
+                read_url = str(getattr(result, "url_after", "") or
+                               record.url or "")
+                trigger = "commit:%s" % str(record.control_name or "")[:60]
                 try:
                     # B1 — the pre-click texts captured beside the crossing let
                     # the namer read a PLAIN-TEXT refusal (react-hook-form's
                     # per-field messages carry no ARIA) by its transition.
                     crossing_sides = getattr(result, "crossing", None) or {}
-                    await namer(str(getattr(result, "url_after", "") or
-                                    record.url or ""),
-                                "commit:%s" % str(record.control_name or "")[:60],
-                                before_texts=crossing_sides.get("texts_before") or ())
+                    named_on_landing = int(await namer(
+                        read_url, trigger,
+                        before_texts=crossing_sides.get("texts_before") or ()) or 0)
                 except Exception as exc:            # never fail a crossing
                     logger.warning(
                         "qec.fill.rejection_hook_failed crossing_id=%s %s: %s",
                         record.crossing_id, type(exc).__name__, str(exc)[:120])
+                # ── B1-S · THE MESSAGE LIVES WHERE THE FIELD LIVES ──────────
+                # A commit refused by a whole-schema validator renders its
+                # messages inside the FIELDS it refused, and on a multi-step
+                # form those fields are on steps that are no longer mounted.
+                # Standing on the review step and reading nothing is a true
+                # observation of a page that genuinely says nothing — and a
+                # useless one. So the reader goes to where the message lives.
+                #
+                # Gated by app.step_back, which refuses unless the boundary is
+                # ALREADY SPENT (asked of the ledger, not assumed), the crossing
+                # produced no confirmation, the anchored reader above found
+                # nothing, and the commit did not navigate. Every one of those
+                # is an observation; none is an intention.
+                stepper = getattr(self, "_read_rejections_by_stepping_back", None)
+                try:
+                    from .config import Settings
+                    budget = int(getattr(
+                        Settings(), "step_back_max",
+                        step_back.DEFAULT_MAX_STEPS_BACK) or 0)
+                except Exception:                               # noqa: BLE001
+                    budget = step_back.DEFAULT_MAX_STEPS_BACK
+                verdict = step_back.may_step_back(
+                    confirmation_rung=str(milestone.confirmation_rung or ""),
+                    named_on_landing=named_on_landing,
+                    url_before=str(record.url or ""),
+                    url_after=str(getattr(result, "url_after", "") or ""),
+                    crossing_spent=self._crossings.is_spent(
+                        control_name=str(record.control_name or ""),
+                        url=str(record.url or ""),
+                        state_fingerprint=str(fingerprint or "")),
+                    max_steps=budget)
+                if stepper is None or not verdict.permitted:
+                    logger.info(
+                        "qec.stepback.declined crossing_id=%s reason=%s "
+                        "budget=%d — logged on BOTH polarities so a decline is "
+                        "never mistaken for a mechanism that did not run",
+                        record.crossing_id, verdict.reason, verdict.max_steps)
+                else:
+                    try:
+                        await stepper(url=read_url, trigger=trigger,
+                                      max_steps=verdict.max_steps)
+                    except Exception as exc:        # never fail a crossing
+                        logger.warning(
+                            "qec.stepback.failed crossing_id=%s %s: %s",
+                            record.crossing_id, type(exc).__name__,
+                            str(exc)[:120])
         return True
 
     def _record_outcome_milestone(
