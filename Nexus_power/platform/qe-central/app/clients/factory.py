@@ -201,7 +201,7 @@ async def list_test_cases(
 
 async def run_cases(
     *, tenant_id: str, artifact_id: str, test_ids: list[str],
-    environment_id: str = "",
+    environment_id: str = "", journey_payloads: list[dict] | None = None,
 ) -> dict:
     """Dispatch a real runner execution of ``test_ids`` (service JWT).
 
@@ -211,6 +211,8 @@ async def run_cases(
     uncertified) or 404 (no matching active cases) propagates as
     :class:`FactoryClientError` for the caller to record honestly."""
     body: dict = {"test_ids": [str(t) for t in test_ids if str(t).strip()]}
+    if journey_payloads:
+        body["journey_payloads"] = list(journey_payloads)
     if environment_id.strip():
         body["environment_id"] = environment_id.strip()
     return await _call(

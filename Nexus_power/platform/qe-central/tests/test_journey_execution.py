@@ -127,6 +127,20 @@ def test_run_cases_body_shape(monkeypatch):
     assert seen["body"] == {"test_ids": ["case-1"]}
 
 
+def test_run_cases_carries_direct_journey_payload_without_an_artifact_case(monkeypatch):
+    seen = {}
+
+    async def fake_call(*, json_body=None, **_kw):
+        seen["body"] = json_body
+        return {"run_id": "r1", "status": "running"}
+
+    monkeypatch.setattr(factory, "_call", fake_call)
+    payload = {"journey_id": "j1", "test_id": "jny-1", "steps": [{"action": "open"}]}
+    asyncio.run(factory.run_cases(
+        tenant_id="t1", artifact_id="art1", test_ids=[], journey_payloads=[payload]))
+    assert seen["body"] == {"test_ids": [], "journey_payloads": [payload]}
+
+
 def test_list_runs_unwraps_runs_key(monkeypatch):
     async def fake_call(**kw):
         return {"artifact_id": "a", "runs": [{"run_id": "x", "ci_run_id": "d"}]}
@@ -183,6 +197,31 @@ def test_dispatch_running_records_row_and_spawns_poller(monkeypatch):
     assert row.status == "running" and row.dispatch_run_id == "disp-1"
     assert row.env_ref == "uat"
     assert len(spawned) == 1
+
+
+def test_direct_journey_dispatch_uses_headless_runner_with_its_own_payload(monkeypatch):
+    store = _FakeSession()
+    monkeypatch.setattr(runner, "tenant_scoped_qec_session", _fake_scope(store))
+    monkeypatch.setattr(runner, "_spawn_poller", lambda **_kw: None)
+
+    async def no_live(**_kw):
+        raise AssertionError("a journey-direct spec must not claim the artifact-only live path")
+
+    seen = {}
+    async def direct_run(**kw):
+        seen.update(kw)
+        return {"run_id": "direct-1", "status": "running"}
+
+    monkeypatch.setattr(runner.factory, "run_cases_live", no_live)
+    monkeypatch.setattr(runner.factory, "run_cases", direct_run)
+    payload = {"journey_id": "j1", "test_id": "jny-1", "steps": [{"action": "open"}]}
+    out = asyncio.run(runner.dispatch_journey_run(
+        tenant_id="t1", app_id="app1", journey_id="j1", artifact_id="art1",
+        test_case_id="jny-1", journey_payload=payload))
+
+    assert out["status"] == "running"
+    assert seen["test_ids"] == []
+    assert seen["journey_payloads"] == [payload]
 
 
 def test_dispatch_blocked_body_is_an_honest_row(monkeypatch):

@@ -61,7 +61,7 @@ async def any_run_in_flight(*, tenant_id: str) -> bool:
 async def dispatch_journey_run(
     *, tenant_id: str, app_id: str, journey_id: str, artifact_id: str,
     test_case_id: str, env_ref: str = "", identity_ref: str = "",
-    live: bool = True,
+    live: bool = True, journey_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Dispatch ONE journey execution and record its ledger row.
 
@@ -81,14 +81,20 @@ async def dispatch_journey_run(
     status = "blocked"
     blocked_reason = ""
     try:
-        if live:
+        # The live endpoint currently selects only materialised artifact cases.
+        # A journey-direct specification is intentionally an ephemeral runner
+        # bundle (its stable identity must not be moved between artifacts), so
+        # it runs on the same headless runner endpoint instead of pretending the
+        # live endpoint can execute a case it cannot load.
+        if live and not journey_payload:
             result = await factory.run_cases_live(
                 tenant_id=tenant_id, artifact_id=artifact_id,
                 test_ids=[test_case_id])
         else:
             result = await factory.run_cases(
                 tenant_id=tenant_id, artifact_id=artifact_id,
-                test_ids=[test_case_id])
+                test_ids=[] if journey_payload else [test_case_id],
+                journey_payloads=[journey_payload] if journey_payload else None)
         r_status = str(result.get("status") or "")
         if r_status == "running" and result.get("run_id"):
             dispatch_run_id = str(result["run_id"])
