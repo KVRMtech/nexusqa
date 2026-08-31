@@ -63,8 +63,31 @@ GONE; unknown ⇒ 404 naming re-register; re-registration resets `in_flight`.
 Auth negatives: unsigned ⇒ 401 before validation; a signature scoped to
 another worker id ⇒ 401; path/body worker mismatch ⇒ 400.
 
-**Not claimed**: the live VM measurement (count ≥1 within one TTL of the
-explorer starting) — needs a deploy.
+**Proven, live, two processes** (2026-08-31, `live_announce_proof.py` +
+`announce_worker_side.py`): qe-central's REAL `worker_router` served by
+uvicorn on a real port against a migrated qecentral database, driven by the
+EXPLORER's own `FleetAnnouncer` — its signing, its payloads — running in its
+own interpreter, because the two `app` packages cannot share one (the same
+constraint that makes the frozen contract necessary; a first attempt to do it
+in-process was caught by an assert and restructured rather than fudged). All
+17 checks PASS:
+
+```
+forged_secret_refused ← CONTROL: a wrong fleet secret is refused
+                        (unknown_key_id) and writes NO row
+registered · row_exists · identity_declared · capacity_landed
+allowlist_path_landed · schedulable
+heartbeat_ack · liveness_advanced · worker_own_in_flight · interval_advertised
+retired_at_ttl · row_kept_for_debugging · retired_row_unschedulable
+count_drops_to_zero          ← the A1 done-when, at TTL 6s / retention 9s
+unknown_worker_404 · re_registered
+```
+
+The control is what makes the rest mean anything: without it, every "the row
+appeared" check would pass equally against a route that accepted anything.
+
+**Still not claimed**: the same measurement ON THE VM, against the deployed
+containers — that needs a deploy this session did not perform.
 
 ## A2 — the queue drainer, on and honest
 
@@ -175,6 +198,26 @@ cannot lag the producer). A `fleet2` compose profile adds
 `qe-explorer-2` + `qec-egress-proxy-2` with their own fence volume for the
 two-worker exit measurement.
 
+### Who else goes through the proxy? (the "what did this break" check)
+
+Requiring a proxy login makes every un-credentialed request 407, so the
+question is whether anything OTHER than the crawl context egresses through
+squid. Measured, not assumed:
+
+* `grep new_context(` across the whole explorer app → **one** site
+  (`main.py`, the crawl context) — the one that now carries the credentials.
+  `playwright_port.py` mentions it only in a docstring.
+* `grep egress_proxy|proxy=` across the app → the launch flag (unchanged, and
+  it must stay: Chromium routes a per-context proxy through the launch proxy),
+  the health field, and the new per-context call.
+* The service-root harness scripts (`gate2_journey.py`, `measure_*.py`,
+  `record_live_capture.py`) reference no proxy at all — they launch plain
+  Chromium and were never fenced by squid. Confirmed independently by the
+  session running the live summit journeys on that harness.
+
+So the blast radius of the auth requirement is exactly the production crawl
+path, which is the path that carries the identity.
+
 ## Worker accounting completes the loop
 
 Dispatch stamps `worker_id` onto the exploration row (`jsonb_set`, not a
@@ -229,10 +272,14 @@ tests/test_crawl_quota_enforcement_m34.py
 The 1 skip is the T-FL-08 object-storage test (needs `QEC_TEST_S3_ENDPOINT`;
 MinIO was not provisioned in this lane — its property is untouched by Phase A).
 Explorer side: `test_heartbeat_contract.py` + `test_fence_identity.py` +
-`test_no_import_cycles.py` green (24 tests); non-browser explorer suite 2751
-passed (3 walker-area tests failed mid-lane and pass in isolation — Team B
-was rewriting those subjects on this shared checkout during the run; not
-Phase-A files).
+`test_no_import_cycles.py` green (24 tests); the whole non-browser explorer
+suite **2774 passed, 2 xfailed, 0 failed** on the post-commit tree.
+
+(An earlier run of that suite showed 3 walker-area reds — `test_crawler_logic`,
+`test_decision_points`, `test_e2e_advance`. They passed in isolation at the
+time and are green in this full run: another session was landing Team B's
+walker/submit rewrite into this shared checkout mid-lane. Recorded because a
+red on a shared tree is not evidence until it survives a rerun.)
 
 DB lane provenance: throwaway `postgres:16-alpine` + the production
 `scripts/qec_ci_db_setup.sh` (same bootstrap SQL, same least-privilege
