@@ -1837,6 +1837,11 @@ async def execute_submit_phase_b(
             "observed_at_ms": int(observed_at_ms),
             "outcome_values": list(displayed_values or []),
             "error_detail": (observation.error_detail or "")[:300],
+            # B1's diff needs the page's PRE-CLICK texts: a crossing that lands
+            # on nothing owes a reason, and the reason is text that APPEARED
+            # after the refused submit. Bounded exactly as visible_texts bounds
+            # it; discarded by the caller after the diff, never emitted.
+            "texts_before": list(before.get("texts") or ()),
         },
     )
 

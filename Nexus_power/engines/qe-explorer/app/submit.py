@@ -565,9 +565,14 @@ class SubmitMixin:
             namer = getattr(self, "_name_validation_rejections", None)
             if namer is not None:
                 try:
+                    # B1 — the pre-click texts captured beside the crossing let
+                    # the namer read a PLAIN-TEXT refusal (react-hook-form's
+                    # per-field messages carry no ARIA) by its transition.
+                    crossing_sides = getattr(result, "crossing", None) or {}
                     await namer(str(getattr(result, "url_after", "") or
                                     record.url or ""),
-                                "commit:%s" % str(record.control_name or "")[:60])
+                                "commit:%s" % str(record.control_name or "")[:60],
+                                before_texts=crossing_sides.get("texts_before") or ())
                 except Exception as exc:            # never fail a crossing
                     logger.warning(
                         "qec.fill.rejection_hook_failed crossing_id=%s %s: %s",
