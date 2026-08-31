@@ -964,6 +964,39 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
     return {"value": None, "entry": entry}
 
 
+def _needs_input_reason(widget: Any, entry: Mapping[str, Any], kind: str,
+                        data_mode: str) -> str:
+    """WHY nothing honest could be produced — one short, closed-vocabulary
+    token per cause, ordered strongest-first.
+
+    The vocabulary is deliberately tiny and mechanical: the ledger is evidence
+    an operator reads, and a reason is only useful if the same cause always
+    produces the same string.  Every token answers the operator's actual
+    question — "what do you need from me?":
+
+    ``widget_unhandled:<class>``  the crawl has no primitive that drives this
+                                  control; a seed alone cannot fix it and the
+                                  widget class is named so the gap is a work
+                                  item, not a mystery;
+    ``secret_never_invented``     a password / one-time code — supplying it is
+                                  the only remedy, and inventing one produces
+                                  a test that passes against nothing;
+    ``choice_left_to_client``     an enumerable business fork in ``user`` data
+                                  mode — the crawl must not decide which path
+                                  is exercised without saying so;
+    ``no_value_rung_answered``    every rung ran and none had an answer — the
+                                  ordinary "please seed this" case.
+    """
+    if widget is not None and not getattr(widget, "answerable", True):
+        return "widget_unhandled:%s" % getattr(widget, "name", "unknown")
+    if entry.get("sensitive"):
+        return "secret_never_invented"
+    if (kind in _ENUMERABLE_KINDS
+            and _norm(data_mode) != field_values.DATA_MODE_AGENT):
+        return "choice_left_to_client"
+    return "no_value_rung_answered"
+
+
 async def fill_form_phase_a(
     port: BrowserPort,
     controls: Sequence[Mapping[str, Any]],
@@ -1101,6 +1134,16 @@ async def fill_form_phase_a(
             if entry.get("provenance") != PROV_GROUP_SIBLING:
                 if not is_filter:
                     result.unfilled_fields.append(name)
+                # B4 (second half) — a needs_input row SAYS WHY, so the seed
+                # request built from it asks an answerable question. "Supply
+                # Health Conditions" and "supply Security PIN" look identical
+                # on a bare list and need opposite responses: one is a choice
+                # the crawl declined to make, the other a secret it must never
+                # invent. Additive and conditional — only rows that were
+                # already needs_input grow the key, so nothing else moves.
+                if entry.get("provenance") == PROV_NEEDS_INPUT:
+                    entry.setdefault("reason", _needs_input_reason(
+                        widget, entry, kind, data_mode))
             result.field_ledger.append(entry)
             continue
 

@@ -132,3 +132,44 @@ def test_a_parenthetical_that_is_the_whole_label_does_not_vanish_silently():
     """Normalising to nothing must not then match everything."""
     assert _norm_seed_label("($)") == ""
     assert _seed_by_label({"($)": "x"}, "Face Amount") is None
+
+
+# ── B4 (second half) · EVERY STEP-0 QUESTION HAS A ROW THE WIZARD CAN SEE ──
+# MEASURED LIVE 2026-08-31 (summit run on the a07cb59+ ledger): the five
+# fields the Phase-1 exit re-scope recorded as "absent from the field ledger
+# entirely" each carry exactly one row, filed under the page that met them
+# first, with the wizard named in also_seen_at. This pins that live shape as
+# a unit over the same CoverageLedger the crawl uses, so "zero questions with
+# no row" is a property a test holds rather than a sentence a bundle implies.
+
+def test_the_five_summit_fields_each_have_a_row_the_wizard_can_claim():
+    from app.coverage import CoverageLedger
+
+    class _Host:
+        def __init__(self):
+            self._field_ledger = []
+
+    profile = "http://x/customers/profile"
+    wizard = "http://x/underwriting/new-business/new-application"
+    five = ["First Name", "Last Name", "Date of Birth", "Email Address",
+            "Gender"]
+    host = _Host()
+    led = CoverageLedger(host)
+    # The live order: the profile page is crawled first and the URL-free
+    # signatures collide, which is exactly what used to drop the wizard rows.
+    led.collect_ledger(
+        [{"signature": "sig-" + n.lower(), "name": n, "filled": True}
+         for n in five], profile)
+    led.collect_ledger(
+        [{"signature": "sig-" + n.lower(), "name": n, "filled": True}
+         for n in five], wizard)
+    rows = {r["name"]: r for r in host._field_ledger}
+    missing = [n for n in five if n not in rows]
+    assert not missing, "questions with NO row at all: %r" % missing
+    invisible = [n for n in five
+                 if wizard not in (rows[n].get("also_seen_at") or [])
+                 and rows[n].get("url") != wizard]
+    assert not invisible, (
+        "rows the wizard cannot claim as its own: %r — this is the shipped "
+        "collision bug come back" % invisible)
+    assert len(host._field_ledger) == len(five), "the ask must never repeat"
