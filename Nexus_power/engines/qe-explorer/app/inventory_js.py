@@ -61,10 +61,15 @@ RawControl shape (one object per visible interactive element):
                     ("q:<container>"), "" when the page declared none.  Wider
                     than ``group_key``: a bare-<button> Yes/No pair inside a
                     <fieldset> is one question too, and grouping by radio
-                    semantics alone could never see it.
+                    semantics alone could never see it.  A TABLE ROW counts as
+                    a declared container when its first cell captions two or
+                    more answers — see ``questionRowOf``, which is how the
+                    table-laid-out questionnaire (no fieldset anywhere on the
+                    page) gets an identity that is not its DOM ordinal.
     question_label  the application's OWN wording for that question, from a
                     declared accessible-name rung only (aria-labelledby →
-                    aria-label → <legend> → heading inside the container).
+                    aria-label → <legend> → the row's label cell, when the
+                    container IS a table row → heading inside the container).
                     "" when nothing was declared — never inferred from layout.
     question_label_source
                     which rung produced it, so a reader can weigh it
@@ -607,6 +612,26 @@ INVENTORY_JS = (r"""
   // wording, in the page's own structure, and it is read only when every rung
   // above produced nothing. Marked best_effort — a layout convention is weaker
   // evidence than <label for>, and the refiner should keep saying so.
+  // The row's label-cell wording, given the ROW itself. Split out of `rowLabel`
+  // so ONE definition of "what a label cell is" serves both a single control's
+  // own name (rung 8, below) and the QUESTION a row of bare answer buttons asks
+  // (`questionRowOf`). Two copies of this rule would eventually disagree about
+  // which rows have labels, and the two callers would then describe the same
+  // table differently.
+  function rowLabelText(row) {
+    if (!row || lc(row.tagName) !== "tr") return "";
+    var cells = row.children;
+    if (!cells || cells.length < 2) return "";
+    // A label cell holds words, not more controls.
+    var first = cells[0];
+    try {
+      if (first.querySelector("input, select, textarea, button")) return "";
+    } catch (e) {}
+    var text = norm(first.textContent || "");
+    if (!text || text.length > MAX_LANDMARK) return "";
+    return text.replace(/[:*\s]+$/, "");
+  }
+
   function rowLabel(el) {
     var cell = el.closest ? el.closest("td, th") : null;
     if (!cell) return "";
@@ -617,15 +642,8 @@ INVENTORY_JS = (r"""
     // The first cell of the row, and only when the control is NOT in it — a
     // one-cell row, or a control sitting in the label cell itself, tells us
     // nothing.
-    var first = cells[0];
-    if (first === cell) return "";
-    // A label cell holds words, not more controls.
-    try {
-      if (first.querySelector("input, select, textarea, button")) return "";
-    } catch (e) {}
-    var text = norm(first.textContent || "");
-    if (!text || text.length > MAX_LANDMARK) return "";
-    return text.replace(/[:*\s]+$/, "");
+    if (cells[0] === cell) return "";
+    return rowLabelText(row);
   }
 
   function accessibleName(el, doc) {
@@ -954,6 +972,20 @@ INVENTORY_JS = (r"""
     if (al) return pre + "al:" + lc(al);
     var lb = attr(cur, "aria-labelledby");
     if (lb) return pre + "lb:" + lb;
+    if (lc(cur.tagName) === "tr") {
+      // A QUESTION ROW IS IDENTIFIED BY THE QUESTION IT ASKS, not by where it
+      // sits. Rows get inserted, reordered, filtered and paginated, and a
+      // positional key would mint a brand-new question every time the table
+      // above one changed — re-asking, in the catalogue, a question the
+      // application has been asking all along.
+      //
+      // Kept in its OWN `qrow:` namespace rather than joining the positional
+      // index below. Adding <tr> to that querySelectorAll would have shifted
+      // every `ix:` key on any page holding both a fieldset and a table,
+      // silently re-identifying questions in catalogues built before today.
+      var rt = rowLabelText(cur);
+      return rt ? (pre + "qrow:" + lc(rt)) : "";
+    }
     try {                                  // positional, stable within a root
       var all = doc.querySelectorAll("[role=radiogroup],fieldset");
       for (var i = 0; i < all.length; i++) { if (all[i] === cur) return pre + "ix:" + i; }
@@ -1012,6 +1044,16 @@ INVENTORY_JS = (r"""
           }
         }
       }
+      if (lc(container.tagName) === "tr") {
+        // The row's label cell. Reached only through `questionRowOf`, which has
+        // already established that this row IS a question — so this reads the
+        // caption of a container, exactly like <legend> above it, rather than
+        // guessing at one. Placed before the generic heading rung because the
+        // label cell is the row's OWN declared wording, while a heading found
+        // inside a table row is whatever happens to be nested there.
+        var rt = rowLabelText(container);
+        if (rt) return { label: clip(rt, MAX_NAME), source: "row-label" };
+      }
       var h = container.querySelector("h1,h2,h3,h4,h5,h6,[role=heading],legend");
       if (h) {
         var ht = accText(h);
@@ -1027,6 +1069,64 @@ INVENTORY_JS = (r"""
   // most needed real wording are rendered as bare <button>s ("Yes"/"No" pairs on
   // a health questionnaire), which are not radios, carry no name attribute, and
   // therefore never entered the grouping logic at all.
+  // ── A TABLE ROW AS A DECLARED QUESTION CONTAINER ──────────────────────
+  //
+  // THE HOLE THE M2.1 LADDER LEFT. Every container `questionContainerOf` knows
+  // is an ARIA/HTML grouping element, and the bare-button questionnaire this
+  // product exists to crawl frequently uses NONE of them. It is a table, and
+  // the question is the ROW:
+  //
+  //     <tr><td>Have you used tobacco in the last 12 months?</td>
+  //         <td><button>Yes</button><button>No</button></td></tr>
+  //
+  // The walk climbed straight past that row, found no declared container, and
+  // returned "" — so `question_label` was empty, the catalogue stamped the
+  // question UNVERIFIED, and its identity fell back to the DOM ordinal. The
+  // application's own wording was in the page the entire time, one cell away.
+  //
+  // THIS IS STRUCTURE, NOT PROXIMITY, and the distinction is the whole reason
+  // it is allowed. The row is the DOM's own grouping of one question with its
+  // answers — the same relationship <fieldset> states, spelled the way table
+  // markup spells it, and the one <th scope=row> exists to declare. It is NOT
+  // "the text just above", which this ladder still refuses.
+  //
+  // Read only when no stronger container was declared, and only when the row
+  // really is a question:
+  //
+  //   * the label cell holds WORDS, not more controls (`rowLabelText`);
+  //   * the control is not itself in the label cell;
+  //   * TWO OR MORE actuators sit outside it. A row with ONE control is a
+  //     FIELD, and accessible-name rung 8 already names that field from the
+  //     same cell; promoting it to a question would rename every table-laid-out
+  //     form field in every catalogue — a far larger change than this one, and
+  //     a wrong one;
+  //   * the row is not in a <thead> — that is a data table's filter row, not a
+  //     question, the same distinction `filter_scope` already draws.
+  //
+  // A row failing any of those is not a question container and the caller
+  // records UNVERIFIED exactly as before.
+  function questionRowOf(el) {
+    var cell = el.closest ? el.closest("td, th") : null;
+    if (!cell) return null;
+    var row = cell.parentElement;
+    if (!row || lc(row.tagName) !== "tr") return null;
+    if (row.children[0] === cell) return null;
+    try {
+      if (el.closest("thead")) return null;
+    } catch (e) {}
+    if (!rowLabelText(row)) return null;
+    var actuators = 0;
+    try {
+      var cells = row.children;
+      for (var i = 1; i < cells.length; i++) {
+        var found = cells[i].querySelectorAll(
+          "button, input, select, textarea, [role=button], [role=radio], [role=checkbox]");
+        actuators += found ? found.length : 0;
+      }
+    } catch (e) {}
+    return actuators >= 2 ? row : null;
+  }
+
   function questionContainerOf(el) {
     var cur = parentAcross(el), hops = 0;
     while (cur && cur.nodeType === 1 && hops < 12) {
@@ -1038,7 +1138,10 @@ INVENTORY_JS = (r"""
       cur = parentAcross(cur);
       hops++;
     }
-    return null;
+    // No ARIA/HTML container was declared anywhere above this control. A table
+    // row can still BE one. LAST, so a <fieldset> inside a table cell always
+    // wins — the stronger declaration is never displaced by the weaker one.
+    return questionRowOf(el);
   }
 
   function questionOf(el, doc) {

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 31 - table-row questionnaire</title></head>
+<body>
+  <main>
+    <h1>Health questionnaire</h1>
+
+    <!-- CASE A - THE DEFECT THIS FIXTURE EXISTS FOR.
+         A bare-button questionnaire laid out as a TABLE. There is no <fieldset>,
+         no role=group and no role=radiogroup anywhere on it, so every container
+         the M2.1 ladder knew about is absent. The question is the ROW, and the
+         application's own wording for it is the row's label cell.
+
+         Before the row rung, questionContainerOf climbed past these rows, found
+         nothing, and returned "" - so question_label was empty, the catalogue
+         stamped the question UNVERIFIED, and identity fell back to the DOM
+         ordinal. The wording was one cell away the whole time. -->
+    <table>
+      <tbody>
+        <tr>
+          <th scope="row">Have you used tobacco in the last 12 months?</th>
+          <td>
+            <button type="button" data-testid="a-tobacco-yes">Yes</button>
+            <button type="button" data-testid="a-tobacco-no">No</button>
+          </td>
+        </tr>
+        <tr>
+          <td>Have you been hospitalised in the last 5 years?</td>
+          <td>
+            <button type="button" data-testid="a-hosp-yes">Yes</button>
+            <button type="button" data-testid="a-hosp-no">No</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- CASE B - CONTROL. ONE control in the row is a FIELD, not a question.
+         Accessible-name rung 8 already names it from this very cell; promoting
+         it to a question would rename every table-laid-out form field in every
+         catalogue. question_label MUST stay "" here while `name` is the cell. -->
+    <table>
+      <tbody>
+        <tr>
+          <td>Country of residence</td>
+          <td>
+            <select data-testid="b-country">
+              <option>India</option>
+              <option>Ireland</option>
+            </select>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- CASE C - CONTROL. A data table's FILTER row is not a question, however
+         many controls it holds. Two inputs here would otherwise qualify. -->
+    <table>
+      <thead>
+        <tr>
+          <td>Filter</td>
+          <td>
+            <input type="text" data-testid="c-filter-name">
+            <input type="text" data-testid="c-filter-city">
+          </td>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Ada</td><td>Dublin</td></tr>
+      </tbody>
+    </table>
+
+    <!-- CASE D - CONTROL. A first cell holding CONTROLS is not a label cell.
+         Two answer buttons sit outside it, so only the "label cell holds words"
+         rule stands between this row and a fabricated question named "Edit". -->
+    <table>
+      <tbody>
+        <tr>
+          <td><button type="button" data-testid="d-in-label">Edit</button></td>
+          <td>
+            <button type="button" data-testid="d-yes">Yes</button>
+            <button type="button" data-testid="d-no">No</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- CASE E - PRECEDENCE. A declared container INSIDE a table cell must win.
+         The row's own wording is deliberately wrong here, so a row rung that
+         displaced the <legend> would be caught rather than merely unproven. -->
+    <table>
+      <tbody>
+        <tr>
+          <td>Row wording that must NOT be used</td>
+          <td>
+            <fieldset id="e-fs">
+              <legend>Do you hold a private pilot licence?</legend>
+              <button type="button" data-testid="e-yes">Yes</button>
+              <button type="button" data-testid="e-no">No</button>
+            </fieldset>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>
