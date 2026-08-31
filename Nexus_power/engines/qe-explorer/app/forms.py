@@ -541,6 +541,61 @@ def _llm_should_answer(generated) -> bool:
     return str(generated).strip().lower() == "autotest"
 
 
+#: B4 · A SEED KEYED ONLY BY SIGNATURE CANNOT REACH A NEAR-DUPLICATE LABEL.
+#:
+#: MEASURED over four seeded rounds on summit-life-carrier
+#: (PHASE_1_EXIT_RESCOPE.md §B4): the wizard renders ``Face Amount ($)`` while
+#: the operator seeded ``Face Amount``, and ``Last Physical Exam`` against
+#: ``Last Exam Date``. Those hash apart, so both wizard copies stayed
+#: ``synthesized`` while the seeds landed — correctly — on same-named fields
+#: elsewhere in the application. ``fields_needing_seed`` converged 6 → 4 → 8 → 1
+#: across those rounds while the two values that actually failed never appeared
+#: on it once.
+#:
+#: So a seed may ALSO be keyed by its LABEL, and a label key is matched the way
+#: the client data library matches a slot: exact on the normalised text, then
+#: whole-phrase containment either way. A signature is 32 hex characters, so the
+#: two key spaces cannot collide and a caller may send both in one map.
+_SIGNATURE_KEY_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _norm_seed_label(text: Any) -> str:
+    """One normalisation for a seed key and a field label.
+
+    Units and currency markers a form adds for the reader — ``($)``, ``(%)``,
+    ``(optional)`` — are not part of the question, and they are exactly what
+    made ``Face Amount ($)`` miss a ``Face Amount`` seed.
+    """
+    body = " ".join(str(text or "").split()).lower()
+    body = re.sub(r"\((?:[^()]{0,20})\)", " ", body)      # a parenthetical unit
+    body = re.sub(r"[^a-z0-9 ]+", " ", body)
+    return " ".join(body.split())
+
+
+def _seed_by_label(recalled: Mapping[str, str], label: str) -> Optional[str]:
+    """A seeded value whose LABEL names this field, or None.
+
+    STRICT, and refuses ambiguity for the reason rung 2 refuses it: two seeds
+    that both claim one field are a coin toss, and carrying the wrong one is
+    worse than carrying none. A miss simply falls to the next rung.
+    """
+    want = _norm_seed_label(label)
+    if not want:
+        return None
+    hits: list[str] = []
+    for key, value in (recalled or {}).items():
+        if _SIGNATURE_KEY_RE.match(str(key or "")):
+            continue                       # a signature key, handled above
+        have = _norm_seed_label(key)
+        if not have or value in (None, ""):
+            continue
+        if have == want or (len(have) >= 4 and (have in want or want in have)):
+            hits.append(str(value))
+    if len(hits) == 1:
+        return hits[0]
+    return None                            # nothing, or an ambiguous pair
+
+
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
                   *, recalled: Optional[Mapping[str, str]] = None,
@@ -703,6 +758,13 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
 
     if recalled:
         prior_value = recalled.get(sig["signature"])
+        if prior_value in (None, ""):
+            # B4 — the SIGNATURE missed. A near-duplicate label is the measured
+            # reason a seed cannot reach the field instance that blocks a
+            # funnel, so a seed keyed by its own label is tried next. Strictly
+            # weaker than the signature and consulted only after it, so every
+            # existing seed resolves exactly as it did.
+            prior_value = _seed_by_label(recalled, name)
         if prior_value not in (None, ""):
             entry.update(provenance=PROV_RECALLED, filled=True)
             return {"value": str(prior_value), "entry": entry}
