@@ -17,10 +17,10 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 x-common-env: &common-env
-  NEXUS_ENV: development
+  NEXUS_ENV: ${NEXUS_ENV:-development}
   NEXUS_PRODUCT_MODE: canonical
-  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-  JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+  JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
   REDIS_HOST: host.docker.internal
   REDIS_PORT: "6379"
   REDIS_URL: redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}host.docker.internal:6379/0

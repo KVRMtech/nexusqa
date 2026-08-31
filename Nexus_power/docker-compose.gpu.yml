@@ -24,7 +24,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 x-common-env: &common-env
-  NEXUS_ENV: production
+  NEXUS_ENV: ${NEXUS_ENV:-production}
   NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-full}
   NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET is required}
   JWT_SECRET: ${NEXUS_JWT_SECRET}

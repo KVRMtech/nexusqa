@@ -1,10 +1,10 @@
 x-common-env:
-  NEXUS_ENV: development
+  NEXUS_ENV: ${NEXUS_ENV:-development}
   NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
   NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
   NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-  JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+  JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
   REDIS_HOST: redis
   REDIS_PORT: '6379'
   REDIS_URL: redis://redis:6379/0
@@ -278,12 +278,12 @@ services:
     ports:
     - 8000:8000
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -361,12 +361,12 @@ services:
     ports:
     - 8080:8080
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -482,12 +482,12 @@ services:
       STORYBOARD_PAGE_VISIT_VISION_IDENTITY: "true"
       STORYBOARD_PAGE_VISIT_ADDRESS_BAR_CROP: "true"
       STORYBOARD_PAGE_VISIT_LLM_INFERENCE: "true"
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -625,12 +625,12 @@ services:
     ports:
     - 8001:8001
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -710,12 +710,12 @@ services:
     ports:
     - 8002:8002
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -814,12 +814,12 @@ services:
     ports:
     - 8003:8003
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -956,7 +956,7 @@ services:
     ports:
     - 8004:8004
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
@@ -964,8 +964,8 @@ services:
       # Test Studio).  Without this it defaults to localhost:8000 inside the
       # container → "visual_graph_fetch_failed: All connection attempts failed".
       PLATFORM_API_URL: ${PLATFORM_API_URL:-http://platform-api:8091}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1046,12 +1046,12 @@ services:
     ports:
     - 8005:8005
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1134,12 +1134,12 @@ services:
     ports:
     - 8006:8006
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1219,12 +1219,12 @@ services:
     ports:
     - 8007:8007
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: /data/nexus/evidence
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1303,12 +1303,12 @@ services:
     ports:
     - 8008:8008
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1393,12 +1393,12 @@ services:
     ports:
     - 8009:8009
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: /data/nexus/documents
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1479,12 +1479,12 @@ services:
     ports:
     - 8010:8010
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: /data/nexus/reports
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1561,12 +1561,12 @@ services:
     ports:
     - 8011:8011
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1647,12 +1647,12 @@ services:
     ports:
     - 8100:8100
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
@@ -1745,12 +1745,12 @@ services:
     ports:
     - 8092:8092
     environment:
-      NEXUS_ENV: development
+      NEXUS_ENV: ${NEXUS_ENV:-development}
       NEXUS_PRODUCT_MODE: ${NEXUS_PRODUCT_MODE:-canonical}
       NEXUS_STORAGE_PATH: ${NEXUS_STORAGE_PATH:-/app/service/data}
       NEXUS_ORCHESTRATOR_URL: ${NEXUS_ORCHESTRATOR_URL:-http://orchestrator:8100}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
-      JWT_SECRET: ${NEXUS_JWT_SECRET:-test-secret-do-not-use-in-production}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
+      JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - refusing to start with a published development default}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
       REDIS_URL: redis://redis:6379/0
