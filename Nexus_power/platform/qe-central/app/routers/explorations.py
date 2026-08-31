@@ -57,6 +57,7 @@ from ..fleet.provisioning import assert_tenant_operational_db
 from ..security import prod_guard
 from ..security.host_policy import HostPolicyError, validate_allowed_hosts
 from ..services.answer_key import explorer_fill_contract
+from ..services import env_data
 from ..services.crawl_diagnosis import diagnose as diagnose_crawl
 from ..services.exploration_planner import build_exploration_plan
 from ..substrate.schema import CRAWL_ID_PATTERN, ExplorationBundle, RefusalError
@@ -554,6 +555,39 @@ def _envelope_for(request: "Request | None"):
         if found is not None:
             return found
     return _DISPATCH_ENVELOPE
+
+
+async def _environment_labels(tenant_id: str, app_id: str, row) -> list[str]:
+    """The question labels this app is KNOWN to ask — rung 2's resolution keys.
+
+    WHY THE CATALOG, AND WHY THAT MAKES THE FIRST CRAWL INERT. At dispatch time
+    the crawl has not run, so the field labels are not knowable — except that
+    every crawl after the first has the previous crawls' catalog, which is
+    precisely the list of questions this application asks. Resolving the
+    environment against THOSE labels keeps the per-label ambiguity refusal of
+    :mod:`app.services.env_data` intact; pushing raw slots into the semantic
+    map instead would hand a two-slot collision to a substring matcher, which
+    is the coin toss that rung exists to refuse.
+
+    A first crawl therefore runs without environment answers, honestly: the
+    residue it reports is what teaches the catalog, and the SECOND crawl asks
+    the environment. Gated on the app actually declaring an environment, so
+    the dispatch of every ordinary app pays nothing — not even a catalog read.
+    """
+    if not isinstance(row.answer_key, dict) or not row.answer_key.get("environment"):
+        return []
+    try:
+        from ..services import catalog_store
+        catalog = await catalog_store.build_app_master_catalog(tenant_id, app_id)
+    except Exception:                                            # noqa: BLE001
+        logger.info("qec.explorations.env_labels_unavailable app=%s", app_id)
+        return []
+    labels: list[str] = []
+    for question in catalog.get("questions") or ():
+        label = str(question.get("text") or question.get("name") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels[:500]
 
 
 async def _decrypt_credentials(envelope, tenant_id: str, row: ClientAppRow) -> dict | None:
@@ -1142,6 +1176,25 @@ async def _dispatch_explorer(
 
     credentials = await _decrypt_credentials(
         _envelope_for(request), tenant_id, row)
+    # ── RUNG 2 — the client's own test environment answers what the catalog
+    # asks. The overlay enters the fill contract BENEATH everything the client
+    # stated directly (see answer_key.explorer_fill_contract), and the token —
+    # a credential — comes from the envelope-encrypted blob, never from the
+    # answer key. Resolved in a worker thread because the environment is
+    # somebody else's system and a dispatch handler must not block the loop on
+    # it; every failure inside is a decline, so a dead environment costs one
+    # bounded timeout and the crawl proceeds exactly as it would have.
+    env_labels = await _environment_labels(tenant_id, app_id, row)
+    if env_labels:
+        import asyncio as _asyncio
+        env_overlay = await _asyncio.to_thread(
+            env_data.overlay_for_app, row.answer_key, env_labels,
+            token=str((credentials or {}).get("env_token") or ""))
+        if env_overlay:
+            answer_key = explorer_fill_contract(row.answer_key, env_overlay)
+            logger.info(
+                "qec.explorations.env_overlay app=%s fields=%d — counts only, "
+                "the values are the client's own", app_id, len(env_overlay))
     # Tier-4: resolve a start-authenticated session (static client session or a
     # fetched auth-hook) for a login the crawler cannot script. NOTE: named
     # `auth_session` — NOT `session` — to avoid shadowing by the DB

@@ -115,11 +115,22 @@ class RestProvider:
             return None
 
     def slots(self) -> Sequence[str]:
+        # FETCHED ONCE PER PROVIDER INSTANCE. The resolver asks per field, and a
+        # dispatch resolves hundreds of catalog labels against one environment —
+        # re-fetching the slot list for each would turn one read into hundreds,
+        # and a dying endpoint into hundreds of five-second stalls. A provider
+        # lives for one dispatch, so the list cannot go stale inside it. The
+        # cache holds failures too ([]): a dead environment costs ONE timeout,
+        # after which every label declines instantly.
+        cached = getattr(self, "_slots_cache", None)
+        if cached is not None:
+            return cached
         body = self._get("/slots") or {}
         raw = body.get("slots")
-        if not isinstance(raw, list):
-            return []
-        return [str(s) for s in raw if isinstance(s, str) and s.strip()]
+        result = ([str(s) for s in raw if isinstance(s, str) and s.strip()]
+                  if isinstance(raw, list) else [])
+        self._slots_cache = result
+        return result
 
     def value(self, slot_key: str) -> Optional[str]:
         # QUOTED because a slot key is human-assigned text ("member id") and
