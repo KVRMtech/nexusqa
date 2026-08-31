@@ -298,6 +298,19 @@ class CatalogQuestionRow(QecBase):
     business_rule_evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     #: The question whose answer this one hangs off (ACT-THEN-DIFF proven).
     depends_on: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # ── Tier 2 (qec_024) — WHERE THAT DEPENDENCY CAME FROM ──────────────
+    #: ``declared`` (the page states it) | ``proven_reveal`` (a crawl answered
+    #: the trigger and the child appeared) | ``""`` (nothing observed). Two
+    #: columns rather than one because the two are not the same claim, and a
+    #: declared dependency is never overwritten by a reveal — they can disagree,
+    #: and the disagreement is the part worth reading.
+    depends_on_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="")
+    #: The evidence behind ``proven_reveal``: which questions, answered with
+    #: which options, were observed to reveal this one. Bounded by
+    #: ``catalog.MAX_REVEALED_BY``; ``revealed_by`` on the built catalogue also
+    #: carries a total so a clipped list stays visibly clipped.
+    revealed_by: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     #: The handle the page declared for the control + whether it resolves to one
     #: element. Never a selector this service composed.
     locator: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

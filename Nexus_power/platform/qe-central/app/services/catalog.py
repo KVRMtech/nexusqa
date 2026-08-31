@@ -47,6 +47,26 @@ _VALIDATION_KEYS = ("pattern", "minlength", "maxlength", "min", "max", "step")
 QUESTION_NAME_OBSERVED = "observed"
 QUESTION_NAME_UNVERIFIED = "unverified"
 
+#: WHERE A QUESTION'S DEPENDENCY CAME FROM.
+#: ``declared``      - the page itself stated it (``depends_on`` in the form
+#:                     signal). That is the application's own CLAIM about its
+#:                     form, and it is carried as such.
+#: ``proven_reveal`` - no page declared anything; a crawl ANSWERED the trigger
+#:                     and the child question appeared (ACT-THEN-DIFF). That is
+#:                     evidence rather than a claim, and it is the only kind a
+#:                     bare-button questionnaire ever produces - such a page
+#:                     declares no dependencies at all.
+#: ``""``            - this question hangs off nothing anyone has observed.
+DEPENDS_ON_DECLARED = "declared"
+DEPENDS_ON_PROVEN = "proven_reveal"
+
+#: Most triggers listed against ONE child question. A question reachable by
+#: several answers is a real shape - three different conditions each revealing
+#: the same follow-up - but an unbounded list on a catalogue row is not a
+#: report. ``revealed_by_total`` carries the true count, so a clipped list stays
+#: visibly clipped: the same discipline ``options_total`` uses for answers.
+MAX_REVEALED_BY = 8
+
 
 def _normalize_name(name: str) -> str:
     return re.sub(r"[\s_\-]+", " ", str(name or "").strip().lower()).strip()
@@ -697,12 +717,101 @@ def _attach_business_rule(
     row["business_rule_evidence"] = evidence
 
 
+def apply_reveal_dependencies(
+    questions: Sequence[Mapping[str, Any]],
+    reveal_rules: Sequence[Mapping[str, Any]] | None,
+) -> int:
+    """Join the P1 trigger->child rules ONTO the questions they are about.
+
+    THE HOLE THIS FILLS. ``journey_projector.rules_from_branches`` has resolved
+    "answering X with 'Yes' reveals Y" since P1, and exactly ONE caller has ever
+    read it: the persona projector, which uses it to PREDICT a path. The
+    catalogue - the deliverable an operator actually reads, and the thing a
+    client is handed - never saw it. So a question that exists only because
+    another question was answered a particular way was published with
+    ``depends_on`` empty, indistinguishable in the artifact from a question the
+    application asks unconditionally.
+
+    ``depends_on`` was not even an absent field. qec_019 added the column and
+    documented it as "the question whose answer this one hangs off (ACT-THEN-DIFF
+    proven)" - and the only thing that ever wrote it was the page's own DECLARED
+    signal. The proven half was captured by the branch walk, resolved by the
+    projector, and dropped one function short of the catalogue.
+
+    A DECLARED DEPENDENCY IS NEVER OVERWRITTEN. Where the page states what a
+    field hangs off, that statement stands and the reveal is recorded beside it
+    in ``revealed_by``. The two can legitimately disagree - an application may
+    declare ``depends_on`` naming one control while a different control is what
+    actually reveals it - and collapsing them would destroy the disagreement,
+    which is the part worth reading.
+
+    Mutates ``questions`` in place (they are the dicts this module just built)
+    and returns how many gained a PROVEN dependency they did not have.
+    """
+    by_qid: dict[str, Any] = {}
+    for q in questions:
+        qid = str(q.get("question_id") or "")
+        if qid:
+            by_qid[qid] = q
+
+    triggers: dict[str, list[tuple[str, str, str]]] = {}
+    for rule in (reveal_rules or ()):
+        if not isinstance(rule, Mapping):
+            continue
+        trigger_qid = str(rule.get("question_id") or "")
+        if not trigger_qid:
+            continue
+        parent = by_qid.get(trigger_qid)
+        # A TRIGGER THE CATALOGUE DOES NOT HOLD cannot be named to a reader, and
+        # "this question depends on one we cannot show you" is not a report.
+        # Dropped rather than half-written - the same posture
+        # ``rules_from_branches`` already takes on a child it cannot resolve.
+        if parent is None:
+            continue
+        parent_name = str(parent.get("name") or "")
+        option = str(rule.get("option") or "")
+        for child_qid in (rule.get("reveals_question_ids") or ()):
+            cqid = str(child_qid or "")
+            if not cqid or cqid == trigger_qid or cqid not in by_qid:
+                continue
+            triggers.setdefault(cqid, []).append((trigger_qid, parent_name, option))
+
+    gained = 0
+    for cqid, found in triggers.items():
+        child = by_qid[cqid]
+        # DETERMINISTIC. This rides into a durable row and into an API response,
+        # so two reads of one database must not order it differently, and a
+        # re-fold must not churn the snapshot the next diff is taken against.
+        uniq = sorted(set(found), key=lambda t: (t[1], t[2], t[0]))
+        child["revealed_by"] = [
+            {"question_id": t[0], "question": t[1], "option": t[2]}
+            for t in uniq[:MAX_REVEALED_BY]
+        ]
+        child["revealed_by_total"] = len(uniq)
+        if str(child.get("depends_on") or "").strip():
+            child["depends_on_source"] = DEPENDS_ON_DECLARED
+            continue
+        # The trigger has to be NAMEABLE. An UNVERIFIED-name question can still
+        # reveal a child - the reveal was observed either way - but writing an
+        # empty string into ``depends_on`` would say "depends on nothing", which
+        # is the opposite of what was proven. ``revealed_by`` above still
+        # carries the trigger's id, so the relationship is not lost.
+        named = next((t[1] for t in uniq if t[1]), "")
+        if not named:
+            continue
+        child["depends_on"] = named[:200]
+        child["depends_on_source"] = DEPENDS_ON_PROVEN
+        gained += 1
+    return gained
+
+
 def build_master_catalog(
     nodes: Sequence[Mapping[str, Any]],
     edges: Sequence[Mapping[str, Any]] | None = None,
     branches: Sequence[Mapping[str, Any]] | None = None,
     rules: Sequence[Mapping[str, Any]] | None = None,
     include_retired: bool = False,
+    reveal_rules_fn: Any = None,
 ) -> dict[str, Any]:
     """Aggregate per-node control inventories into ONE app-scoped Master Catalog.
 
@@ -731,6 +840,16 @@ def build_master_catalog(
     Omitting ``rules`` is legitimate (a caller that only wants shape) and yields
     a catalogue in which every question is UNVERIFIED, which is exactly what a
     build with no rule evidence should say.
+
+    ``reveal_rules_fn`` closes the P1 trigger->child loop onto the catalogue.
+    It is a CALLABLE taking the assembled questions and returning the projector's
+    rules (``journey_projector.rules_from_branches`` partially applied over the
+    same ``branches``), because the rules can only be resolved once the questions
+    exist and this module must stay dependency-free — ``journey_projector``
+    imports FROM here, so importing it back would be a cycle. Omitting it is
+    legitimate and yields a catalogue whose only dependencies are the ones the
+    pages declared, which is exactly what a build with no branch evidence should
+    say. See :func:`apply_reveal_dependencies`.
 
     LIFECYCLE (M2.3). Every question carries ``lifecycle`` — ``active``,
     ``stale`` or ``retired`` (see :data:`LIFECYCLE_ACTIVE`). A question is
@@ -1071,9 +1190,39 @@ def build_master_catalog(
             QUESTION_NAME_OBSERVED if str(row.get("name") or "").strip()
             else QUESTION_NAME_UNVERIFIED)
         row.setdefault("name_source", "")
+        # WHERE THE DEPENDENCY CAME FROM, on every row including the ones with
+        # no dependency at all. Set here so the field is never absent on some
+        # rows and present on others - a consumer reads that inconsistency as a
+        # bug, and it is the same reason ``options_total`` is filled above.
+        # ``apply_reveal_dependencies`` upgrades this to ``proven_reveal`` on
+        # the rows a branch walk actually proved.
+        row["depends_on_source"] = (
+            DEPENDS_ON_DECLARED if str(row.get("depends_on") or "").strip()
+            else "")
+        row.setdefault("revealed_by", [])
+        row.setdefault("revealed_by_total", 0)
         # M2.3 — collapse this question's per-sighting lifecycle tallies into the
         # one verdict a reader acts on.
         _resolve_question_lifecycle(row)
+
+    # THE TRIGGER->CHILD JOIN, over EVERY question including the retired ones.
+    # A retired question that was revealed by another is still a question whose
+    # history a reader may ask about, and the audit view returns these same
+    # objects — stamping only the active ones would make the record poorer than
+    # the evidence. Runs after the loop above because it needs every row's
+    # ``name`` resolved before it can name a trigger.
+    if reveal_rules_fn is not None:
+        try:
+            apply_reveal_dependencies(all_questions, reveal_rules_fn(all_questions))
+        except Exception:                     # pragma: no cover - see below
+            # A CATALOGUE IS NOT LOST TO A DEPENDENCY. Every question, its
+            # wording, its answers, its lifecycle and its business rules are
+            # already assembled; the reveal join is the last, additive step. A
+            # caller whose rule resolution raises gets the catalogue it would
+            # have got before this existed, with ``depends_on_source`` empty and
+            # ``revealed_by`` empty — which reads as "nothing was proven", and
+            # nothing was.
+            logger.warning("catalog.reveal_join_failed", exc_info=True)
 
     retired = [q for q in all_questions if q["lifecycle"] == LIFECYCLE_RETIRED]
     active = [q for q in all_questions if q["lifecycle"] != LIFECYCLE_RETIRED]
@@ -1092,6 +1241,19 @@ def build_master_catalog(
             1 for q in questions
             if q.get("business_rule_state") == RULE_STATE_OBSERVED),
         "with_dependency": sum(1 for q in questions if q.get("depends_on")),
+        # THE TWO KINDS OF DEPENDENCY, COUNTED APART. One is the application's
+        # own claim, the other is what a walk proved by answering the trigger and
+        # watching the child appear. A single number over both would let a form
+        # that declares everything and a questionnaire that declares nothing
+        # report the same coverage.
+        "with_declared_dependency": sum(
+            1 for q in questions
+            if q.get("depends_on_source") == DEPENDS_ON_DECLARED),
+        "with_proven_dependency": sum(
+            1 for q in questions
+            if q.get("depends_on_source") == DEPENDS_ON_PROVEN),
+        "revealed_by_a_trigger": sum(
+            1 for q in questions if q.get("revealed_by")),
         "with_verified_locator": sum(
             1 for q in questions
             if q.get("locator_state") == LOCATOR_STATE_VERIFIED),

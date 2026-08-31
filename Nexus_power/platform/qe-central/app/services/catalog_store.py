@@ -108,6 +108,21 @@ async def _load_graph(
     return nodes, edges, branches
 
 
+def _reveal_rules_fn(branches: Any):
+    """The trigger->child resolver, bound to one app's branch rows.
+
+    ``build_master_catalog`` cannot import ``journey_projector`` — that module
+    imports ``question_id_for`` and ``group_question_id`` FROM the catalogue, so
+    the dependency only runs one way and must keep doing so. And the rules cannot
+    be computed before the catalogue exists, because resolving a reveal identity
+    to a child question needs the questions. A closure is what satisfies both:
+    the catalogue calls back once its rows are assembled, and the ONE id space
+    both sides share stays the one ``question_id_for`` defines.
+    """
+    from .journey_projector import rules_from_branches
+    return lambda questions: rules_from_branches(branches, questions)
+
+
 async def build_app_master_catalog(
     tenant_id: str, app_id: str, include_retired: bool = False,
 ) -> dict[str, Any]:
@@ -127,7 +142,8 @@ async def build_app_master_catalog(
         nodes, edges, branches = await _load_graph(session, tenant_id, app_id)
     rules = await _load_rules(tenant_id, app_id)
     return build_master_catalog(nodes, edges=edges, branches=branches, rules=rules,
-                                include_retired=include_retired)
+                                include_retired=include_retired,
+                                reveal_rules_fn=_reveal_rules_fn(branches))
 
 
 async def load_catalog_and_rules(
@@ -148,10 +164,20 @@ async def load_catalog_and_rules(
     # derived FROM it (which question reveals which). Folding either into the
     # other would let a projection rule masquerade as observed business logic.
     business_rules = await _load_rules(tenant_id, app_id)
+    # The rules are captured on the way through rather than recomputed after:
+    # the catalogue resolves them against its own rows, and computing them a
+    # second time against the same rows to hand to the projector would be two
+    # chances to disagree about one join.
+    captured: list[dict[str, Any]] = []
+
+    def _fn(questions):
+        rules = rules_from_branches(branches, questions)
+        captured[:] = rules
+        return rules
+
     master = build_master_catalog(nodes, edges=edges, branches=branches,
-                                  rules=business_rules)
-    rules = rules_from_branches(branches, master["questions"])
-    return master, rules
+                                  rules=business_rules, reveal_rules_fn=_fn)
+    return master, captured
 
 
 async def persist_catalog_version(
@@ -189,7 +215,8 @@ async def persist_catalog_version(
         # ``removed`` bucket reachable: the retired question leaves the new
         # snapshot, so the next diff names it.
         full = build_master_catalog(nodes, edges=edges, branches=branches,
-                                    rules=rules, include_retired=True)
+                                    rules=rules, include_retired=True,
+                                    reveal_rules_fn=_reveal_rules_fn(branches))
         all_questions = full.get("questions") or []
         # NO SUMMARY IS CARRIED ONTO THIS. ``snapshot_catalog`` reads only
         # ``questions``, and ``full``'s summary counts the retired rows too —
@@ -224,6 +251,9 @@ async def persist_catalog_version(
                              if isinstance(q.get("business_rule_evidence"), dict)
                              else None)
             depends_on = str(q.get("depends_on") or "")[:200] or None
+            depends_on_source = str(q.get("depends_on_source") or "")[:16]
+            revealed_by = (list(q.get("revealed_by") or [])
+                           if isinstance(q.get("revealed_by"), list) else None)
             try:
                 options_total = int(q.get("options_total") or 0)
             except (TypeError, ValueError):
@@ -242,6 +272,8 @@ async def persist_catalog_version(
                     business_rule_state=rule_state,
                     business_rule_evidence=rule_evidence,
                     depends_on=depends_on,
+                    depends_on_source=depends_on_source,
+                    revealed_by=revealed_by,
                     locator=locator,
                     options_total=max(options_total,
                                       len(q.get("options") or [])),
@@ -291,7 +323,14 @@ async def persist_catalog_version(
                 elif not row.business_rule:
                     row.business_rule_state = rule_state
                 if depends_on:
+                    # FILL AND UPGRADE, NEVER CLEAR — the same M2.2 upsert rule
+                    # the rule and the locator follow. A crawl that did not walk
+                    # the trigger sees an unconditional-looking question and must
+                    # not erase what a crawl that DID walk it proved.
                     row.depends_on = depends_on
+                    row.depends_on_source = depends_on_source
+                if revealed_by:
+                    row.revealed_by = revealed_by
                 if locator and (not row.locator
                                 or (locator.get("verified")
                                     and not (row.locator or {}).get("verified"))):
