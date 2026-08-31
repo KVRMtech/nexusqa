@@ -147,6 +147,13 @@ async def _runnable_view(
         session, tenant_id=tenant_id, app_id=app_id,
         journey_id=journey_id, artifact_id=artifact_id)
     if adopted is None:
+        direct_walked, direct_labels = await journey_case_linker.journey_walk_signature(
+            session, tenant_id=tenant_id, app_id=app_id, journey_id=journey_id)
+        if direct_labels or len(set(direct_walked)) >= journey_case_linker.MIN_JOURNEY_PAGES:
+            return {"ok": True,
+                    "test_case_id": journey_spec.test_id_for(tenant_id, journey_id),
+                    "display_name": "Verify journey end to end", "reason": "",
+                    "provenance": "journey_direct"}
         # Distinguish "too shallow to be a journey" from "no script matches" —
         # they need different remedies, and a single-page walk must never
         # borrow a script that walks somewhere else.
@@ -383,6 +390,11 @@ async def _runnable_view_batched(
         # cases have not been generated yet EVERY journey takes this branch, so
         # it is emphatically not a rare path — it was the dominant cost.
         walked, walk_labels = walk_signature
+        if walk_labels or len(set(walked)) >= journey_case_linker.MIN_JOURNEY_PAGES:
+            return {"ok": True,
+                    "test_case_id": journey_spec.test_id_for(tenant_id, journey_id),
+                    "display_name": "Verify journey end to end", "reason": "",
+                    "provenance": "journey_direct"}
         if not walk_labels and len(set(walked)) < journey_case_linker.MIN_JOURNEY_PAGES:
             return {"ok": False, "test_case_id": "", "display_name": "",
                     "reason": ("this walk never advanced past its first page, "
@@ -975,6 +987,16 @@ async def _dispatch_one_journey(
         return {"journey_id": journey.journey_id,
                 "business_name": journey.business_name,
                 "dispatched": False, "reason": runnable["reason"]}
+    direct_payload: dict[str, Any] | None = None
+    if runnable.get("provenance") == "journey_direct":
+        direct_payload = await _journey_payload(
+            session, tenant_id, app_id, journey)
+        if not direct_payload.get("compilable"):
+            return {"journey_id": journey.journey_id,
+                    "business_name": journey.business_name,
+                    "dispatched": False,
+                    "reason": str(direct_payload.get("reason") or
+                                  "journey could not be compiled from its walk")}
     # The runner is SINGLE-FLIGHT: a concurrent dispatch is refused 409 by
     # nexus-runner, which would land an 'error' row that says nothing about
     # the journey. Refuse up front with the honest reason instead.
@@ -1005,7 +1027,7 @@ async def _dispatch_one_journey(
     result = await journey_runner.dispatch_journey_run(
         tenant_id=tenant_id, app_id=app_id, journey_id=journey.journey_id,
         artifact_id=artifact_id, test_case_id=runnable["test_case_id"],
-        env_ref=env_ref)
+        env_ref=env_ref, journey_payload=direct_payload)
     return {"journey_id": journey.journey_id,
             "business_name": journey.business_name,
             "dispatched": result["status"] == "running",
