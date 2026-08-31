@@ -87,15 +87,34 @@ def test_draining_and_disabled_workers_receive_no_work():
                                 tenant_id="t1", now=NOW, ttl_s=TTL) is None, status
 
 
-def test_least_loaded_is_chosen_by_utilisation_not_raw_count():
+def test_least_loaded_is_chosen_by_utilisation_not_raw_count(monkeypatch):
     """A big worker at 2/8 beats a small one at 1/2.
 
     Ranking on the RAW in-flight count would pick the small worker (1 < 2) and
     pack small workers while large ones idle. Utilisation is the correct signal.
+
+    RUN WITH THE FENCE CLAMP OFF, deliberately: while the egress fence is
+    per-worker, admission clamps every worker to one slot (see
+    FENCE_IS_PER_WORKER) and both of these workers are full — there is nothing
+    to rank. The ranking MATH is what this test owns, and it is the math that
+    returns the day the fence becomes per-crawl, so it is pinned in the world
+    where it operates rather than deleted with it.
     """
+    monkeypatch.setattr(wr, "FENCE_IS_PER_WORKER", False)
     workers = [_w("small", cap=2, inflight=1), _w("big", cap=8, inflight=2)]
     chosen = wr.choose_worker(workers, tenant_id="t1", now=NOW, ttl_s=TTL)
     assert chosen["worker_id"] == "big", "did not rank on utilisation"
+
+
+def test_under_the_shared_fence_a_busy_worker_is_not_chosen_at_all():
+    """The clamped world's own ranking fact: with one crawl in flight a worker
+    is FULL whatever its registered capacity, because a second concurrent crawl
+    on one worker is the cross-tenant re-fence sequence."""
+    workers = [_w("small", cap=2, inflight=1), _w("big", cap=8, inflight=2)]
+    assert wr.choose_worker(workers, tenant_id="t1", now=NOW, ttl_s=TTL) is None
+    free = [_w("busy", cap=8, inflight=1), _w("idle", cap=2, inflight=0)]
+    chosen = wr.choose_worker(free, tenant_id="t1", now=NOW, ttl_s=TTL)
+    assert chosen["worker_id"] == "idle"
 
 
 def test_choice_is_deterministic_across_replicas():
@@ -121,13 +140,31 @@ def test_tenant_affinity_is_exclusive_in_both_directions():
         "TENANT LEAK: tenant B was scheduled onto a worker dedicated to tenant A")
 
 
-def test_fleet_capacity_excludes_stale_and_draining():
-    """Counting a dead worker would tell the queue there is room that is gone."""
+def test_fleet_capacity_excludes_stale_and_draining(monkeypatch):
+    """Counting a dead worker would tell the queue there is room that is gone.
+
+    Flag off for the same reason as the utilisation test above: this owns the
+    EXCLUSION property (stale and draining contribute nothing), and the
+    registered-capacity arithmetic it asserts against is the flag-off world's.
+    The clamped totals have their own test beside it.
+    """
+    monkeypatch.setattr(wr, "FENCE_IS_PER_WORKER", False)
     workers = [_w("live", cap=4, inflight=1),
                _w("dead", cap=8, age_s=TTL + 5),
                _w("draining", cap=8, status=wr.STATUS_DRAINING)]
     cap = wr.fleet_capacity(workers, now=NOW, ttl_s=TTL)
     assert cap == {"workers_alive": 1, "capacity": 4, "in_flight": 1, "free": 3}
+
+
+def test_fleet_capacity_under_the_shared_fence_counts_one_slot_per_worker():
+    """The clamped truth the queue is actually told today: a live cap-4 worker
+    with one crawl in flight has NO free room, and the dead and draining
+    workers still contribute nothing."""
+    workers = [_w("live", cap=4, inflight=1),
+               _w("dead", cap=8, age_s=TTL + 5),
+               _w("draining", cap=8, status=wr.STATUS_DRAINING)]
+    cap = wr.fleet_capacity(workers, now=NOW, ttl_s=TTL)
+    assert cap == {"workers_alive": 1, "capacity": 1, "in_flight": 1, "free": 0}
 
 
 def test_unavailability_is_explained_not_asserted():
@@ -139,9 +176,13 @@ def test_unavailability_is_explained_not_asserted():
                                   now=NOW, ttl_s=TTL)
     assert "STALE" in dead
 
+    # Under the shared-fence clamp a cap-2 worker holds ONE slot, and the
+    # explanation must quote the room that actually exists (1/1) — quoting the
+    # registered 2/2 would tell an operator the fleet is twice as large as the
+    # scheduler will ever use while the fence is per-worker.
     busy = wr.explain_unavailable([_w("a", cap=2, inflight=2)], tenant_id="t",
                                   now=NOW, ttl_s=TTL)
-    assert "at capacity" in busy and "2/2" in busy
+    assert "at capacity" in busy and "1/1" in busy
 
     parked = wr.explain_unavailable([_w("a", status=wr.STATUS_DISABLED)],
                                     tenant_id="t", now=NOW, ttl_s=TTL)

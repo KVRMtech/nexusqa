@@ -121,10 +121,53 @@ def is_stale(worker: Mapping[str, Any], *, now: datetime, ttl_s: float) -> bool:
     return (now - hb) > timedelta(seconds=max(0.0, ttl_s))
 
 
-def has_capacity(worker: Mapping[str, Any]) -> bool:
-    """True when the worker can accept at least one more crawl."""
+#: THE EGRESS FENCE IS STILL PER-WORKER, so a worker may hold at most ONE
+#: in-flight crawl regardless of its registered capacity.
+#:
+#: THE DEFECT THIS CLAMP MAKES UNREACHABLE, recorded in full at
+#: tests/fleet/test_t_fl_08_concurrency_redteam.py (strict xfail) and
+#: QECentral/docs/GATE_3_PHASE_2_EVIDENCE.md: ``_write_egress_allowlist`` is
+#: keyed on the WORKER and takes no crawl id, and the dispatch yields between
+#: the fence write and the crawl launch. At capacity > 1, crawl A writes its
+#: allowlist, crawl B overwrites the same file inside A's window, and the
+#: browser running A is fenced by B's destinations — a CROSS-TENANT egress
+#: leak. It was latent only because qec_022's server_default is "1", and
+#: nothing anywhere refused a larger value; the Phase 0-4 closure record
+#: carries it as accepted-with-findings item 4, owner seat vacant.
+#:
+#: The clamp closes the REACHABLE PATH — the scheduler will not place a second
+#: concurrent crawl on a worker whose fence is shared — while the strict xfail
+#: keeps stating the underlying defect against the writer itself. The day the
+#: fence becomes per-crawl (the writer takes a crawl id, the xfail XPASSes and
+#: is removed), flip this to False and capacity means capacity again. The
+#: latent-to-live tripwire pins the pairing: writer shared ⇒ clamp present.
+FENCE_IS_PER_WORKER = True
+
+
+def effective_capacity(worker: Mapping[str, Any]) -> int:
+    """The capacity ADMISSION may use — the registered value, clamped to 1
+    while the egress fence is per-worker (see FENCE_IS_PER_WORKER)."""
     try:
-        return int(worker.get("in_flight") or 0) < int(worker.get("capacity") or 0)
+        registered = int(worker.get("capacity") or 0)
+    except (TypeError, ValueError):
+        return 0
+    if registered <= 0:
+        return 0
+    return 1 if FENCE_IS_PER_WORKER else registered
+
+
+def has_capacity(worker: Mapping[str, Any]) -> bool:
+    """True when the worker can accept at least one more crawl.
+
+    Uses :func:`effective_capacity`, not the registered value: while the
+    egress fence is per-worker, admitting a second concurrent crawl onto one
+    worker is the exact sequence that re-fences a running crawl with another
+    tenant's destinations. A worker registered with capacity 8 therefore runs
+    one crawl at a time — visibly, in the fleet numbers, rather than silently
+    in an incident.
+    """
+    try:
+        return int(worker.get("in_flight") or 0) < effective_capacity(worker)
     except (TypeError, ValueError):
         return False
 
@@ -220,7 +263,12 @@ def fleet_capacity(
             continue
         if tenant_id and not is_eligible_for_tenant(w, tenant_id):
             continue
-        cap = max(0, int(w.get("capacity") or 0))
+        # The CLAMPED capacity, not the registered one: the queue must be told
+        # the room that actually exists, and while the fence is per-worker that
+        # is one slot per worker (see FENCE_IS_PER_WORKER). Reporting the
+        # registered value here while admission clamps below it would tell the
+        # queue there is room the scheduler will never grant.
+        cap = effective_capacity(w)
         inflight = max(0, int(w.get("in_flight") or 0))
         alive += 1
         total += cap
