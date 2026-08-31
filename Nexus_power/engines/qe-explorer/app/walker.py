@@ -56,7 +56,7 @@ from .auth import (
     match_login_controls,
     match_secret_field,
 )
-from .browser import (OUTCOME_CONFIRMATION, BrowserPort, PageObservation,
+from .browser import (is_rejection_text, OUTCOME_CONFIRMATION, BrowserPort, PageObservation,
                       classify_submit_after)
 from .coverage import CoverageLedger
 from .emitter import MetaEmitter
@@ -778,7 +778,10 @@ class WalkerMixin:
             url[:120], blocked_label[:40], missing[:6])
         return blocked_label
 
-    async def _name_validation_rejections(self, url: str, trigger: str) -> int:
+    async def _name_validation_rejections(
+        self, url: str, trigger: str,
+        before_texts: "Sequence[str]" = (),
+    ) -> int:
         """BLOCKER 3 — name the field the APP rejected, and the rule it cited.
 
         THE GAP THIS CLOSES, measured over four seeded rounds on
@@ -883,6 +886,82 @@ class WalkerMixin:
             texts = [str(x).strip() for x in (await reader() or []) if str(x).strip()]
         except Exception:
             return 0
+        # ── B1 · THE DOM-DIFF REJECTION READER (Phase-5 backlog, first item) ─
+        #
+        # MEASURED CAUSE, from the Phase-1 exit re-scope: error_texts() reads
+        # exactly [role=alert] / [aria-live]. vkpower renders its refusal as a
+        # plain <p> and summit exposes no control-anchored rejection at all —
+        # the rule "Primary beneficiary allocations must total 100%" was on
+        # screen in plain words and nothing was looking. Plain-text errors are
+        # the COMMON real-client case; an app that annotates its errors is the
+        # exception.
+        #
+        # THE ANTI-FABRICATION PROPERTY IS THE DIFFERENCE, NOT THE MATCH — the
+        # same rule confirmation_transition holds, with the opposite polarity.
+        # A form whose footer always says "errors are shown in red" contains
+        # rejection-shaped text before anything happened; only text that was
+        # ABSENT before the declined action and PRESENT after is a verdict the
+        # action produced. Without before_texts there is no diff and this rung
+        # stays silent rather than guessing — the ARIA read above still ran.
+        #
+        # FORM-SCOPED (the acceptance's second clause): the after-read prefers
+        # the page's forms, so a toast elsewhere cannot be read as the form's
+        # verdict. And NO CSS CLASS NAMES (the first clause): the scope is the
+        # form element the platform itself declares, and the polarity is
+        # is_rejection_text's wordlist — structure and words, never one
+        # application's palette.
+        if before_texts:
+            form_reader = getattr(self._port, "form_texts", None)
+            after_texts: list[str] = []
+            if form_reader is not None:
+                try:
+                    after_texts = [str(x).strip() for x in (await form_reader() or ())
+                                   if str(x).strip()]
+                except Exception:                                # noqa: BLE001
+                    after_texts = []
+            before_set = {str(x).strip() for x in before_texts}
+            transitions = [t for t in after_texts
+                           if t not in before_set and is_rejection_text(t)]
+            named_by_text = 0
+            for text in transitions[:3]:
+                # A transition that NAMES a control is attributed to it — the
+                # bridge to B2: a repair driven by the application's own words
+                # rather than a guess. Longest label first so "Face Amount ($)"
+                # wins over "Face Amount" when both would match.
+                field_name = ""
+                lowered = text.lower()
+                for control in sorted(after,
+                                      key=lambda c: -len(str(c.get("name") or ""))):
+                    label = str(control.get("name") or "").strip()
+                    if (len(label) >= 4
+                            and control.get("kind") in _FILLABLE_KINDS
+                            and label.lower() in lowered):
+                        field_name = label
+                        break
+                record = {
+                    "url": str(url)[:300],
+                    "field": field_name[:120],
+                    "rule": text[:240],
+                    "code": "text_transition",
+                    # The rung is named for what it is: text that APPEARED as a
+                    # result of the declined action, form-scoped, rejection
+                    # polarity — weaker than an ARIA anchor and labelled so.
+                    "anchored_by": ("text_names_control" if field_name
+                                    else "text_transition"),
+                    "rejected_on": trigger[:120],
+                }
+                if not any(r.get("url") == record["url"]
+                           and r.get("rule") == record["rule"]
+                           for r in self._validation_rejections):
+                    self._validation_rejections.append(record)
+                    named_by_text += 1
+            if named_by_text:
+                logger.info(
+                    "qec.fill.rejection_text_transition url=%s trigger=%r "
+                    "count=%d — plain-text rejections read by ACT-THEN-DIFF; "
+                    "no ARIA, no anchor, no class names involved",
+                    url[:120], trigger[:40], named_by_text)
+                return named + named_by_text
         if not texts:
             # RAN AND FOUND NOTHING is not the same as NEVER RAN, and telling
             # them apart cost a 35-minute crawl to work out. Logged on every
@@ -3120,7 +3199,8 @@ class WalkerMixin:
                         # field and WHY, now, while the rejection is still on the
                         # page. Naming the control is not naming the reason.
                         await self._name_validation_rejections(
-                            cur_url, "advance:%s" % stalled_name[:60])
+                            cur_url, "advance:%s" % stalled_name[:60],
+                            before_texts=before_side.get("texts") or ())
 
             # record the CURRENT step (its fills + the onward advance click if any).
             self._record_state(

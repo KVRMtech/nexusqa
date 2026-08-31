@@ -290,6 +290,14 @@ _REJECTION_MARKERS = (
     r"required", r"must be", r"must have", r"cannot", r"can not", r"can't",
     r"unable", r"failed", r"failure", r"denied", r"rejected", r"declined",
     r"not match", r"does not match", r"doesn't match", r"no match",
+    # CONSTRAINT-RULE PHRASINGS, added for B1 (the plain-text rejection
+    # reader) and measured before being written: vkpower's live refusal reads
+    # "Primary beneficiary allocations must total 100%" and matched NOTHING
+    # here — the exact rule the Phase-5 backlog was written about. For this
+    # list's other consumer (confirmation polarity) every addition is
+    # conservative by construction: it can only DECLINE a confirmation, never
+    # fabricate one.
+    r"must total", r"must match", r"must not", r"exceed", r"at least one",
     r"try again", r"correct the", r"please enter", r"please select",
     r"please provide", r"please correct", r"not allowed", r"not permitted",
     r"missing", r"error",

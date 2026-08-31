@@ -1806,6 +1806,55 @@ class PlaywrightBrowserPort(BrowserPort):
                 continue
         return texts
 
+    async def form_texts(self) -> list[str]:
+        """Short visible text blocks INSIDE the page's forms — B1's read scope.
+
+        The Phase-5 backlog's binding acceptance for the rejection reader is
+        "form-scoped new-text-after-declined-submit": the text that matters is
+        the text the FORM renders when its submit handler refuses, and scoping
+        to the form is what keeps a cookie banner or a toast elsewhere on the
+        page from being read as the form's verdict.
+
+        STRUCTURAL, NEVER A CLASS NAME — the acceptance's first clause, and the
+        rule seven R7 red-team rounds enforced: fitting a reader to one app's
+        Tailwind palette makes the next application's silence invisible again.
+        The scope is the ``form`` element and ``[role=form]``, which are the
+        only form-ness the platform itself declares. A page with NO form falls
+        back to the page-wide read: rejection polarity plus the transition diff
+        still bound what can be claimed from it.
+
+        Same hard bounds as :meth:`visible_texts`, same set-difference use: the
+        text already on the page before the action is discarded, never stored.
+        """
+        texts: list[str] = []
+        try:
+            raw = await self._page.evaluate(
+                """() => {
+                    const roots = [...document.querySelectorAll('form,[role=form]')];
+                    const scope = roots.length ? roots : [document];
+                    const out = [];
+                    const sel = 'p,span,div,h1,h2,h3,h4,li,td,strong,em,label';
+                    for (const root of scope) {
+                        for (const el of root.querySelectorAll(sel)) {
+                            if (out.length >= 40) return out;
+                            if (el.querySelector(sel)) continue;
+                            const r = el.getBoundingClientRect();
+                            if (!r.width || !r.height) continue;
+                            const t = (el.innerText || '').trim();
+                            if (t && t.length <= 300) out.push(t);
+                        }
+                    }
+                    return out;
+                }"""
+            )
+            for item in list(raw or [])[:40]:
+                text = str(item or "").strip()
+                if text:
+                    texts.append(text[:300])
+        except Exception:                                        # noqa: BLE001
+            return texts
+        return texts
+
     async def visible_texts(self) -> list[str]:
         """Short visible text blocks, for the before/after crossing diff.
 
