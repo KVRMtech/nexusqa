@@ -127,7 +127,7 @@
   },
   "_a37_notes": {
     "a37_1": "9/9 production credentials decrypt through Cloud KMS, re-proven byte-identical after a full service rebuild",
-    "a37_2": "exposure removed from disk on verdict-box, but the PAT is STILL VALID until revoked at GitHub (fine-grained, Venkatareddy2012, ends ...p0Ox, expires 2026-09-05)",
+    "a37_2": "CLOSED 2026-09-01. Exposure was removed from disk on verdict-box 2026-08-20. The repository owner checked BOTH accounts (KVRMtech and Venkatareddy2012) on 2026-09-01 and no such fine-grained token is listed; it was revoked or expired at some point in between. NOT CLAIMED: this is an absence-from-listing check by the owner, not a revocation receipt, and no record exists of WHEN it stopped being valid - so the exposure window is 2026-08-20 to at latest its stated expiry of 2026-09-05. Verified separately: no full-length token literal is recoverable from git history (all commits matching github_pat_/ghp_ merely document the incident and cite the suffix), so the scrub itself was done correctly.",
     "a37_3": "live three-service rollback drill on verdict-box: 19 checks passed, 0 failed"
   },
 

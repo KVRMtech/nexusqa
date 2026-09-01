@@ -11,7 +11,7 @@ production infrastructure and **passed**; they carry forward.
 | item | verdict |
 |---|---|
 | A37.1 KMS provisioning + KEK re-wrap | **PASS** — 9/9 production credentials decrypt through Cloud KMS, before *and* after a full service rebuild |
-| A37.2 rotate the exposed credential | **PARTIAL** — exposure removed from disk; the token is still valid and needs revoking at GitHub |
+| A37.2 rotate the exposed credential | **CLOSED 2026-09-01** — the owner checked both accounts and no such token is listed; it was revoked or expired. §A37.2 below records what was and was not verified, and the exposure window that stands regardless |
 | A37.3 live three-service rollback drill | **PASS** — executed against verdict-box, 19 checks passed / 0 failed |
 | A37.4 final ARB certification | **REFUSED** |
 
@@ -117,7 +117,27 @@ remote origin  ->  https://github.com/Venkatareddy2012/nexus-power-snapshot.git 
 sweep of /home /root /etc /opt /srv /var/lib + every container env  ->  NONE
 ```
 
-**Not done — the token is still valid.** Scrubbing is not rotation, and the
+**CLOSED 2026-09-01 — but read what that does and does not mean.**
+
+The repository owner checked both `KVRMtech` and `Venkatareddy2012` on
+2026-09-01 and no such fine-grained token is listed. It was revoked or it
+expired; either way there is nothing left to revoke.
+
+**What is NOT claimed.** This is an absence-from-listing check by the owner, not
+a revocation receipt, and nothing records WHEN the token stopped being valid. So
+the exposure window is not zero: it runs from 2026-08-20, when the exposure was
+found, to at latest its stated expiry of 2026-09-05. Anything captured in that
+window was usable during it. A credential incident closes by rotation on a
+known date, not by the credential quietly ageing out, and this one closed the
+second way.
+
+**Verified separately, and this part is good news.** No full-length token
+literal is recoverable from git history: every commit matching `github_pat_` or
+`ghp_` merely documents the incident and cites the suffix. The scrub was done
+correctly, so the exposure never extended to anyone with repository access.
+
+The original finding, kept because it is why this section exists:
+Scrubbing is not rotation, and the
 brief is explicit that overwriting the secret is not the deliverable. Anyone who
 already captured it can still use it.
 
