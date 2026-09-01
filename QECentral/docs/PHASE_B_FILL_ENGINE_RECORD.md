@@ -266,6 +266,29 @@ candidate is that the walk's re-navigation plus this app's per-page-load
 relogin re-mounts the form and drops earlier steps' values — but that is a
 hypothesis, and this record does not carry hypotheses as findings.
 
+> **CORRECTION, added 2026-09-01 after these runs.** Every live measurement in
+> §7.3 was taken on engine `6a8958b` (2026-08-31 13:53), which **predates the
+> radio-answering fix `044ca10`** (2026-08-31 22:30) — verified, not assumed:
+> `git merge-base --is-ancestor 6a8958b 090ab23` returns true. That commit
+> restored `_radio_unblock_groups`, disarmed since 2026-08-29 when `forms.py`
+> began filing ledger rows under `question_name_of` and the residue match
+> started comparing against the member's own label. **Summit's step-2
+> `tobaccoUse` is a radio group**, so the broken path was live throughout.
+>
+> What this does and does not change. The **crossing stands** — agent mode
+> answers choices through the generator, not through the unblock experiment,
+> and the user-mode control stopped on step 0's `Gender` long before any radio
+> was reached, so the measured pair in the table above is unaffected. What is
+> now **less certain is the interpretation of the silence**: an unanswered
+> radio leaving the form genuinely invalid is a *better* candidate cause for
+> the zod refusal than the re-mount hypothesis named above, and it would mean
+> B1-S found nothing because there was a real refusal the application still
+> did not render — or because the refusal was about a field the reader did
+> reach. A post-fix re-crawl may NAME a rejection where this one found
+> silence. That re-crawl is owed anyway for provenance (below); it now settles
+> two questions instead of one. Team H (`nexusqa-6f`) is carrying it, and has
+> the required flags.
+
 #### The bundle is REFUSED, on two grounds, and both are recorded
 
     [REFUSED] produced from a DIRTY tree — 2 modified path(s):
