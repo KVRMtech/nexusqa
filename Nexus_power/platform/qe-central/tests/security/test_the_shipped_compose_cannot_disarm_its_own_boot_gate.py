@@ -55,22 +55,30 @@ _NOT_SECRETS = frozenset({
 #: Team F retired the previous postgres/minio/neo4j entries together with the
 #: CI compose lane that now supplies its own ephemeral credentials.
 _KNOWN_INFRA_DEFAULTS = frozenset({
-    # 2026-09-01 · Team F/H. The DEV redis password, and the only entry here.
+    # ── the four this register has carried, RESTORED 2026-09-01 ─────────────
+    # They describe the COMMITTED compose files, which still ship these. They
+    # were briefly removed by me in d34bc40 and that was a mistake worth naming:
+    # I read them as retired because the copy in my working tree said so — and
+    # that copy was another session's UNCOMMITTED work. They are mid-way through
+    # fixing the compose files themselves, so their emptied register and their
+    # fixed composes are consistent WITH EACH OTHER. Committing the register half
+    # without the compose half is what turned CI red.
     #
-    # RULE 2b (below) found three shipped credentials the key-name detector
-    # could not see. Two were in docker-compose.qec.yml — the stack that serves
-    # clients — and are now `${...:?}`. This third is in docker-compose.dev.yml,
-    # which another session holds uncommitted in this shared checkout, and a
-    # pathspec commit takes the WHOLE file (CLAUDE.md section 1, learned the
-    # hard way in d611592/e00ce6b earlier today).
-    #
-    # Registered rather than silently skipped, which is what this frozenset is
-    # for: it makes the exception conspicuous in review, and
-    # `test_the_known_register_still_matches_the_composes` fails the moment the
-    # value is removed, so a stale entry cannot outlive its subject.
-    #
-    # TO CLOSE: change line 25 and 27 of docker-compose.dev.yml to
-    # `${REDIS_PASSWORD:?...}` and delete this entry in the same commit.
+    # The lesson, since the pathspec rule did not cover this one: in a shared
+    # checkout the working tree is not the committed state, and a test asserting
+    # a property OF COMMITTED FILES must be verified against them. `git worktree
+    # add --detach <sha>` is the check; I ran the suite in a tree carrying a
+    # peer's fixes and read a green that CI could not reproduce.
+    ("POSTGRES_PASSWORD", "nexus-dev"),
+    ("MINIO_ROOT_PASSWORD", "minioadmin"),
+    ("MINIO_SECRET_ACCESS_KEY", "minioadmin"),
+    ("NEO4J_PASSWORD", "nexus-neo4j-dev"),
+    # ── found by RULE 2b, which the key-name detector could not see ─────────
+    # A password inside a DSN or a `command:` line is still a published
+    # password. Registered rather than fixed for the same reason as above: all
+    # three files are held uncommitted by the session doing that work, and a
+    # pathspec commit takes the whole file. The stale-register guard now sees
+    # these too, so each entry dies the moment its value does.
     ("REDIS_PASSWORD", "nexus-redis-dev"),
 })
 
