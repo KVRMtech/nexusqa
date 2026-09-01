@@ -371,7 +371,44 @@ else {
         Write-Host "Pass -NoGate to ship deliberately ungated." -ForegroundColor Red
         exit 1
     }
-    Write-Host "`n[4/4] Golden crawl gate (this runs a REAL crawl; ~5-40 min)..." -ForegroundColor Blue
+        # -- WAIT FOR THE FLEET TO BE READY, NOT MERELY RUNNING --------------
+    #
+    # MEASURED 2026-09-01, and it rolled back a GOOD build. The swap finished
+    # at 23:08:49 with `nexus-qe-central  Up 4 seconds (health: starting)`; the
+    # gate dispatched immediately, got no crawl, and reported APP_UNHEALTHY.
+    # Twenty seconds later the fleet was reverted. One minute after that the
+    # SAME image reported `Up About a minute (healthy)` - the build was fine
+    # and had simply not finished starting.
+    #
+    # The false inference lives in golden_crawl_gate.sh: 'The containers were
+    # confirmed running by host_health above, so a refused or failed dispatch
+    # is the BUILD refusing work.' host_health tests
+    # docker inspect {{.State.Running}} - RUNNING, not HEALTHY. A container is
+    # Running the instant it starts and for the whole of its start_period,
+    # during which it answers nothing. The premise holds everywhere EXCEPT the
+    # seconds right after a swap, which is exactly when this gate runs.
+    #
+    # A gate that reverts a healthy deployment is worse than no gate: it
+    # teaches everyone to pass -NoGate. Waiting is the whole fix.
+    Write-Host "`nWaiting for the fleet to report HEALTHY (not merely running)..." -ForegroundColor Blue
+    # Single-quoted so PowerShell interpolates nothing; '' is a literal quote.
+    $readyCmd = 'for i in $(seq 1 60); do s=$(docker inspect -f ''{{if .State.Health}}{{.State.Health.Status}}{{else}}nohc{{end}}'' nexus-qe-central 2>/dev/null); case "$s" in healthy|nohc) echo READY; exit 0;; esac; sleep 10; done; echo NOT_READY; exit 1'
+    $ErrorActionPreference = "Continue"
+    & gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$readyCmd"
+    $readyExit = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($readyExit -ne 0) {
+        # NOT a rollback. A fleet that never became healthy is something we
+        # cannot say about the BUILD from here - the same class as the host
+        # being unavailable, which the matrix below already refuses to revert on.
+        Write-Host "`nThe fleet did not report healthy within 10 minutes." -ForegroundColor Yellow
+        Write-Host "NOT rolling back: never-became-ready is not proof the build is bad." -ForegroundColor Yellow
+        Write-Host "This build is on the fleet and is UNVERIFIED. Investigate, then:" -ForegroundColor Yellow
+        Write-Host "  bash scripts/golden_crawl_gate.sh $GoldenAppId" -ForegroundColor Yellow
+        exit 2
+    }
+
+Write-Host "`n[4/4] Golden crawl gate (this runs a REAL crawl; ~5-40 min)..." -ForegroundColor Blue
     $ErrorActionPreference = "Continue"
     # No backtick continuation here: a single trailing space after one turns the
     # whole block into a parse error, which is exactly how this shipped broken.
