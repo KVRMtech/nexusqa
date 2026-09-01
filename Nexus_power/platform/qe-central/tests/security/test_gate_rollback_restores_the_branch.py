@@ -234,23 +234,39 @@ def test_a_rollback_that_never_detached_is_left_alone(tmp_path):
 
 # -- the control: prove the bug was real, and that this test can see it ------
 
-def test_the_unfixed_script_strands_the_checkout(tmp_path):
-    """FALSIFICATION CONTROL - remove the fix, require the outage back.
+def _script_with_the_guard_removed():
+    """The script under test, minus the branch-restoring guard.
 
-    The pre-fix script is read from git history rather than written out here, so
-    the control cannot quietly drift into agreeing with the implementation.
+    Derived by DELETING the guard from the live file rather than by reading an
+    older revision out of git. An older-revision control stops running the moment
+    the fix is committed (HEAD then contains it), so it would have been inert on
+    CI from its very first green run - present in the file, proving nothing. This
+    version removes the guard from whatever the script says today, so it keeps
+    working, and it goes red if the guard is ever renamed or restructured rather
+    than quietly passing.
     """
-    shown = subprocess.run(
-        ["git", "show", "HEAD:Nexus_power/scripts/gate_rollback.sh"],
-        cwd=str(REPO), capture_output=True, text=True, encoding="utf-8", errors="replace",
+    text = ROLLBACK.read_text(encoding="utf-8")
+    first = text.index("ROLLBACK_BRANCH=")
+    last = text.index("trap restore_branch EXIT") + len("trap restore_branch EXIT")
+    stripped = text[:first] + text[last:]
+    assert "restore_branch" not in stripped, (
+        "the guard was not fully removed - this control would be testing the "
+        "FIXED script and passing for the wrong reason"
     )
-    if shown.returncode != 0 or "restore_branch" in shown.stdout:
-        pytest.skip(
-            "no pre-fix revision reachable at HEAD (the fix is committed there), "
-            "so this control cannot remove the guard it exists to remove"
-        )
+    assert len(stripped) < len(text)
+    return stripped
 
-    src, green, script = _worktree(tmp_path, shown.stdout)
+
+def test_the_unfixed_script_strands_the_checkout(tmp_path):
+    """FALSIFICATION CONTROL - remove the guard, require the outage back.
+
+    Without this, every other assertion in the file is satisfied just as well by
+    a script that never detached HEAD at all. It has already earned its place
+    once: it caught the harness resolving `bash` to WSL's bash.exe, which could
+    not execute the script, so nothing ran and the three positive tests passed
+    against an absent subject.
+    """
+    src, green, script = _worktree(tmp_path, _script_with_the_guard_removed())
     _run(src, script, green, _fake_docker(tmp_path / "bin", True).parent)
 
     assert _head_branch(src) is None, (
