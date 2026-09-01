@@ -1,0 +1,172 @@
+{{/*
+=================================================================
+egress-proxy (squid) — the SINGLE NAT hop with a HARD host allowlist
+(design §1.1). The quarantined explorer's ONLY route outward is this
+proxy; squid enforces the destination-HOST allowlist (the explorer's
+in-browser guard enforces the METHOD). An EMPTY allowlist DENIES ALL real
+egress — fail-closed by construction.
+
+On-prem posture: a STATIC per-tenant allowlist (egressProxy.allowedDomains)
+is the recommended, most-auditable form — the single onboarded target app's
+registrable domain(s), nothing else.
+=================================================================
+*/}}
+{{- if .Values.egressProxy.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-egress-proxy-conf
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+data:
+  squid.conf: |
+    # VKPower Verdict egress proxy — HARD host allowlist, fail-closed.
+    acl allowed_domains dstdomain "/etc/squid/allowlist/allowed_domains.txt"
+
+    acl SSL_ports port 443
+    acl Safe_ports port 80
+    acl Safe_ports port 443
+    acl CONNECT method CONNECT
+
+    # Refuse unsafe ports and CONNECT to anything but 443 outright.
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+
+    # The ONLY allow rule: allowlisted destination domains (HTTP + HTTPS CONNECT).
+    http_access allow allowed_domains
+
+    # Fail-closed default — deny everything else (the nexus stack, metadata
+    # endpoints, the wider internet).
+    http_access deny all
+
+    http_port {{ .Values.egressProxy.port }}
+
+    # No caching — evidence integrity: never serve a stale/poisoned response and
+    # keep zero client data at rest in the proxy.
+    cache deny all
+    maximum_object_size 0 KB
+
+    # Do not leak the proxy's presence, version, or internal client topology.
+    via off
+    forwarded_for delete
+    httpd_suppress_version_string on
+    request_header_access X-Forwarded-For deny all
+
+    # Logs to stdio for the egress-proof audit.
+    logfile_rotate 0
+    access_log stdio:/dev/stdout squid
+    cache_log /dev/stderr
+
+    # Deterministic, quick-to-fail DNS on blocked hosts.
+    dns_v4_first on
+    pid_filename /tmp/squid.pid
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-egress-allowlist
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+data:
+  allowed_domains.txt: |
+    {{- if .Values.egressProxy.allowedDomains }}
+    {{- range .Values.egressProxy.allowedDomains }}
+    {{ . }}
+    {{- end }}
+    {{- else }}
+    # fail-closed default — no real host until egressProxy.allowedDomains is set
+    .qec-egress-denied.invalid
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-egress-proxy
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "egress-proxy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "egress-proxy") | nindent 8 }}
+      annotations:
+        # Restart squid when its config/allowlist inputs change. Hash the egressProxy
+        # values — NOT the whole template file, which contains this Deployment and would
+        # self-include → infinite recursion.
+        checksum/allowlist: {{ .Values.egressProxy | toYaml | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "verdict.fullname" .) }}
+      {{- include "verdict.podSpecCommon" $root | nindent 6 }}
+      containers:
+        - name: squid
+          image: {{ .Values.egressProxy.image | quote }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - exec squid -N -f /etc/squid/squid.conf -d 1
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.egressProxy.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.egressProxy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: squid-conf
+              mountPath: /etc/squid/squid.conf
+              subPath: squid.conf
+              readOnly: true
+            - name: allowlist
+              mountPath: /etc/squid/allowlist
+              readOnly: true
+            - name: run
+              mountPath: /var/run
+            - name: spool
+              mountPath: /var/spool/squid
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: squid-conf
+          configMap:
+            name: {{ $fullname }}-egress-proxy-conf
+        - name: allowlist
+          configMap:
+            name: {{ $fullname }}-egress-allowlist
+        - name: run
+          emptyDir:
+            sizeLimit: 32Mi
+        - name: spool
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-egress-proxy
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.egressProxy.port }}
+      targetPort: proxy
+      protocol: TCP
+      name: proxy
+  selector:
+    {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+{{- end }}

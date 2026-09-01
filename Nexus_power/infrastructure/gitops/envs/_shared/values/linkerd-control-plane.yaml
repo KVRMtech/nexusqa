@@ -1,0 +1,70 @@
+# Linkerd control plane — shared baseline.
+#
+# Provides mTLS between every pod with the linkerd.io/inject=enabled
+# annotation. The platform namespace is labelled for injection in
+# bootstrap/00-namespaces.yaml, so every workload picks up a sidecar
+# automatically once linkerd is healthy.
+#
+# Identity certificates: linkerd does NOT generate its own trust anchor
+# here. The trust anchor + identity issuer are provisioned by
+# cert-manager (see infra-resources/cert-manager/linkerd-trust-anchor.yaml).
+# Linkerd consumes them from Kubernetes Secrets in the linkerd namespace.
+
+# Reference the externally-managed trust anchor by setting externalCA.
+# The Certificate resource in infra-resources creates the
+# `linkerd-trust-anchor` Secret in the linkerd namespace, signed by the
+# self-signed root ClusterIssuer.
+identity:
+  externalCA: true
+  issuer:
+    # Identity Issuer rotates daily; trust anchor lasts 10 years.
+    # cert-manager's renewBefore + Certificate.duration handle rotation.
+    scheme: kubernetes.io/tls
+    # cert-manager creates these Secrets with the standard tls.crt /
+    # tls.key keys, which is what Linkerd's "kubernetes.io/tls" scheme
+    # expects. No manual cert mounting.
+
+# HA mode: control plane components run 3 replicas with anti-affinity.
+ha: true
+
+# Sidecar proxy defaults applied to every injected workload.
+proxy:
+  # mTLS is on by default in linkerd; this knob just sets the level.
+  logLevel: warn,linkerd=info
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  # The sidecar's identity is derived from the workload's ServiceAccount.
+  # Every workload that needs mTLS MUST run as a real ServiceAccount, not
+  # the namespace default — this is enforced in the platform chart's
+  # Deployment template.
+
+# Control plane components
+controllerReplicas: 3
+
+destinationController:
+  replicas: 3
+  livenessProbe:
+    timeoutSeconds: 5
+
+# Network policies: linkerd's own pods are allowed by NetworkPolicy
+# from any namespace (data-plane proxies need to talk to identity etc.).
+# Application NetworkPolicies in the platform chart explicitly allow
+# inbound from linkerd's identity controller.
+
+# Prometheus
+prometheus:
+  enabled: false  # cluster-wide Prometheus from observability stack scrapes linkerd's metrics endpoints
+
+# Sidecar metrics exposed for scraping by kube-prometheus-stack
+proxyInjector:
+  externalSecret: true  # use cert-manager-issued cert for the webhook
+
+profileValidator:
+  externalSecret: true
+
+policyValidator:
+  externalSecret: true

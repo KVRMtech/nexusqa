@@ -1,0 +1,159 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ===== SECURITY: Secrets & Credentials =====
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+.env.ci
+.env.production
+.env.staging
+
+# Token / credential files
+_token.txt
+_token2.txt
+_token*.txt
+**/credentials.txt
+**/secrets.*
+# ...but a Python SOURCE module named secrets.py under an app/ tree is CODE
+# (e.g. engines/repo-intel/app/model/secrets.py — the token-envelope helper),
+# not a secret file. Track those; real secret files (secrets.json/yaml/env) stay
+# ignored by the rule above.
+!**/app/**/secrets.py
+
+# Private keys & certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# JWT check script (contains secret references)
+_check_jwt.py
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Virtual environments =====
+.venv/
+venv/
+env/
+
+# ===== Docker =====
+docker-compose.override.yml
+
+# ===== Data (large files — not in git) =====
+/data/
+/models/
+*.wav
+*.mp3
+*.mp4
+*.avi
+*.mov
+
+# ===== ML model weights (re-download on pod) =====
+**/models/
+**/.cache/
+**/snapshots/
+*.bin
+*.ckpt
+*.pth
+*.safetensors
+*.onnx
+*.pb
+
+# ===== Eyes-engine extracted frames (test data) =====
+**/data/frames/
+**/data/evidence/
+frames_payload*.json
+zaud.*
+zvid.*
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Test artifacts =====
+.coverage
+htmlcov/
+.pytest_cache/
+test_*_output.txt
+test_output*.txt
+test_full*.txt
+failing_*.txt
+
+# ===== Temp directory =====
+/temp/
+
+# ===== Dev scratchpads / diagnostic dumps =====
+# Used by ad-hoc reproduction scripts; never committed to main.
+tmp_*.py
+tmp_*/
+**/tmp_*.py
+**/tmp_*/
+# dot-prefixed scratch (ad-hoc psql probes etc. — these leaked in once)
+.tmp_*
+**/.tmp_*
+*.bmp
+frames_payload_raw.json
+**/frames_payload_raw.json
+**/contact_sheet*.jpg
+**/thumb_*.jpg
+
+# ===== Node (dashboard/client) =====
+node_modules/
+.next/
+
+# ===== Database =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== Coverage / test artifacts =====
+# ci/run_root_tests.sh writes coverage.xml at the application root and combines
+# per-shard .coverage.* data files; both are build output, never source.
+coverage.xml
+.coverage
+.coverage.*
+
+# ===== Browser-harness run output =====
+# tests/browser writes the production JS snippet it is about to execute into
+# .tmpjs/, and the proving-ground crawl tests write frames + manifests into
+# _crawl_out/. Both are produced by a run, never inputs to one — the golden
+# files under tests/browser/golden/ are the checked-in expectations.
+engines/qe-explorer/tests/browser/.tmpjs/
+engines/qe-explorer/tests/browser/_crawl_out/
+# measure_boundary_crossing.py writes its crawl there for the same reason.
+engines/qe-explorer/_measure_out/
+
+# ---- Live measurement OUTPUT (instrument artefacts, not source) ----
+# `measure_network_evidence.py` and its siblings are instruments: they run the
+# production crawler against a REAL deployed application and write the crawl's
+# own artefact tree (frame_*.png screenshots + manifest.jsonl) beside the script.
+# That output is a recording of somebody's live deployment, it is regenerated on
+# every run, and it is not reviewable evidence the way a golden is. The
+# instruments stay in version control; what they emit does not.
+engines/qe-explorer/_measure_live/
+# Same rule, the other instruments' working directories. `measure_crawl_performance.py`
+# writes a full crawl artefact tree per repetition (frame_*.png + manifest) and
+# `measure_boundary_crossing.py` writes one per app. Both are regenerated on every
+# run and neither is reviewable evidence the way a golden is. Named individually
+# rather than as `_*` so a future directory has to be considered, not swallowed.
+engines/qe-explorer/_perf_work/
+engines/qe-explorer/_measure_out/

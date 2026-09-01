@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 23 — ambiguous iframe attributes</title>
+<style> iframe { display: block; width: 420px; height: 90px; border: 1px solid #ddd; } </style>
+</head>
+<body>
+  <main>
+    <h1>Ambiguous embeds</h1>
+
+    <label for="claim-ref">Claim Reference</label>
+    <input id="claim-ref" name="claim_ref" type="text">
+
+    <!-- (a) + (b) THE COLLISION. Two frames whose ONLY identifying attribute is
+         the same title — and a title full of CSS metacharacters, so escaping and
+         uniqueness are exercised together. Escaping alone emits ONE selector for
+         BOTH frames; frameLocator silently takes the first, and every control
+         captured in (b) is recorded against (a). That reads as coverage, which
+         is why it is worse than capturing nothing. -->
+    <iframe title='payment "step" [1]' src="child-one.html"></iframe>
+    <iframe title='payment "step" [1]' src="child-two.html"></iframe>
+
+    <!-- (c) A FRAME WITH NOTHING TO GO ON, NESTED IN AN OPEN SHADOW ROOT.
+         The positional rung emits `iframe >> nth=N`, which Playwright resolves
+         against the WHOLE document with its shadow-piercing `iframe` engine. The
+         old ordinal was the loop index inside whatever subtree the walker was
+         standing in — here 0, the frame's position among its shadow siblings —
+         so the emitted selector bound to frame (a). The ordinal has to come from
+         the same document-wide, shadow-piercing frame set the selector will be
+         resolved against, which is 2. -->
+    <div id="shadow-host"></div>
+
+    <!-- (d) A SECOND attribute-less frame, in the light DOM and AFTER the shadow
+         host, so the two positional rungs cannot both be right by accident. -->
+    <iframe></iframe>
+
+    <!-- (e) + (f) THE HOST ITSELF HAS TO BE ADDRESSED. `div#shadow-host` above
+         takes the easy rung - the host has an id. These two do not, and they are
+         the two remaining shapes:
+
+           (e) an <aside>, the only one in its root  -> the bare tag `aside`
+           (f) the SECOND of two <section>s          -> `section >> nth=1`
+
+         Without them the id rung is the only one a fixture ever executes, and a
+         shadow host with no id - which is most of them, in a component library
+         that never expected to be addressed from outside - would be a frame the
+         crawl catalogues and replay cannot reach. -->
+    <aside></aside>
+    <section></section>
+    <section></section>
+  </main>
+
+  <script>
+    (function () {
+      // (c) — populated the same way fixture 03 populates its positional frame:
+      // document.write into the about:blank document that already exists, which
+      // keeps it same-origin and behaves identically in jsdom and Chromium.
+      var root = document.getElementById("shadow-host").attachShadow({ mode: "open" });
+      var shadowFrame = document.createElement("iframe");
+      root.appendChild(shadowFrame);
+      var sd = shadowFrame.contentDocument;
+      sd.open();
+      sd.write('<!doctype html><html><body>'
+             + '<label for="shadow-frame-field">Shadow Frame Field</label>'
+             + '<input id="shadow-frame-field" name="shadow_frame_field" type="text">'
+             + '</body></html>');
+      sd.close();
+
+      // (d)
+      var frames = document.querySelectorAll("iframe");
+      var last = frames[frames.length - 1];
+      var ld = last.contentDocument;
+      ld.open();
+      ld.write('<!doctype html><html><body>'
+             + '<label for="light-frame-field">Light Frame Field</label>'
+             + '<input id="light-frame-field" name="light_frame_field" type="text">'
+             + '</body></html>');
+      ld.close();
+
+      // (e) + (f) — same recipe, hosts with no id.
+      function hostAFrame(host, fieldId, label) {
+        var r = host.attachShadow({ mode: "open" });
+        var f = document.createElement("iframe");
+        r.appendChild(f);
+        var d = f.contentDocument;
+        d.open();
+        d.write('<!doctype html><html><body>'
+              + '<label for="' + fieldId + '">' + label + '</label>'
+              + '<input id="' + fieldId + '" name="' + fieldId.replace(/-/g, "_")
+              + '" type="text">'
+              + '</body></html>');
+        d.close();
+      }
+      hostAFrame(document.querySelector("aside"), "aside-frame-field", "Aside Frame Field");
+      hostAFrame(document.querySelectorAll("section")[1],
+                 "section-frame-field", "Section Frame Field");
+    })();
+  </script>
+</body>
+</html>

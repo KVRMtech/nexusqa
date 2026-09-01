@@ -1,0 +1,17 @@
+env: production
+# Production pins a specific commit SHA. PR-driven promotion only.
+# This value is updated by the release engineering rotation after the
+# staging release has burned in for the contractual soak time.
+targetRevision: 0000000000000000000000000000000000000000
+syncMode: manual
+allowPrune: false
+allowSelfHeal: false
+# Production sync requires a human approval in the Argo CD UI on the
+# first sync of any new image tag. This is enforced via the platform
+# AppProject role `production-approver`.
+requireSyncApproval: true
+domain: platform.example.com
+region: us-east-1
+# Production GPG signing key fingerprint. Tags / commits referenced by
+# production target revisions must be signed by this key.
+signatureKey: REPLACE_WITH_GPG_KEY_FINGERPRINT

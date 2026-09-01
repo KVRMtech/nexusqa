@@ -1,0 +1,37 @@
+# An ApplicationSet that pulls the AppProject CRs from projects/ in this
+# repo and keeps them reconciled. After bootstrap, editing the project
+# definitions in Git is the way to grant or revoke project scopes.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-projects
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  project: default
+  source:
+    repoURL: ${PLATFORM_REPO_URL}
+    targetRevision: ${PLATFORM_TARGET_REVISION}
+    path: infrastructure/gitops/projects
+    directory:
+      recurse: true
+      include: '*.yaml'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

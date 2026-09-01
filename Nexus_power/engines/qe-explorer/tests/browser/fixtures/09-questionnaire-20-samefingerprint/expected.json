@@ -1,0 +1,20 @@
+{
+  "purpose": "Prove 20 structurally IDENTICAL questions stay 20 questions. Every control on the page shares one of two accessible names (Yes/No) and one role (radio); only group_key distinguishes them.",
+  "targeted_defect": "None (regression guard) - the adversarial case for any dedupe-by-(role,name) logic anywhere between the walker and the manifest. A collapse here silently deletes 19 of the application's 20 questions while the crawl reports the form fully covered.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 41,
+  "exact_control_count": 41,
+  "expect_controls": [
+    {"where": {"css_hint": "button"}, "fields": {"name": "Continue", "role": "button"}}
+  ],
+  "group_key_partition": {
+    "why": "40 radios must partition into exactly 20 groups of 2. Anything else is a collapse or a shatter.",
+    "expect_distinct_nonempty": 20,
+    "expect_group_sizes": 2
+  },
+  "name_fingerprint_collapse": {
+    "why": "Records the adversarial property explicitly: the (role, name) fingerprint of the 40 radios takes only 2 distinct values, so name alone can never identify a control on this page.",
+    "expect_distinct_role_name_pairs_among_radios": 2
+  }
+}

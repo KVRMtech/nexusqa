@@ -1,0 +1,385 @@
+# Standalone deploy for QE-Central (design R-10: the main docker-compose.yml
+# gets ZERO edits — the no-break guarantee extends to deploy config). Brings up
+# the QE-Central plane without touching the running stack, exactly like
+# docker-compose.runner.yml. Tear down with:
+#   docker compose -f docker-compose.qec.yml down
+#
+# Prerequisites (one-time, against the running nexus-postgres):
+#   psql -v qec_password=... -v qec_substrate_password=... \
+#        -f scripts/qec_db_bootstrap.sql
+#   docker compose -f docker-compose.qec.yml run --rm qe-central \
+#        alembic -c alembic_qec/alembic.ini upgrade head
+#
+# ── NETWORK ISOLATION INVARIANTS (design §1.1) ───────────────────────────────
+# The contained explorer (qe-explorer) is QUARANTINED:
+#   * it sits ONLY on qec-internal + qec-egress (BOTH internal: true) — so it
+#     has NO route to the internet except through the squid egress proxy, and
+#     NO route to the nexus stack (postgres, platform-api, VKPower engines);
+#   * it is NEVER on the `nexus` network and publishes NO host port;
+#   * it holds NO DB creds and NO KMS — only the per-fleet HMAC token.
+# qe-central bridges qec-internal↔nexus (it needs both: nexus for postgres +
+# platform-api, qec-internal to dispatch/receive the explorer). squid alone is
+# internet-capable (qec-egress-public) and egresses ONLY to the allowlisted
+# target domain(s) — deny-all by default (engines/qe-explorer/squid.conf).
+services:
+  qe-central:
+    build:
+      context: ./platform/qe-central
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    image: nexus_power-qe-central
+    container_name: nexus-qe-central
+    restart: unless-stopped
+    ports:
+    # ── M0.5 T-SEC-02: LOOPBACK ONLY ────────────────────────────────────────
+    # This used to be "8093:8093", i.e. 0.0.0.0 — the whole qe-central API,
+    # INCLUDING the /internal/* explorer seam, was reachable from any host that
+    # could route to this machine. The reverse proxy and any operator tooling
+    # run ON this host, so binding the published port to 127.0.0.1 costs them
+    # nothing and removes the network exposure entirely.
+    #
+    # This is DEFENCE IN DEPTH, not the control: /internal/* is authenticated at
+    # the application boundary (app/auth.py::internal_auth_middleware) with the
+    # per-fleet token, so the seam is refused even from localhost, and even from
+    # inside the docker network. Set QEC_BIND_ADDRESS=0.0.0.0 only if a remote
+    # proxy genuinely terminates elsewhere.
+    - "${QEC_BIND_ADDRESS:-127.0.0.1}:8093:8093"
+    environment:
+      NEXUS_ENV: ${NEXUS_ENV:-development}
+      PORT: '8093'
+      QEC_SERVICE_NAME: qe-central
+      QEC_LOG_LEVEL: ${QEC_LOG_LEVEL:-INFO}
+      # ── Two DSNs (R-7): qecentral DB (role qec) + nexus DB (role
+      #    qec_substrate, least-privilege substrate writes only) ──────────
+      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
+      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
+      # ── Shared HS256 secret — MUST match platform-api's (docker-compose.yml).
+      # M0.5 T-SEC-01: NO DEFAULT, and the ``:?`` form makes compose REFUSE to
+      # start without it. The previous default was
+      # `test-secret-do-not-use-in-production` — a value printed in this
+      # repository — so a fresh deployment accepted any token an attacker signed
+      # with it, including `{"role":"admin"}`. There is no safe fallback for a
+      # signing key: an unset one must stop the deploy, not silently authenticate.
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32) - qe-central refuses to authenticate with a development default}
+      # QEC-NAMESPACED so a shared main-stack .env (passed via --env-file for the
+      # JWT secret) can NOT leak a host-oriented PLATFORM_API_URL into this
+      # container — inside the nexus network the factory is ALWAYS platform-api:
+      # 8091 (override with QEC_PLATFORM_API_URL, never the stack-wide var).
+      PLATFORM_API_URL: ${QEC_PLATFORM_API_URL:-http://platform-api:8091}
+      # MUST match platform-api's storage backend so frame assets are
+      # co-readable (design §3.1 / R-5).
+      NEXUS_STORAGE_BACKEND: ${NEXUS_STORAGE_BACKEND:-local}
+      # ArtifactStore local root (nexus_sdk.storage.base). MUST match
+      # platform-api's NEXUS_STORAGE_PATH (docker-compose.yml:467 = /app/service/
+      # data) — WITHOUT this the SDK falls back to its hardcoded /data/nexus
+      # default, which the non-root container user cannot write ([Errno 13]).
+      # The Dockerfile chowns /app/service/data to the nexus user, so this is
+      # writable; frames land co-readable with the eyes/platform-api stack.
+      # QEC-NAMESPACED (same reason as PLATFORM_API_URL): the main .env's
+      # NEXUS_STORAGE_PATH points at /data/nexus, writable in platform-api's
+      # image but NOT in qe-central's (only /app/service/data is chowned). Do
+      # not inherit it; override with QEC_STORAGE_PATH if ever needed.
+      NEXUS_STORAGE_PATH: ${QEC_STORAGE_PATH:-/app/service/data}
+      NEXUS_FRAME_STORAGE_PATH: ${NEXUS_FRAME_STORAGE_PATH:-/app/service/data/frames}
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      # Phase-0 REFUSE harness — explicit opt-in (creates real artifacts).
+      QE_HARNESS_ENABLED: ${QE_HARNESS_ENABLED:-false}
+      QEC_SERVICE_TOKEN_TTL_SECONDS: ${QEC_SERVICE_TOKEN_TTL_SECONDS:-3600}
+      # ── Phase-5.5 production hardening (OPT-IN; these DEFAULTS preserve the
+      #    single-instance behavior byte-for-byte). A MULTI-REPLICA production
+      #    deploy sets QEC_ADMISSION_BACKEND=redis AND QEC_DAEMON_LEADER_ELECTION=
+      #    advisory_lock so N replicas enforce ONE customer-facing rate and only
+      #    ONE daemon scans the fleet. ────────────────────────────────────────
+      # Admission limiter backend: 'memory' (process-local, default) or 'redis'
+      # (one shared, atomic, POLITENESS-FIRST fail-closed limiter).
+      QEC_ADMISSION_BACKEND: ${QEC_ADMISSION_BACKEND:-memory}
+      # DSN pre-wired to the stack's redis (db 3) so a multi-replica prod only
+      # flips QEC_ADMISSION_BACKEND=redis; INERT while backend=memory (default).
+      QEC_REDIS_URL: ${QEC_REDIS_URL:-redis://redis:6379/3}
+      # Cycle-daemon leader election: 'none' (always leader, default) or
+      # 'advisory_lock' (Postgres pg_advisory_lock — exactly ONE replica scans).
+      QEC_DAEMON_LEADER_ELECTION: ${QEC_DAEMON_LEADER_ELECTION:-none}
+      # API self-protection rate limit (req/sec/principal); 0 ⇒ OFF (default).
+      QEC_API_RATE_LIMIT: ${QEC_API_RATE_LIMIT:-0}
+      # Retry budget for IDEMPOTENT factory GETs (transport / 502-503-504 only);
+      # 0 ⇒ single attempt. The non-idempotent generate/run triggers never retry.
+      QEC_HTTP_MAX_RETRIES: ${QEC_HTTP_MAX_RETRIES:-2}
+      # ── Envelope encryption (client_apps.creds_blob) ───────────────────
+      # local is dev-only (SDK refuses it outside NEXUS_ENV=development|test);
+      # production uses gcp_kms/aws_kms exactly like platform-api.
+      NEXUS_KEK_PROVIDER: ${NEXUS_KEK_PROVIDER:-local}
+      NEXUS_LOCAL_KEK_PATH: ${NEXUS_LOCAL_KEK_PATH:-/app/service/data/kek/master.key}
+      NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
+      NEXUS_KEK_AWS_ARN: ${NEXUS_KEK_AWS_ARN:-}
+      AWS_REGION: ${AWS_REGION:-}
+      # ── Phase-1 explorer dispatch (design §3.2) ────────────────────────
+      # OFF by default: the Phase-0 inline-bundle path stays the only write
+      # path until an operator enables live crawling.
+      QEC_EXPLORER_DISPATCH_ENABLED: ${QEC_EXPLORER_DISPATCH_ENABLED:-false}
+      QEC_EXPLORER_URL: ${QEC_EXPLORER_URL:-http://qe-explorer:8210}
+      # Per-fleet HMAC shared secret (RUNNER_TOKEN pattern) — MUST equal the
+      # qe-explorer value below; empty ⇒ fail-closed (dispatch + callback refuse).
+      # M0.5 T-SEC-01: NO DEFAULT. `dev-explorer-token-change-me` shipped in this
+      # file, so every deployment that never changed it shared one publicly-known
+      # fleet credential — enough to authenticate the whole /internal seam.
+      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:?QEC_EXPLORER_TOKEN must be set to a strong random value (e.g. openssl rand -hex 32) and match the qe-explorer service}
+      # ── HMAC key rotation seam (M0.5 T-SEC-11) — both OPTIONAL ────────────
+      # Rotation: set QEC_EXPLORER_TOKEN to K2, move K1 to _PREVIOUS, and set
+      # _PREVIOUS_EXPIRES_AT to an epoch-SECONDS deadline a little beyond the
+      # longest in-flight crawl. Callbacks signed with K1 keep verifying until
+      # that moment and are refused after it. Unset ⇒ single-key (no overlap).
+      QEC_EXPLORER_TOKEN_PREVIOUS: ${QEC_EXPLORER_TOKEN_PREVIOUS:-}
+      QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT: ${QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT:-0}
+      # Allowed clock skew (seconds) on a signed callback, and the nonce
+      # retention window that makes a replay fail.
+      QEC_HMAC_SKEW_SECONDS: ${QEC_HMAC_SKEW_SECONDS:-300}
+      # qe-central-side mount of the shared crawl volume (manifests + PNGs).
+      QEC_CRAWL_STORAGE_ROOT: /work
+      # Squid allowlist file qe-central populates before each dispatch.
+      QEC_EGRESS_ALLOWLIST_PATH: /qec/egress-allowlist/allowed_domains.txt
+      # ── C4/C5 planned branch walks + autowalk (Journey Graph) ─────────────
+      # A decision point (insurance type, coverage tier) is a business choice
+      # the crawl must not make unilaterally — the ONLY sanctioned way past it
+      # is a planned walk that forces one enumerated option per crawl. Both the
+      # env switch AND the tenant's own flag must be on (fail-closed).
+      # Depth starts at 1: one fan-out round, not a recursive explosion. Raise
+      # QEC_AUTOWALK_MAX_DEPTH once a live run proves the funnel opens.
+      QEC_BRANCH_WALKS_ENABLED: ${QEC_BRANCH_WALKS_ENABLED:-true}
+      QEC_JOURNEY_AUTOWALK_ENABLED: ${QEC_JOURNEY_AUTOWALK_ENABLED:-true}
+      # Match the EXPLORER POOL, not the backlog: the explorer is single-flight
+      # per worker, so dispatching more plans than there are workers guarantees
+      # 409s for the excess. This is a THROUGHPUT setting, not a coverage one —
+      # with one worker the sweep is serialised (one walk per completion, each
+      # completion planning the next) and still reaches every option. Raise it
+      # only alongside the worker pool.
+      QEC_BRANCH_WALKS_PER_CYCLE: ${QEC_BRANCH_WALKS_PER_CYCLE:-1}
+      # STALE-CRAWL REAPER — self-gates OFF unless a tick is set, and it was
+      # never set. A crawl whose explorer died (deploy, restart, OOM, network
+      # blip) leaves its qe_explorations row non-terminal forever, the app's
+      # one-active-crawl slot stays taken, and the portal's Crawl button is
+      # disabled PERMANENTLY — recoverable only by hand-editing the database.
+      # Observed live: an explorer redeploy mid-sweep bricked the app.
+      # The reaper moves such a row to a first-class `stalled` — an honest
+      # "we do not know how this ended", never a silent success.
+      QEC_REAPER_TICK_SECONDS: ${QEC_REAPER_TICK_SECONDS:-60}
+      QEC_REAPER_GRACE_SECONDS: ${QEC_REAPER_GRACE_SECONDS:-180}
+      # Depth is a runaway backstop only. The sweep ends when the branch backlog
+      # is empty — an honest "nothing left to walk" — not when a counter runs
+      # out. Leave unset to inherit the high default.
+    volumes:
+    # Shared frame volume from the main stack (eyes-engine serves from it) —
+    # visual_frames assets land where eyes can read them (R-5).
+    - frame-storage:/app/service/data/frames
+    # Dev-only local KEK persistence (inert when NEXUS_KEK_PROVIDER != local).
+    - qec-kek:/app/service/data/kek
+    # Shared crawl storage — qe-central READS the manifest + staged PNGs the
+    # explorer writes here (same /work path as the explorer for path parity).
+    - qec-crawl-storage:/work
+    # Shared squid allowlist — qe-central WRITES the per-crawl target domain(s).
+    - qec-egress-allowlist:/qec/egress-allowlist
+    mem_limit: 1g
+    networks:
+    - nexus
+    - qec-internal
+
+  # ── The contained explorer (S2) — quarantined browser container ──────────
+  qe-explorer:
+    build:
+      context: ./engines/qe-explorer
+      dockerfile: Dockerfile
+    image: nexus_power-qe-explorer
+    container_name: nexus-qe-explorer
+    restart: unless-stopped
+    # NO `ports:` — isolation invariant. qe-central reaches it over the
+    # internal qec-internal network at qe-explorer:8210 (Dockerfile EXPOSE).
+    environment:
+      NEXUS_ENV: ${NEXUS_ENV:-development}
+      QEC_EXPLORER_PORT: '8210'
+      QEC_EXPLORER_LOG_LEVEL: ${QEC_EXPLORER_LOG_LEVEL:-INFO}
+      # HMAC-signed completion callback target (qe-central on qec-internal).
+      QEC_CALLBACK_URL: ${QEC_CALLBACK_URL:-http://qe-central:8093}
+      # Per-fleet HMAC shared secret — MUST equal qe-central's QEC_EXPLORER_TOKEN.
+      # M0.5 T-SEC-01: no default (see the qe-central service above).
+      QEC_EXPLORER_TOKEN: ${QEC_EXPLORER_TOKEN:?QEC_EXPLORER_TOKEN must be set to a strong random value and match the qe-central service}
+      # Rotation overlap — must mirror qe-central's (M0.5 T-SEC-11).
+      QEC_EXPLORER_TOKEN_PREVIOUS: ${QEC_EXPLORER_TOKEN_PREVIOUS:-}
+      QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT: ${QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT:-0}
+      QEC_HMAC_SKEW_SECONDS: ${QEC_HMAC_SKEW_SECONDS:-300}
+      # The ONLY route to the internet: the squid egress proxy. The browser is
+      # launched with --proxy-server=<this>; squid enforces the host allowlist.
+      EGRESS_PROXY: ${EGRESS_PROXY:-http://qec-egress-proxy:3128}
+      WORK_DIR: /work
+    volumes:
+    # Explorer-side mount of the shared crawl volume (writes manifests + PNGs).
+    - qec-crawl-storage:/work
+    # Chromium needs a larger /dev/shm than Docker's 64 MB default.
+    shm_size: 1gb
+    mem_limit: 2g
+    networks:
+    - qec-internal
+    - qec-egress
+    depends_on:
+    - qec-egress-proxy
+
+  # ── Egress proxy — the single NAT hop, HARD host allowlist ───────────────
+  qec-egress-proxy:
+    image: ${QEC_SQUID_IMAGE:-ubuntu/squid:latest}
+    container_name: nexus-qec-egress-proxy
+    restart: unless-stopped
+    # NO host `ports:` — reachable only by qe-explorer over qec-egress:3128.
+    volumes:
+    - ./engines/qe-explorer/squid.conf:/etc/squid/squid.conf:ro
+    # Shared allowlist volume (qe-central writes allowed_domains.txt here).
+    - qec-egress-allowlist:/etc/squid/allowlist
+    # Seed a FAIL-CLOSED sentinel so squid starts before the first crawl, then
+    # run squid in the foreground. A background watcher signals squid to re-read
+    # the allowlist whenever qe-central rewrites it (the ACL file is re-read ONLY
+    # on (re)configure, and qe-central — a separate container — cannot signal
+    # squid itself). WITHOUT this, a domain added after squid started is denied
+    # TCP_DENIED/403 forever and the crawl reaches nothing.
+    # HARDENED (live-observed race): `kill -HUP 1` signals the exec'd foreground
+    # squid (PID 1) DIRECTLY — `squid -k reconfigure` resolves the instance via
+    # the pidfile, which is unreliable under `squid -N` and silently no-ops
+    # (TCP_DENIED despite a correct allowlist write). The old form stays as a
+    # fallback only.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+    - >
+      mkdir -p /etc/squid/allowlist &&
+      { [ -s /etc/squid/allowlist/allowed_domains.txt ] ||
+        printf '%s\n' '# fail-closed default — no real host until a crawl populates it' '.qec-egress-denied.invalid'
+          > /etc/squid/allowlist/allowed_domains.txt; } &&
+      { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
+      { A=/etc/squid/allowlist/allowed_domains.txt; L=; while :; do
+          C=$$(stat -c %Y "$$A" 2>/dev/null || echo 0);
+          [ "$$C" != "$$L" ] && { L=$$C;
+            kill -HUP 1 2>/dev/null || squid -k reconfigure 2>/dev/null || true; };
+          sleep 1; done & } &&
+      exec squid -N -f /etc/squid/squid.conf -d1
+    mem_limit: 512m
+    networks:
+    - qec-egress
+    - qec-egress-public
+
+  # ── repo-intel (S3) — OFF the critical path ────────────────────────────
+  # Gated behind the `repo-intel` compose profile: a plain `docker compose -f
+  # docker-compose.qec.yml up` does NOT build or start it (design R-10 +
+  # §3.3: repo-intel must never block first value; the crawler runs blind
+  # without it). Reads the qecentral DB (its 5 tables) + the nexus DB
+  # (READ-ONLY page_visits, role qec_substrate) and clones the client repo
+  # over the internet (via the nexus network's egress). It NEVER writes a
+  # VKPower table and is consumed fail-open (seed-manifest 404 ⇒ crawl blind).
+  repo-intel:
+    profiles: ["repo-intel"]
+    build:
+      context: ./engines/repo-intel
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nexus-base:dev
+    image: nexus_power-repo-intel
+    container_name: nexus-repo-intel
+    restart: unless-stopped
+    ports:
+    - "8014:8014"
+    environment:
+      NEXUS_ENV: ${NEXUS_ENV:-development}
+      QEC_LOG_LEVEL: ${QEC_LOG_LEVEL:-INFO}
+      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
+      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
+      # M0.5 T-SEC-01: no default (see the qe-central service above).
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32)}
+      REPO_INTEL_WORKDIR_ROOT: /app/service/data/repos
+      REPO_INTEL_MAX_REPO_BYTES: ${REPO_INTEL_MAX_REPO_BYTES:-2000000000}
+      # LLM lens OFF by default; envelope KEK provider (local dev / kms prod).
+      REPO_INTEL_LLM_LENS_ENABLED: ${REPO_INTEL_LLM_LENS_ENABLED:-false}
+      NEXUS_KEK_PROVIDER: ${NEXUS_KEK_PROVIDER:-local}
+      # GCP-KMS key for the envelope in prod — repo-intel seals client repo tokens
+      # and REFUSES the dev-grade `local` KEK outside development (secrets.py), so
+      # this must be supplied (same as qe-central / platform-api).
+      NEXUS_KEK_GCP_KEY: ${NEXUS_KEK_GCP_KEY:-}
+      NEXUS_LOCAL_KEK_PATH: ${NEXUS_LOCAL_KEK_PATH:-/app/service/data/kek/master.key}
+    volumes:
+    - repo-intel-workdir:/app/service/data/repos
+    - qec-kek:/app/service/data/kek
+    mem_limit: 2g
+    networks:
+    - nexus
+
+  # ── Acme Life — life-insurance proving ground (Phase 6.5 crawl target) ──────
+  # Profile-gated ('grounds') so the default up does NOT build it. A synthetic
+  # accessible insurance SPA (login→quote→apply→bind) with the over-60 coverage
+  # invariant + a ?break_over60=1 MUST-REFUSE probe. Reachable by qe-explorer as
+  # http://acme-life:80 for the first beachhead-representative live crawl.
+  acme-life:
+    profiles: ["grounds"]
+    build:
+      context: ./proving-grounds/acme-life
+      dockerfile: Dockerfile
+    image: nexus_power-acme-life
+    container_name: nexus-acme-life
+    restart: unless-stopped
+    ports:
+    - "8097:80"
+    mem_limit: 128m
+    networks:
+    - nexus
+    # Also join the egress-proxy's internet network so a crawl can reach this
+    # proving ground through the SAME fenced squid path as a real external app.
+    # Compose auto-aliases the service name here, so squid resolves `acme-life`
+    # (the allowlist host) — without this the proxy 503s on DNS and the crawler
+    # only ever sees squid's error page.
+    - qec-egress-public
+
+  # ── Summit Life Carrier Admin — production-grade proving ground ──────────
+  # Next.js 15 + React 19 + shadcn/ui + TanStack + Framer Motion SSR app.
+  # Profile-gated ('grounds') like acme-life. Reachable by qe-explorer as
+  # http://summit-life-carrier:3002 and externally via Caddy at
+  # summitlife-admin.136-85-106-73.sslip.io.
+  summit-life-carrier:
+    profiles: ["grounds"]
+    build:
+      context: ./proving-grounds/summit-life-carrier
+      dockerfile: Dockerfile
+    image: nexus_power-summit-life-carrier
+    container_name: nexus-summit-life-carrier
+    restart: unless-stopped
+    ports:
+    - "3002:3002"
+    mem_limit: 512m
+    networks:
+    - nexus
+    - qec-egress-public
+
+networks:
+  # The running stack's network (external) — qe-central only.
+  nexus:
+    external: true
+    name: nexus_power_nexus
+  # Explorer↔qe-central control plane. internal: true ⇒ NO internet, NO route
+  # to the nexus stack. qe-central bridges this to `nexus`; the explorer is
+  # quarantined here.
+  qec-internal:
+    driver: bridge
+    internal: true
+  # Explorer↔egress-proxy browser path. internal: true ⇒ the explorer can only
+  # reach the proxy here, never the internet directly.
+  qec-egress:
+    driver: bridge
+    internal: true
+  # The ONLY internet-capable network — attached to the egress proxy ALONE, so
+  # squid is the single NAT hop. The explorer is never on it.
+  qec-egress-public:
+    driver: bridge
+
+volumes:
+  frame-storage:
+    external: true
+    name: nexus_power_frame-storage
+  qec-kek: null
+  # Shared explorer→qe-central handoff (manifest.jsonl + staged PNGs).
+  qec-crawl-storage: null
+  # Shared qe-central→squid egress allowlist file.
+  qec-egress-allowlist: null
+  # repo-intel per-tenant clone workdir (profile: repo-intel).
+  repo-intel-workdir: null

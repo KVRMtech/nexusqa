@@ -2,9 +2,43 @@ name: Nexus QA CI
 
 on:
   push:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      # BOOTSTRAP TRIGGER — remove once the histories below are reconciled.
+      #
+      # The pull_request trigger cannot fire for this branch: `origin/develop`
+      # is a single flattened "Initial commit" that shares NO history with it
+      # (`git merge-base` returns nothing), and it carries the application at
+      # the repository ROOT while this branch nests it under `Nexus_power/`.
+      # GitHub therefore refuses to open the PR at all — so the only way to
+      # execute this workflow even once is to trigger it on its own push.
+      #
+      # Scoped to this one branch on purpose. A `feat/**` pattern would run the
+      # full matrix — including the fifteen-image docker-build and its Trivy
+      # scans — on every feature push, which is a cost decision to take
+      # deliberately rather than inherit from a bootstrap workaround.
+      - feat/qec-dynamic-catalog-p0-p6
+      # Same bootstrap, same reason, and it inherits the same removal condition:
+      # this branch shares no history with `origin/develop` either, so a PR into
+      # it cannot be opened and CI can reach this work by no other route. The
+      # alternative was to land the work on the branch above, which four
+      # concurrent sessions are committing to — the tree instability that made an
+      # isolated branch necessary in the first place.
+      #
+      # DELETE THIS LINE when phase4/entry-gate-remediation merges. It is listed
+      # explicitly rather than as a pattern for the cost reason argued above: a
+      # `phase4/**` glob would run the fifteen-image docker-build and its Trivy
+      # scans on every push to every future Phase-4 branch.
+      - phase4/entry-gate-remediation
+  # `develop` is this repository's DEFAULT and real integration branch — every
+  # feature branch merges there, and `main` does not exist on the remote yet.
+  # Validating only PRs into `main` therefore gated NOTHING: the entire
+  # feature → develop flow, which is all of the flow there is, merged unchecked.
+  # `main` is kept so the gate is already in place the day a release branch
+  # appears, rather than being remembered afterwards.
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,10 +48,23 @@ env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "20"
 
+# The application lives in Nexus_power/; only .github/ sits at the repository
+# root (GitHub Actions will not read a workflow from anywhere else). Every `run:`
+# step below is written against the application root, so it is set once here.
+#
+# NOTE: `defaults` applies ONLY to `run:` steps. `uses:` action INPUTS that name
+# a path (setup-node's cache-dependency-path, upload-artifact's path) are always
+# resolved from the repository root and therefore carry the Nexus_power/ prefix
+# explicitly wherever they appear.
+defaults:
+  run:
+    working-directory: Nexus_power
+
 jobs:
   # ── Python Lint ─────────────────────────────────────────────
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,15 +75,30 @@ jobs:
       - name: Install lint tools
         run: pip install ruff
 
-      - name: Ruff check (lint + format)
-        run: ruff check . --select E,W,F,I --ignore E501
-
-      - name: Ruff format check
-        run: ruff format --check .
+      # NO --select / --ignore HERE, deliberately. The rule set lives in
+      # Nexus_power/ruff.toml, which selects the CORRECTNESS rules (F821 undefined
+      # name, F811 redefinition, E9 syntax, bad %-format args …) that are clean
+      # repo-wide today, so any new violation is a genuine blocking regression.
+      #
+      # Passing `--select E,W,F,I` on the command line OVERRODE that config and
+      # re-enabled the whole style backlog: 1798 findings on this commit, i.e. a
+      # gate that could never go green. It was never noticed because the workflow
+      # lived below the git root and GitHub had never run it. ruff.toml documents
+      # each deferred rule with its current count as a follow-up ratchet — clear a
+      # backlog, move that rule into `select`, and it can never regress again.
+      #
+      # `ruff format --check .` is likewise NOT run here: it would reformat 1110
+      # of 1271 files. Adopting a formatter is a reviewed commit of its own (with
+      # the reformat recorded in .git-blame-ignore-revs so it does not destroy
+      # `git blame`), not a side effect of wiring up CI. That decision, and its
+      # measured cost, are recorded in ruff.toml rather than lost in a diff.
+      - name: Ruff check (correctness rules — see ruff.toml)
+        run: ruff check .
 
   # ── Compile Check ───────────────────────────────────────────
   compile:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -68,16 +130,17 @@ jobs:
   # ── Frontend (TypeScript + React) ───────────────────────────
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
-        working-directory: client
+        working-directory: Nexus_power/client
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: client/package-lock.json
+          cache-dependency-path: Nexus_power/client/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -97,6 +160,7 @@ jobs:
   # ── Unit & Integration Tests ────────────────────────────────
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [lint, compile]
     services:
       redis:
@@ -115,37 +179,997 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # numpy is NOT optional here despite looking like it. The ears-engine
+      # imports it at module scope (app/diarization/__init__.py), so without it
+      # every tests/engines/test_ears* test dies at COLLECTION with
+      # ModuleNotFoundError — 47 tests reported as failures that are really a
+      # missing dependency. Installing it takes them to 9 passed / 38 passed.
       - name: Install dependencies
         run: |
           pip install -e sdk/nexus-sdk/
           pip install \
             pytest pytest-asyncio pytest-cov \
-            httpx faker jinja2
+            httpx faker jinja2 numpy \
+            pillow aiosqlite
+          # pillow    — the visual/artifact-store suites import PIL (17 errors).
+          # aiosqlite — the orchestrator + qi-portal suites use an in-memory
+          #             async SQLite for their store round-trips (26 errors).
+          # Both are present on a dev box via some service's requirements and
+          # were simply never named here, so those suites failed on a clean
+          # runner only. Named explicitly rather than pulled in by installing a
+          # whole service, which would change what this job actually gates.
 
-      - name: Run tests with coverage
+      # PER-DIRECTORY process isolation (ci/run_root_tests.sh).
+      #
+      # A single `pytest tests/` cannot pass here and never could: platform/api,
+      # products/nexus-qa-orchestrator and every engine each ship a top-level
+      # package named `app`, so whichever imports first owns sys.modules["app"]
+      # for the whole run. tests/engines binds it to nerves-engine, and
+      # tests/orchestrator then dies with "No module named 'app.workflows'" —
+      # 13 failures that move with collection order and read as flaky.
+      #
+      # One process per shard removes the shared namespace. Same doctrine as
+      # ci/run_platform_api_tests.sh, which already does this per FILE. The shard
+      # list is discovered, not hardcoded, so a new tests/<dir>/ is picked up
+      # instead of silently skipped, and coverage is combined across shards.
+      - name: Run tests with coverage (per-directory isolation)
         env:
           NEXUS_REDIS_URL: redis://localhost:6379
           NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
           NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+          # The SDK's storage root defaults to the container path /data/nexus
+          # (sdk/nexus_sdk/storage/base.py), which does not exist on a clean
+          # runner — the artifact-store tests died with
+          # FileNotFoundError: '/data/nexus'. Point it at the runner's temp dir
+          # rather than creating a root-owned /data, so the default stays the
+          # container's and only THIS run is redirected.
+          NEXUS_STORAGE_PATH: ${{ runner.temp }}/nexus-storage
+          # The orchestrator's upload_path is a separate literal, not derived
+          # from NEXUS_STORAGE_PATH, so it needs its own redirect or importing
+          # app.main dies with PermissionError on '/data'.
+          ORCHESTRATOR_UPLOAD_PATH: ${{ runner.temp }}/nexus-storage/orchestrator/uploads
         run: |
-          pytest tests/ \
-            --ignore=tests/e2e \
-            -v --tb=short \
-            --cov=sdk --cov=engines --cov=platform --cov=products \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml
+          mkdir -p "$NEXUS_STORAGE_PATH" "$ORCHESTRATOR_UPLOAD_PATH"
+          bash ci/run_root_tests.sh
 
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage.xml
+          path: Nexus_power/coverage.xml
           retention-days: 30
+
+  # ── platform/api suite (the value/outcome oracles, auditor, extractors,
+  #    governance contracts) — 300+ tests the root `testpaths = tests` never
+  #    collected. Run per-file-isolated so cross-file import pollution can't flap
+  #    the result; known runtime regressions are strict-xfail'd (and documented)
+  #    in platform/api/tests/conftest.py, so this gate is BLOCKING and honest. ──
+  platform-api-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [lint, compile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      # test_login_marker_survives_truncation.py shells out to `node -e` to run
+      # the login-marker JavaScript against the REAL runtime rather than a Python
+      # re-implementation of it. Without node on PATH that file dies with
+      # FileNotFoundError, which reads as a failing test rather than a missing
+      # toolchain. ubuntu-latest ships node, but pinning it here keeps the job
+      # honest if that ever stops being true.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # aiosqlite: the control-ledger and recovery-store tests run their async
+      # SQLAlchemy models against an in-memory SQLite, which needs the async
+      # driver. It is a TEST-ONLY dependency (production is asyncpg/Postgres), so
+      # it belongs here rather than in platform/api/requirements.txt. Without it
+      # both files fail at `ModuleNotFoundError: No module named 'aiosqlite'`.
+      - name: Install dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/api && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio aiosqlite
+
+      - name: platform/api test suite (per-file isolation)
+        env:
+          NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+          NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+        run: bash ci/run_platform_api_tests.sh
+
+  # ── qe-central suite (journey graph, fold, branch planner, catalog, coverage,
+  #    persona/answer-key contracts, harness) — 1400+ tests the root
+  #    `testpaths = tests` never collected, so they were ungated in CI. Runs with
+  #    NO external services, so it proves the pure-logic surface fast and on
+  #    every push. Its ~40 DB-gated tests SELF-SKIP here — that is deliberate and
+  #    is no longer a hole: the `qec-database` job below runs the same suite with
+  #    real Postgres + Redis and QEC_REQUIRE_DB, where a skip is a failure.
+  #    BLOCKING, so a qe-central regression cannot merge unnoticed. ──
+  qe-central-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint, compile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/qe-central && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio
+
+      - name: qe-central test suite
+        env:
+          NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+          NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+        run: pytest platform/qe-central/tests -q
+
+  # ── M1.7 SYSTEM INTEGRITY PROOF (T-GW-05) ─────────────────────────
+  #  The green-wash invariants, run as their OWN gate.
+  #
+  #  WHY A DEDICATED LANE RATHER THAN "they already run in the big suites".
+  #  They do already run — and that is exactly the problem this job fixes. The
+  #  integrity invariants were 54 tests inside two suites of 1697 and 2016, so a
+  #  regression in "a crashed crawl must never report completed" arrived as one
+  #  more red dot in a wall of them, indistinguishable from a flaky fixture or an
+  #  unrelated refactor. These are not ordinary tests: each one asserts that a
+  #  SPECIFIC false-completion path is closed, and the cost of shipping past one
+  #  is a customer being told a crawl covered an application it never read.
+  #  Naming the gate is what makes that class of failure legible on the PR page.
+  #
+  #  It is also the only place the two halves of the CROSS-SERVICE contract are
+  #  seen together. qe-explorer and qe-central each ship a top-level `app`
+  #  package and cannot be imported into one interpreter, so the rule wire shape
+  #  is frozen in contracts/m17_business_rule_v1.json and asserted from each side
+  #  separately (see either test file's header). Neither half alone proves the
+  #  loop; this job is where both must be green at once.
+  #
+  #  Deliberately REDUNDANT with qe-explorer-tests and qe-central-tests. The
+  #  duplication costs about ninety seconds and buys a gate whose failure names
+  #  the invariant that broke. BLOCKING.
+  integrity-proof:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python 3.10 — the interpreter the explorer container actually ships
+      # (mcr.microsoft.com/playwright/python:v1.48.0-jammy), matching
+      # qe-explorer-tests. The invariants are proven on the runtime that runs
+      # them in production, not on whatever the rest of the matrix uses.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: Nexus_power/engines/qe-explorer/requirements.txt
+
+      - name: Install qe-explorer dependencies
+        working-directory: Nexus_power/engines/qe-explorer
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      # T-GW-01 (inventory failure → FAILED), T-GW-02 (durable completion
+      # record), T-GW-03 (killed crawl → resume → continue), T-GW-04 (rules
+      # persist and are reused) — the engine side.
+      #
+      # -p no:cacheprovider because several of these write a manifest under
+      # tmp_path and assert on the EXACT set of files in it; a .pytest_cache
+      # landing in the wrong place has broken that assertion before.
+      - name: T-GW-01..04 — crawl-engine invariants
+        working-directory: Nexus_power/engines/qe-explorer
+        run: |
+          pytest tests/test_greenwash_holes.py                  tests/test_m17_wire_contract.py                  -q --tb=short -p no:cacheprovider
+
+      # Python 3.11 for the control plane, matching qe-central-tests. Two
+      # setup-python steps in one job is intentional: the alternative is two jobs
+      # and no single check that says "the integrity invariants hold".
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install qe-central dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/qe-central && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio
+
+      # T-GW-02 (dropped callback → reaper reconciles from the durable manifest)
+      # and T-GW-04 (the store half of the rule contract) — the control-plane
+      # side. The DB-backed reaper proofs run in qec-database, where a skip is a
+      # failure; these are the shape-and-logic half that must hold on every push.
+      - name: T-GW-02/T-GW-04 — control-plane recovery invariants
+        env:
+          NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+          NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+        run: |
+          pytest platform/qe-central/tests/unit/test_greenwash_recovery.py                  platform/qe-central/tests/contract/test_m17_business_rule_contract.py                  -q --tb=short -p no:cacheprovider
+
+  # ── qe-explorer suite — the crawl engine (perception, guard, forms, flow
+  #    ledger) PLUS the Browser Test Harness, whose two lanes execute the real
+  #    injected capture JavaScript in jsdom and in real Chromium. ~1140 tests
+  #    that no CI job collected before, so every crawl-engine regression merged
+  #    unnoticed. BLOCKING.
+  #
+  #    WORKING DIRECTORY IS LOAD-BEARING. Several tests read the crawler source
+  #    off a CWD-RELATIVE path (`open("app/crawler.py")` — test_e2e_advance.py,
+  #    test_flow_ledger.py), so the suite only collects from the SERVICE root.
+  #    Running it as `pytest engines/qe-explorer/tests` from Nexus_power/ dies
+  #    at collection with FileNotFoundError.
+  #
+  #    Python 3.10 — NOT the 3.11 the other jobs use — because the shipped
+  #    container is mcr.microsoft.com/playwright/python:v1.48.0-jammy, which is
+  #    CPython 3.10. This job proves the interpreter that actually ships.
+  #    SPLIT FROM THE BROWSER LANES ON MEASUREMENT, not on taste: the 923
+  #    non-browser tests run in 52s, while the ~220 browser-harness tests take
+  #    ~23min (13 fixtures × 2 lanes, each a real page load). Left as one job,
+  #    every crawl-engine regression waited 24 minutes to be reported. Split,
+  #    the common case fails in about a minute and the slow lane is its own
+  #    check — and the two run CONCURRENTLY, so nothing is lost.
+  qe-explorer-tests:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Nexus_power/engines/qe-explorer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: Nexus_power/engines/qe-explorer/requirements.txt
+
+      - name: Install service dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      # No node and no Chromium here — this half touches neither. The browser
+      # lanes are the qe-explorer-browser job below, which is where the
+      # "a lane must not silently skip" gate lives.
+      - name: qe-explorer suite (non-browser)
+        run: pytest tests --ignore=tests/browser -q --tb=short -p no:cacheprovider
+
+  # ── The Browser Test Harness — both execution lanes ──────────────────────
+  #  Executes the REAL injected capture JavaScript (app/inventory_js.py) against
+  #  13 fixture applications, twice: once inside jsdom and once inside real
+  #  headless Chromium through the production PlaywrightBrowserPort. This is the
+  #  only place the capture engine is proven against a browser rather than
+  #  against a fixture someone hand-wrote from memory.
+  qe-explorer-browser:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    # RAISED 25 -> 45 (2026-08-22), from measurement rather than by feel.
+    #
+    # This lane was killed at exactly 25m15s on the merge commit, and the
+    # cancellation read as "Nexus QA CI cancelled" — indistinguishable at a
+    # glance from the concurrency cancellations this branch produces constantly,
+    # which is why it went unnoticed. 14 of the 15 jobs had passed.
+    #
+    # It was not a hang and not flake. On the last green run (bc0f665) the same
+    # lane took 23m31s — 89 seconds inside a 25-minute budget. The T2 merges then
+    # added browser tests to it (A22's producer half drives a REAL crawl at the
+    # M2.4 quote funnel), and that margin was all there was.
+    #
+    # 45 keeps a real bound — a genuine hang still dies rather than burning a
+    # runner for six hours — while leaving room for a lane that legitimately
+    # grows as milestones land. If it approaches this again, split the lane
+    # rather than raising the number a second time: two raises in a row means
+    # the budget has stopped being a control.
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: Nexus_power/engines/qe-explorer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: Nexus_power/engines/qe-explorer/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Nexus_power/engines/qe-explorer/browser_harness/package-lock.json
+
+      - name: Install service dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      # Lane 1. Without this the jsdom fixtures skip — and the gate below turns
+      # that skip into a failure rather than letting it pass as green.
+      - name: Install the jsdom lane
+        working-directory: Nexus_power/engines/qe-explorer/browser_harness
+        run: npm ci
+
+      # Lane 2. `--with-deps` pulls the shared libraries headless Chromium needs
+      # on a bare runner; the browser version is the one requirements.txt pins.
+      - name: Install Chromium for the Playwright lane
+        run: python -m playwright install --with-deps chromium
+
+      # SHARDED BY MARKER, and only because the numbers said to. Measured on this
+      # tree: the whole browser directory is ~23 min serial; run as two marker
+      # shards CONCURRENTLY it is 11m35s here (198 passed) and 11m51s in the
+      # characterization job below (43 passed) — a ~2x cut in the critical path
+      # with zero coverage lost, because `-m characterization` and
+      # `-m "not characterization"` partition the directory exactly.
+      #
+      # pytest-xdist was tried FIRST and rejected on measurement: both lanes are
+      # session-scoped and memoised (ONE Chromium launch and one node probe serve
+      # all 13 fixtures), so every extra worker re-pays the whole browser startup.
+      # `-n 2` was still running at 28 minutes against the 23-minute baseline —
+      # slower. Sharding across JOBS wins where sharding within one does not,
+      # because each job gets its own runner rather than splitting one runner's
+      # two cores. Re-measure before changing either; do not tune on principle.
+      - name: Browser harness — jsdom + Chromium (non-characterization)
+        env:
+          # A lane that could not start is a FAILURE here, not a skip — see
+          # tests/browser/conftest.py::pytest_sessionfinish. This is what stops a
+          # missing node or a missing Chromium from going green having executed
+          # none of the production capture JavaScript.
+          QEC_REQUIRE_BROWSER_LANES: "1"
+        # `not proving_ground` TOO, and the exclusion is a scope decision rather
+        # than a convenience. The proving-ground modules each drive TWO real
+        # crawls of a real application end to end — M2.3 records a removal in
+        # ~7 minutes, Gate 3 / A21 records three changes in ~8. They belong to
+        # the browser-harness workflow, which budgets 75 minutes for exactly
+        # that, and which also commits their recordings and guards them against
+        # drift.
+        #
+        # Left in, they do not merely slow this job down — they SILENCE it. On
+        # run 32441252806 this step was CANCELLED at the job's 25-minute limit,
+        # and a cancelled job reports nothing at all about the ~600 fast browser
+        # tests it exists to run. A gate that cannot finish is not a slow gate.
+        run: pytest tests/browser -m "not characterization and not proving_ground" -q --tb=short -p no:cacheprovider
+
+  # ── Characterization — the golden-snapshot half of the harness ───────────
+  #  Runs a REAL crawl per fixture (the production Crawler + ManifestEmitter) and
+  #  byte-compares the normalised manifest and the full captured control array
+  #  against goldens recorded in git. This is the shard that costs the time: 13
+  #  full crawls, ~11 minutes.
+  #
+  #  It is its own check because a failure here MEANS something different from
+  #  every other red in this file. A golden diff is not "a test broke" — it is
+  #  "captured behaviour changed". The correct response is to READ THE DIFF and
+  #  decide whether the change was intended, then re-record deliberately with
+  #  QEC_UPDATE_GOLDENS=1. Re-recording to clear a red build is precisely the
+  #  green-wash this gate exists to prevent, which is why it is not buried inside
+  #  a job whose other failures are ordinary bugs.
+  qe-explorer-characterization:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Nexus_power/engines/qe-explorer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: Nexus_power/engines/qe-explorer/requirements.txt
+
+      - name: Install service dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      # Chromium only — the characterization lane is Playwright-marked
+      # throughout, so node/jsdom is not needed and is not installed.
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Characterization goldens
+        env:
+          QEC_REQUIRE_BROWSER_LANES: "1"
+        run: pytest tests/browser -m characterization -q --tb=short -p no:cacheprovider
+
+  # ── Browser harness — the jsdom lane on its OWN check ────────────────────
+  #  The jsdom lane also runs inside qe-explorer-tests above, but that job needs
+  #  Chromium and ~15 minutes. This one needs node alone and finishes in ~2, so
+  #  a break in the injected inventory_js walker is reported early and as its own
+  #  named status check rather than being buried in a long browser job.
+  #  It executes the PRODUCTION constant (app/inventory_js.py) unmodified — the
+  #  harness is a courier for it, never a copy.
+  harness-jsdom:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Nexus_power/engines/qe-explorer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: Nexus_power/engines/qe-explorer/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Nexus_power/engines/qe-explorer/browser_harness/package-lock.json
+
+      - name: Install the jsdom lane
+        working-directory: Nexus_power/engines/qe-explorer/browser_harness
+        run: npm ci
+
+      # The runner's own self-check: proves node + jsdom can execute a snippet
+      # at all, so a harness break is distinguishable from a capture regression.
+      - name: jsdom runner selftest
+        working-directory: Nexus_power/engines/qe-explorer/browser_harness
+        run: npm run selftest
+
+      # No Chromium in this job, so the Playwright lane is legitimately absent —
+      # `-m jsdom` selects only the jsdom-lane tests and the gate below then
+      # holds them to "must actually run".
+      # THE SERVICE'S OWN REQUIREMENTS, not just pytest. `-m jsdom` DESELECTS
+      # the non-jsdom modules but pytest still IMPORTS every file under
+      # tests/browser to find their marks — so one module importing the app
+      # (test_wizard_20_step.py → app.completion → app.guard → pydantic) kills
+      # collection for the whole lane with ModuleNotFoundError, and the lane
+      # reports red without a single jsdom test having been deselected, let
+      # alone run. Deselection is not isolation from imports.
+      - name: Install test dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: jsdom lane
+        env:
+          QEC_REQUIRE_BROWSER_LANES: "1"
+        run: pytest tests/browser -m jsdom -q --tb=short -p no:cacheprovider
+
+  # ── M0.x + A26 — QE-Central INFRASTRUCTURE contract ───────────────────────
+  #  (real Postgres + real Redis + real S3-compatible object storage)
+  #
+  #  Clean Postgres → bootstrap → migrations → RLS → indexes → DB-backed tests
+  #  → tenant-isolation attack → downgrade → upgrade again → all green.
+  #
+  #  A26 ADDS OBJECT STORAGE, and the job's `name:` deliberately does NOT change
+  #  to say so. That name is a REQUIRED status check on `develop` (branch
+  #  protection, M0 closure). Renaming it would silently retire the required
+  #  check — every future PR would wait forever on a context that no longer
+  #  reports. The scope is recorded here and in QECentral/docs/A26_A27_CI_INFRA.md
+  #  instead; the check name is an interface, not a label.
+  #
+  #  Object storage lands HERE rather than in a new job for the same reason: a
+  #  new job would not be a required check, so the six T-FL-03 tests would run
+  #  without gating anything, which is most of the way back to not running.
+  #
+  #  Everything above the line "the qe-central suite self-skips DB tests" in the
+  #  qe-central-tests job is what this job exists to stop being true. That job
+  #  runs with NO database, so its DB-gated tests skip and it goes green having
+  #  proven nothing about the schema, the policies or the indexes. This job
+  #  provisions the services, sets QEC_REQUIRE_DB, and a skipped database test
+  #  becomes a FAILED session (tests/conftest.py::pytest_sessionfinish).
+  #
+  #  Both databases are built by scripts/qec_ci_db_setup.sh from the SAME SQL an
+  #  operator runs in production (scripts/qec_db_bootstrap.sql), so a green here
+  #  also proves the install path.
+  #
+  #  Passwords below are throwaway fixtures for a container that lives for the
+  #  length of one job. They are NOT secrets and are deliberately literal so the
+  #  job is reproducible on a laptop; no DSN is ever echoed to the log.
+  #
+  #  ISOLATION (M0.x §20). GitHub Actions gives every JOB its own service
+  #  containers, so this job's Postgres and Redis are not shared with any other
+  #  job or with a concurrent run — and `concurrency: cancel-in-progress` stops
+  #  two runs of the same ref overlapping. WITHIN the job, pytest runs
+  #  single-process: pytest-xdist is deliberately NOT installed, because the
+  #  contract suite shares one migrated `qecentral` schema and parallel workers
+  #  would race it. The only tests that MUTATE schema — the migration
+  #  round-trip — build and drop their own uniquely-named throwaway databases, so
+  #  they cannot disturb the shared one even if ordering changes. Tenant
+  #  fixtures are uuid4-derived, so no two tests can collide on a tenant id.
+  #  If xdist is ever added, these assumptions must be revisited first.
+  qec-database:
+    name: QE-Central database & tenant-isolation contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [lint, compile]
+
+    # ── Phase 2 — Services. Pinned minor versions: the deployed stack is
+    #    postgres:16-alpine / redis:7-alpine (docker-compose.yml), and a CI that
+    #    silently floats to 17 would prove the schema against a server nobody
+    #    runs. Health checks (not sleeps) gate step start.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      # libpq reads these directly, so the bootstrap script needs no flags.
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      QEC_ROLE_PASSWORD: qec_ci_pw
+      QEC_SUBSTRATE_ROLE_PASSWORD: qec_sub_ci_pw
+
+      # ── The four DSNs the DB-gated suite consumes (see tests/contract/_dbgate.py).
+      # qecentral as the LEAST-PRIVILEGE `qec` role — a superuser bypasses RLS,
+      # so the isolation proofs must not run as one.
+      QEC_TEST_QEC_DATABASE_URL: postgresql+asyncpg://qec:qec_ci_pw@localhost:5432/qecentral
+      # nexus substrate as the least-privilege `qec_substrate` role.
+      QEC_TEST_SUBSTRATE_DATABASE_URL: postgresql+asyncpg://qec_substrate:qec_sub_ci_pw@localhost:5432/nexus
+      # Superuser on nexus — the legacy DSN the pre-M0.x round-trip/create_all
+      # tests use. Never used for an RLS assertion.
+      QEC_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/nexus
+      # Superuser on `postgres` — used ONLY to CREATE/DROP the throwaway
+      # databases the migration round-trip builds, so round-trip tests can never
+      # race the shared schema the other contract tests assert against.
+      QEC_TEST_ADMIN_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+      QEC_TEST_REDIS_URL: redis://localhost:6379/0
+
+      # ── A26.2 — the OBJECT STORAGE the T-FL-03 handoff proof consumes.
+      # Provisioned by scripts/qec_ci_minio_setup.sh in Phase 3b below (MinIO
+      # cannot be a `services:` container — it needs a command, which that block
+      # cannot supply; the script's header carries the full reasoning).
+      #
+      # NOTE what is deliberately NOT set here: NEXUS_STORAGE_BACKEND and the
+      # S3_* variables. Exporting those job-wide would repoint the HOUSE storage
+      # layer for the entire ~1400-test suite — every screenshot, asset and
+      # artifact write in tests that expect the local backend. The T-FL-03
+      # fixture monkeypatches them per-test, which is the only scope at which
+      # they are correct.
+      QEC_TEST_S3_ENDPOINT: http://localhost:9000
+      QEC_TEST_S3_BUCKET: qec-evidence
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+
+      # ── The APPLICATION's own DSNs. app/db builds its module-level
+      # `qec_engine` / `substrate_engine` from these at import time, defaulting
+      # to the docker-compose hostname `postgres` — which does not resolve on a
+      # runner. Tests that drive real service code rather than their own engine
+      # (tests/contract/test_reaper_db.py repoints qec_engine but reads the
+      # tenants registry through substrate_engine) fail with a DNS error unless
+      # both are pointed at the CI services.
+      QEC_DATABASE_URL: postgresql+asyncpg://qec:qec_ci_pw@localhost:5432/qecentral
+      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:qec_sub_ci_pw@localhost:5432/nexus
+
+      # THE anti-green-wash switches (A27.1): with these set, an
+      # infrastructure-gated test that cannot run FAILS the session instead of
+      # skipping it. One flag per category, so the job declares exactly what it
+      # provisioned and a service that fails to start cannot hide.
+      QEC_REQUIRE_DB: "1"
+      # Redis was already enforced THROUGH the database flag (QEC_TEST_REDIS_URL
+      # is a DB skip signature and remains one). This names it in its own right
+      # so the declaration matches the provisioning; it cannot weaken anything,
+      # because enforcement is the union of the two.
+      QEC_REQUIRE_REDIS: "1"
+      # NEW. Before this line, the six T-FL-03 object-storage tests had never
+      # executed in any environment: no CI service existed, they skipped, and the
+      # database-shaped gate could not see an S3 skip.
+      QEC_REQUIRE_S3: "1"
+      # Each DB contract test drives its own asyncio.run loop; a pooled
+      # connection bound to a closed loop would resurface as a cross-loop
+      # RuntimeError. Test-only — production keeps its long-lived pool.
+      QEC_TEST_DB_NULLPOOL: "1"
+      NEXUS_SECRET_KEY: ci-test-secret-key-not-for-prod
+      NEXUS_JWT_SECRET: ci-test-jwt-secret-not-for-prod
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # ── Phase 1 — Dependencies ───────────────────────────────────────────
+      # platform/api requirements are needed by the bootstrap's create_all step:
+      # a few substrate tables (surface_prefs, …) are bound to the SDK Base by
+      # platform-api modules rather than by a migration, and the bootstrap SQL
+      # GRANTs on them, so they must exist before it runs.
+      - name: Phase 1 — install dependencies
+        run: |
+          pip install -e sdk/nexus-sdk/
+          ( cd platform/qe-central && pip install -r requirements.txt )
+          ( cd platform/api && pip install -r requirements.txt )
+          pip install pytest pytest-asyncio alembic asyncpg redis
+          # boto3 is REQUIRED, not optional, and its absence is one of the gaps
+          # the first execution of T-FL-03 exposed. The service depends on
+          # aiobotocore (via the SDK's storage-s3 extra) which pulls botocore but
+          # NOT boto3 — yet the handoff proof uses a synchronous boto3 client to
+          # read object LastModified timestamps and assert the manifest was
+          # published last. Without it that test dies at import with
+          # ModuleNotFoundError, which reads as a broken test rather than a
+          # missing dependency. It is TEST-ONLY (production is aiobotocore), so
+          # it belongs here and not in platform/qe-central/requirements.txt.
+          pip install boto3
+
+      # ── Phase 3 — Readiness. The service health checks already gate step
+      #    start; this is the explicit, bounded, FAIL-LOUD confirmation. No
+      #    `sleep 30` anywhere: a fixed sleep is either too short (flake) or too
+      #    long (waste), and it never reports WHY a service is missing.
+      - name: Phase 3 — wait for Postgres and Redis
+        run: |
+          set -euo pipefail
+
+          echo "── Postgres @ ${PGHOST}:${PGPORT} ──"
+          for i in $(seq 1 30); do
+            if pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
+              echo "Postgres ready after ${i}s"; break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "::error::Postgres never became ready after 30s"; exit 1
+            fi
+            sleep 1
+          done
+
+          echo "── Redis @ localhost:6379 ──"
+          python - <<'PY'
+          import sys, time
+          import redis
+          last = "no response"
+          for i in range(30):
+              try:
+                  if redis.Redis(host="localhost", port=6379,
+                                 socket_connect_timeout=2).ping():
+                      print(f"Redis ready after {i}s")
+                      sys.exit(0)
+                  last = "PING returned falsy"
+              except Exception as exc:
+                  last = exc
+              time.sleep(1)
+          print(f"::error::Redis never answered PING after 30s ({last})")
+          sys.exit(1)
+          PY
+
+      # ── Phase 3b — Object storage (A26.1). Starts the SAME pinned MinIO
+      #    release docker-compose.yml deploys, waits on the SAME
+      #    /minio/health/live probe compose uses, then proves the S3 API answers
+      #    WITH CREDENTIALS and survives a real PUT/GET/DELETE on the evidence
+      #    bucket. No sleeps, no timing assumptions: every check is bounded and
+      #    fails loudly with the container's logs attached.
+      #
+      #    The bucket is created HERE rather than left to the SDK's lazy
+      #    auto-create, which swallows its own failure — depending on that would
+      #    make a provisioning fault surface as six confusing test failures
+      #    instead of one named step.
+      - name: Phase 3b — start MinIO and bootstrap the evidence bucket
+        run: bash scripts/qec_ci_minio_setup.sh
+
+      # ── Phase 4 — Schema. Builds BOTH databases from empty:
+      #      nexus     (root alembic chain + create_all substrate + RLS)
+      #      qecentral (qec alembic chain @ head, owned by the `qec` role)
+      #    plus the qec / qec_substrate least-privilege roles, using the
+      #    production bootstrap SQL. set -e inside: any step failing kills CI.
+      - name: Phase 4 — bootstrap databases and run `alembic upgrade head`
+        run: bash scripts/qec_ci_db_setup.sh
+
+      # ── Phase 4b — Connectivity diagnostic. Confirms the APPLICATION driver
+      #    can reach the services with the APPLICATION credentials, and prints
+      #    host/database/user/version — never a password, never a full DSN.
+      - name: Phase 4b — connectivity diagnostic (no credentials logged)
+        run: |
+          python - <<'PY'
+          import asyncio, os
+          from sqlalchemy import text
+          from sqlalchemy.engine import make_url
+          from sqlalchemy.ext.asyncio import create_async_engine
+
+          async def probe(label, var):
+              url = os.environ[var]
+              u = make_url(url)
+              engine = create_async_engine(url)
+              try:
+                  async with engine.connect() as conn:
+                      db = (await conn.execute(text("SELECT current_database()"))).scalar()
+                      who = (await conn.execute(text("SELECT current_user"))).scalar()
+                      ver = (await conn.execute(text("SHOW server_version"))).scalar()
+                  print(f"{label:10} OK  {u.host}:{u.port}/{db} as {who} (pg {ver})")
+              finally:
+                  await engine.dispose()
+
+          async def main():
+              await probe("qecentral", "QEC_TEST_QEC_DATABASE_URL")
+              await probe("substrate", "QEC_TEST_SUBSTRATE_DATABASE_URL")
+              await probe("admin",     "QEC_TEST_ADMIN_DATABASE_URL")
+
+          asyncio.run(main())
+          PY
+
+      # ── Phase 5 — Contract. Service reachability, migration round-trip,
+      #    index structure + query plans, RLS coverage, cross-tenant attacks,
+      #    pooled-connection isolation, schema drift. Any failure fails CI.
+      - name: Phase 5 — database contract suite
+        run: pytest platform/qe-central/tests/contract -v --tb=short -p no:cacheprovider
+
+      # ── GATE 3 / A20 · qec_019 BEYOND A DEVELOPER'S LOCAL DATABASE ───────
+      # Named separately although Phase 5 already runs it, for the same reason
+      # the M2.3 step below is: this is A20's stop condition and it must be
+      # readable from the run summary without unfolding a 200-test log.
+      #
+      # The full six-leg trip A20 specifies —
+      #     qec_018 (before) → UP → validate → DOWN → validate restoration
+      #                            → UP → final validation
+      # — against a throwaway database on THIS Postgres, driven by the real
+      # `python -m alembic` command line, with a row seeded before the upgrade
+      # so the "existing rows keep their values" claim is tested as data and not
+      # only as schema. The head round-trip is re-run in the same step because
+      # A20 is the reason its qec_017-pinned assertions were rewritten to derive
+      # the head instead: they had been red since qec_018 landed and CI never saw
+      # it, because this branch had not been pushed since qec_017 was head.
+      - name: A20 — qec_019 up → down → up, in the CI database
+        run: |
+          pytest platform/qe-central/tests/contract/test_qec019_round_trip.py \
+                 platform/qe-central/tests/contract/test_migration_roundtrip.py \
+                 -v --tb=short -p no:cacheprovider
+
+      # ── M2.3 · CATALOG RETIREMENT (consumer half) ────────────────────────
+      # Named separately although Phase 5 already runs it, because this is the
+      # milestone's stop condition and a reader of a CI run should be able to
+      # see it held without unfolding a 200-test log. It folds the two REAL
+      # crawls recorded by the browser-harness workflow (acme-life, before and
+      # after a question was deleted from it) into this Postgres and asserts the
+      # catalogue retires the question and the diff reports it as removed.
+      - name: M2.3 — a real app change retires a catalogue question
+        run: |
+          pytest platform/qe-central/tests/contract/test_m23_retirement_regression.py                  -v --tb=short -p no:cacheprovider -s
+
+      # ── GATE 3 / A21 · CATALOG DIFF (consumer half) ──────────────────────
+      # The same seam as M2.3 above and the next question after it. M2.3 proves
+      # ONE classification — `removed` — because retirement was its milestone.
+      # A21 asks for all three at once, from two real crawls of an application
+      # that was changed in three ways between them:
+      #
+      #     removed  a question the app stopped asking      (SSN (synthetic))
+      #     added    a question the app started asking      (Occupation)
+      #     changed  a question that KEPT ITS IDENTITY      (State, +1 option)
+      #              while its answer set moved underneath it
+      #
+      # `changed` is the one that tests the catalogue's identity model, and it
+      # is the reason the third change is exactly one option: the answer set
+      # grows 3 -> 4 and field_signature._option_shape buckets both as "few", so
+      # the question_id survives. Four more options would cross into "many",
+      # mint a new id, and the same real-world change would be reported as a
+      # removal plus an addition.
+      #
+      # Prints the full diff with -s: a reviewer should be able to read the
+      # classification out of the CI log without re-running anything.
+      - name: A21 — three real app changes, three correct classifications
+        run: |
+          pytest platform/qe-central/tests/contract/test_a21_catalog_diff_regression.py                  -v --tb=short -p no:cacheprovider -s
+
+      # ── GATE 3 / A24 · LIVE-TENANT CAPTURE (consumer half) ───────────────
+      # The capture half runs in qe-explorer-tests (no database needed). This is
+      # the rest of what A24 asks for — catalog generation, PERSISTENCE, and the
+      # correctness of what was captured — by folding a real tenant crawl of
+      # vkpowerlife.136-85-106-73.sslip.io into this Postgres and reading the
+      # durable rows back through the ORM.
+      #
+      # The row that matters is `State of residence`: 52 options on a live
+      # application, against a catalogue that used to hold a private ceiling of
+      # 48. It is only proven when all 52 reach the durable row a reviewer reads.
+      #
+      # It also PINS a defect rather than hiding it: four controls on this tenant
+      # are catalogued as two questions each, because the field-ledger signature
+      # is merged per (url, name) and a control observed-but-not-filled on a page
+      # falls back to its name-derived id. Pinned by id, so a fifth duplication
+      # goes red instead of drifting.
+      - name: A24 — a live tenant's capture becomes a persisted catalogue
+        run: |
+          pytest platform/qe-central/tests/contract/test_a24_live_tenant_catalog.py                  -v --tb=short -p no:cacheprovider -s
+
+      # A22's CONSUMER half. The producer (engines/qe-explorer, browser lane) drives
+      # the real crawler at the M2.4 quote funnel and commits the coverage account it
+      # recorded; this folds THAT account through the production fold and compiles it.
+      # Named as its own step, like A20/A21/A24, so the milestone's own verdict is
+      # legible in the job log instead of being one dot inside Phase 6.
+      #
+      # `-s` because the test prints the compiled evidence — steps, the RECORDED
+      # network assertion, the outcome's captured selector, and the oracle strength.
+      # A22's claim is that those exist and are grounded; a green dot does not show it.
+      - name: A22 — a DISCOVERED journey compiles with its assertions
+        run: |
+          pytest platform/qe-central/tests/contract/test_a22_generation_from_real_crawl.py                  -v --tb=short -p no:cacheprovider -s
+
+      # ── A27.2 · THE CANARY ───────────────────────────────────────────────
+      # Phase 5 already ran this file; it is named separately because it is the
+      # only proof that the no-silent-skip gate can still FIRE. Each arm drives a
+      # throwaway pytest session in a subprocess against the REAL gate module and
+      # asserts the session went red for the right reason — and the inverse arms
+      # assert it stays green for a laptop skip and for an unrelated skip, so the
+      # gate cannot pass by simply failing everything.
+      #
+      # A gate that has never been seen to fire is indistinguishable from a gate
+      # that cannot fire. That is precisely how six T-FL-03 tests skipped under a
+      # green build for an entire milestone.
+      - name: A27.2 — no-silent-skip canary (the gate must be able to fail CI)
+        run: |
+          pytest platform/qe-central/tests/contract/test_infra_skip_gate_canary.py                  -v --tb=short -p no:cacheprovider
+
+      # ── A26.2 · T-FL-03, EXECUTED IN CI FOR THE FIRST TIME ───────────────
+      # Six tests that had never run in ANY environment. Named as its own step so
+      # a reader of a CI run can see the object-storage handoff hold without
+      # unfolding a 1400-test log, and so a failure here is attributed to the
+      # handoff rather than to "the suite".
+      #
+      # --junitxml is not decoration: the verification step below reads it and
+      # asserts the six tests were COLLECTED and PASSED and that NOTHING was
+      # skipped. "The step exited 0" is not evidence of execution — a suite in
+      # which every test skipped also exits 0, which is the whole defect.
+      - name: A26.2 — T-FL-03 object-storage handoff (first execution in CI)
+        run: |
+          pytest platform/qe-central/tests/fleet/test_t_fl_03_object_storage_handoff.py                  -v --tb=short -p no:cacheprovider                  --junitxml=/tmp/tfl03-junit.xml
+
+      - name: A26.2 — prove the six S3-gated tests were collected and executed
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          # The six tests gated on a real S3 endpoint. Listed EXPLICITLY: a count
+          # would still pass if a test were renamed away and another added.
+          REQUIRED = {
+              "test_producer_and_consumer_share_no_filesystem",
+              "test_pod_restart_between_write_and_ingestion_loses_nothing",
+              "test_ingestion_is_idempotent_and_reads_through",
+              "test_the_manifest_is_published_last",
+              "test_evidence_is_written_under_the_tenant_prefix",
+              "test_a_local_manifest_short_circuits_the_store",
+          }
+
+          root = ET.parse("/tmp/tfl03-junit.xml").getroot()
+          cases = root.iter("testcase")
+          seen = {}
+          for c in cases:
+              outcome = "passed"
+              for child in c:
+                  if child.tag in ("skipped", "failure", "error"):
+                      outcome = child.tag
+              seen[c.get("name")] = outcome
+
+          missing = sorted(REQUIRED - set(seen))
+          if missing:
+              print(f"::error::NOT COLLECTED: {missing}")
+              sys.exit(1)
+
+          not_passed = sorted(n for n in REQUIRED if seen[n] != "passed")
+          if not_passed:
+              print(f"::error::did not pass: "
+                    f"{[(n, seen[n]) for n in not_passed]}")
+              sys.exit(1)
+
+          skipped = sorted(n for n, o in seen.items() if o == "skipped")
+          if skipped:
+              print(f"::error::tests SKIPPED in a run that provisions every "
+                    f"required service: {skipped}")
+              sys.exit(1)
+
+          print(f"T-FL-03: {len(seen)} tests collected, 0 skipped.")
+          for n in sorted(REQUIRED):
+              print(f"  EXECUTED + PASSED  {n}")
+          PY
+
+      - name: A26.2 — publish the T-FL-03 execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfl03-first-execution-junit
+          path: /tmp/tfl03-junit.xml
+          if-no-files-found: warn
+
+      # ── Phase 6 — Integration. The whole qe-central suite WITH the databases
+      #    AND object storage wired, so the ~40 DB-gated tests and the six
+      #    S3-gated ones that skip in the no-service job actually execute here.
+      #    The QEC_REQUIRE_* flags make any remaining infrastructure-shaped skip
+      #    a failure.
+      - name: Phase 6 — qe-central suite against the live infrastructure
+        run: pytest platform/qe-central/tests -q --tb=short -p no:cacheprovider
+
+      # ── Phase 7 — Result. Every step above is fail-closed (`set -e` /
+      #    non-zero pytest exit), so reaching here means the whole chain held.
+      - name: Phase 7 — summarise
+        run: |
+          echo "Postgres UP → Redis UP → MinIO UP → bootstrap → alembic head → contract → canary → T-FL-03 → integration → PASS"
+
+      # ── Teardown. `services:` containers are reaped by the runner; a container
+      #    this job started itself is not, so it is removed explicitly. `always()`
+      #    so a failing test still cleans up. A hosted runner is discarded after
+      #    the job anyway — this is what makes the same script safe to run
+      #    repeatedly on a laptop or a self-hosted runner.
+      - name: Teardown — remove the MinIO container
+        if: always()
+        run: bash scripts/qec_ci_minio_setup.sh --down
+
+  # ── M0.1 / T-CI-07 — CRAWL SMOKE ─────────────────────────────────────────
+  #
+  #  Builds qe-explorer + a proving-ground app, runs ONE real crawl through real
+  #  headless Chromium, and asserts on the MANIFEST the crawl wrote:
+  #      manifest exists  AND  terminal crawl_meta  AND  page_state > 0
+  #
+  #  Every other job here proves the crawl engine in pieces (pure recognisers, a
+  #  scripted fake port, jsdom, one fixture page). All of them can be green while
+  #  the assembled service cannot complete a single crawl — a Dockerfile layer, a
+  #  refuse pack that fails closed at startup, a guard rule that refuses the front
+  #  door. Historically those only ever surfaced on the VM.
+  #
+  #  The assertion is deliberately NOT "the API returned 202": that comes back the
+  #  instant the single-flight slot is reserved, before a browser has loaded
+  #  anything. Funnel QUALITY stays with scripts/golden_crawl_gate.sh, which
+  #  ratchets against a versioned baseline on a real deploy; this job answers the
+  #  binary question of whether a crawl happens at all.
+  crawl-smoke:
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # 3.10 — the explorer's shipped interpreter (its base image is
+      # mcr.microsoft.com/playwright/python:v1.48.0-jammy).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: |
+            Nexus_power/engines/qe-explorer/requirements.txt
+            Nexus_power/platform/qe-central/requirements.txt
+
+      # BOTH halves are installed because this job proves both halves: the
+      # explorer WRITES the manifest, and qe-central's real mapper INGESTS it.
+      # Importing the mapper is what turns "a file was written" into "the
+      # substrate would have received page visits".
+      # Each requirements.txt is installed FROM ITS OWN DIRECTORY. qe-central's
+      # line 5 is `-e ../../sdk/nexus-sdk`, a CWD-relative editable path: run
+      # from Nexus_power/ it resolves outside the repo and pip aborts the whole
+      # install with "../../sdk/nexus-sdk is not a valid editable requirement".
+      # The other jobs already use this subshell-cd form; this one did not.
+      - name: Install the explorer and qe-central
+        run: |
+          ( cd engines/qe-explorer   && pip install -r requirements.txt )
+          ( cd platform/qe-central   && pip install -r requirements.txt )
+          pip install uvicorn
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      # The script owns the whole run — proving ground, callback sink, explorer,
+      # dispatch, poll, assertions and teardown — so the exact same one-line
+      # command reproduces a CI failure on a laptop. Its `finally` block always
+      # stops the services and removes the work dir, and every failure path
+      # prints the explorer log tail, so a red job is diagnosable without a rerun.
+      - name: Crawl smoke
+        run: python scripts/qec_crawl_smoke.py
 
   # ── Docker Build (smoke test) ───────────────────────────────
   docker-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [test, frontend]
     steps:
       - uses: actions/checkout@v4
@@ -165,11 +1189,31 @@ jobs:
           BUILT=0
           FAILED=0
 
+          # THE BUILD CONTEXT IS PER-SERVICE, exactly as docker-compose.yml
+          # declares it. This helper used to hardcode `context == the service
+          # directory` for all fourteen, which is right for twelve of them and
+          # wrong for two:
+          #
+          #   compose `eyes`  → context: .  dockerfile: engines/eyes-engine/Dockerfile
+          #   compose `spine` → context: .  dockerfile: engines/spine-engine/Dockerfile
+          #
+          # Those two Dockerfiles `COPY sdk/nexus-sdk/` and address their own
+          # files as `engines/<svc>/…`, so they need the Nexus_power root as
+          # context; the other twelve COPY `requirements.txt` / `app/` relative
+          # to themselves. Built with the narrow context they died with
+          #   failed to compute cache key: "/engines/spine-engine/main.py": not found
+          # — 12 images built, 2 failed. It had never been reported because
+          # docker-build `needs: [test, frontend]` and had been SKIPPED on every
+          # run this repository has ever done.
+          #
+          # $4 is the context and defaults to $2, so the twelve ordinary
+          # services read exactly as before and only the two exceptions carry
+          # the override — and they now match compose line for line.
           build_svc() {
-            local name="$1" dir="$2" base="$3"
-            echo "Building $name from $dir..."
+            local name="$1" dir="$2" base="$3" ctx="${4:-$2}"
+            echo "Building $name (context=$ctx, dockerfile=$dir/Dockerfile)..."
             if docker build --build-arg BASE_IMAGE="$base" \
-                -t "nexus-$name:ci" "$dir"; then
+                -f "$dir/Dockerfile" -t "nexus-$name:ci" "$ctx"; then
               BUILT=$((BUILT + 1))
             else
               echo "::error::Failed to build $name"
@@ -183,12 +1227,12 @@ jobs:
           build_svc nerves-engine   engines/nerves-engine   nexus-base:ci
           build_svc legs-engine     engines/legs-engine     nexus-base:ci
           build_svc hands-engine    engines/hands-engine    nexus-base:ci
-          build_svc spine-engine    engines/spine-engine    nexus-base:ci
+          build_svc spine-engine    engines/spine-engine    nexus-base:ci .
           build_svc mouth-engine    engines/mouth-engine    nexus-base:ci
 
           # GPU engines
           build_svc ears-engine  engines/ears-engine  nexus-gpu:ci
-          build_svc eyes-engine  engines/eyes-engine  nexus-gpu:ci
+          build_svc eyes-engine  engines/eyes-engine  nexus-gpu:ci .
           build_svc heart-engine engines/heart-engine nexus-gpu:ci
 
           # Platform services
@@ -200,16 +1244,55 @@ jobs:
           echo "Built $BUILT image(s), $FAILED failure(s)"
           [ $FAILED -eq 0 ] || exit 1
 
+      # Reproducibility gate: a freshly-built image must contain EXACTLY the git
+      # source it was built from — no COPY drift, no stale/extra/missing runtime
+      # file. This is the same deploy-verify gate scripts/prove_install.sh runs
+      # against a live cluster; here it runs continuously on every build (gateway
+      # is a clean, small service — a representative reproducibility witness).
+      - name: Verify gateway image == git (deploy-verify)
+        run: |
+          set -euo pipefail
+          docker create --name gwverify nexus-gateway:ci >/dev/null
+          trap 'docker rm -f gwverify >/dev/null 2>&1 || true' EXIT
+          python ci/reproducibility/verify_deployment.py \
+            --container gwverify --container-path /app/service/app \
+            --git-root platform/gateway/app
+
       - name: Build client image
         run: |
           docker build -f infrastructure/docker/Dockerfile.client \
             -t nexus-client:ci .
 
+      # THE PINNED VERSION DID NOT EXIST. This step asked for trivy v0.58.2;
+      # `repos/aquasecurity/trivy/releases/tags/v0.58.2` returns 404 and there is
+      # no 0.5x release at all (the line was latest v0.74.0 when this was fixed).
+      # The upstream installer nonetheless printed
+      #   aquasecurity/trivy info found version: 0.58.2 for v0.58.2/Linux/64bit
+      # and then exited 1 a third of a second later without downloading anything,
+      # so the failure read as a flaky network install rather than a bad pin.
+      #
+      # What that cost: "Scan base image for CVEs" is the ONLY BLOCKING
+      # vulnerability gate here — it alone runs `--exit-code 1`, while the gateway
+      # scan below is `--exit-code 0` and reports without failing. A failed install
+      # meant that step was SKIPPED, so the check that exists to reject a
+      # vulnerable base image has never actually executed: docker-build itself was
+      # skipped on every prior run (it `needs: [test, frontend]`, and one of those
+      # was always red), and on its first real run the scanner would not install.
+      #
+      # Fetches the release asset directly rather than piping the upstream
+      # installer: one pinned URL, no third-party shell script deciding what
+      # "found" means, and a 404 on a bad pin fails loudly at curl -f. Unpacked
+      # into $RUNNER_TEMP, which the runner owns, and put on PATH for later steps.
       - name: Install Trivy scanner
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.58.2
-          trivy --version
+          set -euo pipefail
+          TRIVY_VERSION=0.74.0
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          curl -sfL \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/trivy-bin" trivy
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" --version
 
       - name: Scan base image for CVEs (Trivy)
         run: |
@@ -243,20 +1326,30 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: sbom-base.json
+          path: Nexus_power/sbom-base.json
           retention-days: 90
 
   # ── Security Scan ───────────────────────────────────────────
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # setuptools is UPGRADED, not ignored. The runner ships 79.0.1, which
+      # pip-audit flags as PYSEC-2026-3447 (MANIFEST.in exclude rules are matched
+      # without Unicode normalization, so an NFD filename can slip past an NFC
+      # exclusion and be published in an sdist; fixed in 83.0.0). It is a finding
+      # against the RUNNER's build toolchain rather than anything this repo ships
+      # — nothing here builds an sdist — but the honest response to a flagged
+      # vulnerability is to take the fixed version, not to add its ID to an
+      # ignore list. Pinning the floor at the fix version keeps the gate real: if
+      # a FUTURE setuptools advisory lands, this job goes red again as it should.
       - name: Install pip-audit
-        run: pip install pip-audit
+        run: pip install pip-audit 'setuptools>=83.0.0'
 
       - name: Audit dependencies for known vulnerabilities
         run: |

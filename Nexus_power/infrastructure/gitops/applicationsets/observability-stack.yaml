@@ -1,0 +1,86 @@
+# Observability stack — kube-prometheus-stack, Loki, Tempo, Grafana.
+#
+# The platform Helm chart already provisions ServiceMonitor + PrometheusRule
+# objects (under infrastructure/helm/nexus-qa/templates/). This Application
+# installs the upstream operators and components that those CRs require.
+#
+# Datasources and dashboards-as-code under infrastructure/monitoring/ are
+# layered on top via values overrides per env (gitops/envs/<env>/values/observability.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: observability-stack
+  namespace: argocd
+spec:
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels:
+                  argocd.argoproj.io/secret-type: cluster
+                matchExpressions:
+                  - key: env
+                    operator: In
+                    values: [dev, staging, production]
+          - list:
+              elements:
+                - component: kube-prometheus-stack
+                  chartRepo: https://prometheus-community.github.io/helm-charts
+                  chartName: kube-prometheus-stack
+                  chartVersion: 65.1.1
+                  targetNamespace: observability
+                  syncWave: "1"
+                - component: loki
+                  chartRepo: https://grafana.github.io/helm-charts
+                  chartName: loki
+                  chartVersion: 6.16.0
+                  targetNamespace: observability
+                  syncWave: "2"
+                - component: tempo
+                  chartRepo: https://grafana.github.io/helm-charts
+                  chartName: tempo-distributed
+                  chartVersion: 1.21.1
+                  targetNamespace: observability
+                  syncWave: "2"
+                - component: opentelemetry-collector
+                  chartRepo: https://open-telemetry.github.io/opentelemetry-helm-charts
+                  chartName: opentelemetry-collector
+                  chartVersion: 0.105.4
+                  targetNamespace: observability
+                  syncWave: "3"
+  template:
+    metadata:
+      name: 'obs-{{component}}-{{name}}'
+      annotations:
+        argocd.argoproj.io/sync-wave: '{{syncWave}}'
+    spec:
+      project: observability
+      sources:
+        - repoURL: '{{chartRepo}}'
+          chart: '{{chartName}}'
+          targetRevision: '{{chartVersion}}'
+          helm:
+            releaseName: '{{component}}'
+            valueFiles:
+              - $values/infrastructure/gitops/envs/{{metadata.labels.env}}/values/{{component}}.yaml
+        - repoURL: ${PLATFORM_REPO_URL}
+          targetRevision: '{{metadata.annotations.platform-target-revision}}'
+          ref: values
+      destination:
+        server: '{{server}}'
+        namespace: '{{targetNamespace}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=false
+          - ServerSideApply=true
+          - RespectIgnoreDifferences=true
+        retry:
+          limit: 10
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 10m

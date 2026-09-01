@@ -1,0 +1,408 @@
+"""End-to-end flow mode - a journey has to be able to say whether it FINISHED.
+
+The crawl records states and actions. A business flow is neither: it is a path
+through them. Without flows as objects the product can count pages and fields but
+cannot answer the only question a client asks - did you get all the way through
+Apply?
+
+The distinction these tests protect: six steps of a fifteen-step funnel is NOT the
+Apply flow. Reporting it as one is the same class of claim as a green test that
+never ran, so completion is DERIVED from why the walk stopped and there is
+deliberately no way for a caller to assert it directly.
+"""
+import inspect
+import re
+
+from subsystem_source import crawler_subsystem_source
+from app import flow_ledger as FL
+
+
+def steps(n, unfilled=0):
+    return [{"fingerprint": "s%d" % i, "url": "/step/%d" % i, "title": "Step %d" % i,
+             "fields_filled": 3, "fields_unfilled": unfilled} for i in range(n)]
+
+
+def flow(terminal, n=6, unfilled=0, max_steps=20, entry="e1"):
+    return FL.build_flow(entry_fingerprint=entry, entry_url="/quote",
+                         entry_title="Quote", steps=steps(n, unfilled),
+                         terminal=terminal, max_steps=max_steps)
+
+
+def test_a_walk_that_ran_out_of_budget_is_NOT_a_covered_journey():
+    """THE GREEN-WASH THIS PREVENTS. Six steps of a fifteen-step funnel walked
+    because the budget ended is not the Apply flow, and must never read as one."""
+    assert flow(FL.TERMINAL_BUDGET)["completed"] is False
+
+
+def test_reaching_the_submit_boundary_IS_a_covered_journey():
+    """The funnel was walked to its end; the only thing left is the approval a human
+    owes. That is as complete as a non-mutating crawl gets."""
+    assert flow(FL.TERMINAL_SUBMIT_BOUNDARY)["completed"] is True
+
+
+def test_a_step_with_nothing_left_to_advance_is_also_complete():
+    assert flow(FL.TERMINAL_NO_ADVANCE)["completed"] is True
+
+
+def test_a_loop_or_a_cancellation_is_not_complete():
+    for t in (FL.TERMINAL_LOOP, FL.TERMINAL_CANCELLED):
+        assert flow(t)["completed"] is False, t
+
+
+def test_completion_cannot_be_asserted_by_a_caller():
+    """Derived from the terminal reason. A caller that could pass completed=True
+    could report any truncated walk as a covered journey."""
+    assert "completed" not in inspect.signature(FL.build_flow).parameters
+    assert '"completed": term in COMPLETING_TERMINALS' in inspect.getsource(FL.build_flow)
+
+
+def test_only_four_terminals_mean_covered():
+    """A4.3 added ``submit_crossed``: the walk did not merely reach the commit
+    button, it was authorised through it. M1.4 added ``confirmation``: the
+    application itself declared the journey done. Still COVERAGE of the funnel,
+    which is what this set means — whether the crossing LANDED is a separate and
+    stronger claim carried by ``journey_completed``, never by the terminal.
+
+    The set is pinned EXACTLY, so widening it is always a deliberate edit to
+    this line rather than a side effect of adding a terminal somewhere else."""
+    assert FL.COMPLETING_TERMINALS == {FL.TERMINAL_SUBMIT_BOUNDARY,
+                                       FL.TERMINAL_NO_ADVANCE,
+                                       FL.TERMINAL_SUBMIT_CROSSED,
+                                       FL.TERMINAL_CONFIRMATION}
+    # The terminals that must NEVER count as coverage, restated positively so a
+    # future edit that moves one of them across is caught here too.
+    for terminal in (FL.TERMINAL_LOOP, FL.TERMINAL_BUDGET, FL.TERMINAL_CANCELLED,
+                     FL.TERMINAL_ORACLE_UNAVAILABLE):
+        assert terminal not in FL.COMPLETING_TERMINALS
+
+
+def test_an_unrecognised_terminal_fails_closed_to_not_covered():
+    """A future terminal nobody thought about must not silently count as coverage."""
+    for t in ("something_new", ""):
+        assert FL.build_flow(entry_fingerprint="x", entry_url="/", entry_title="",
+                             steps=steps(3), terminal=t)["completed"] is False
+
+
+def test_a_journey_walked_with_unanswered_fields_says_so():
+    """Covered STRUCTURALLY but not with real data. Both facts matter and neither
+    substitutes for the other."""
+    f = flow(FL.TERMINAL_SUBMIT_BOUNDARY, unfilled=2)
+    assert f["completed"] is True
+    assert f["fully_answered"] is False
+    assert f["fields_unanswered"] == 12
+
+
+def test_a_fully_answered_journey_is_marked_as_such():
+    f = flow(FL.TERMINAL_SUBMIT_BOUNDARY, unfilled=0)
+    assert f["fully_answered"] is True and f["fields_unanswered"] == 0
+
+
+def test_a_flow_is_identified_by_where_it_starts():
+    """Steps change as the app changes and terminals change as budgets change. Only
+    the entry is stable, so a client watches one funnel get deeper over time rather
+    than seeing a new flow appear every crawl."""
+    shallow = flow(FL.TERMINAL_BUDGET, n=3, entry="same")
+    deep = flow(FL.TERMINAL_SUBMIT_BOUNDARY, n=14, entry="same")
+    assert shallow["flow_id"] == deep["flow_id"]
+    assert flow(FL.TERMINAL_BUDGET, entry="other")["flow_id"] != shallow["flow_id"]
+
+
+def test_the_summary_states_that_branches_were_NOT_covered():
+    """THE CLAIM THAT MUST NOT BE INFERRED. Walking every flow once is one path per
+    funnel: every decision point was answered a single way and the alternatives - a
+    different premium, a different eligibility outcome - were never visited."""
+    s = FL.summarize([flow(FL.TERMINAL_SUBMIT_BOUNDARY), flow(FL.TERMINAL_BUDGET)])
+    assert s["branch_coverage"] is False
+    assert "single option" in s["branch_coverage_note"]
+
+
+def test_the_summary_separates_covered_from_truncated():
+    s = FL.summarize([flow(FL.TERMINAL_SUBMIT_BOUNDARY), flow(FL.TERMINAL_NO_ADVANCE),
+                      flow(FL.TERMINAL_BUDGET), flow(FL.TERMINAL_LOOP)])
+    assert s["flows_found"] == 4
+    assert s["flows_completed"] == 2
+    assert s["flows_truncated"] == 2
+    assert s["truncation_reasons"] == {FL.TERMINAL_BUDGET: 1, FL.TERMINAL_LOOP: 1}
+
+
+def test_the_summary_names_WHY_each_truncated_flow_stopped():
+    """'Stopped' is not actionable; 'ran out of a 6-step budget' is."""
+    s = FL.summarize([flow(FL.TERMINAL_BUDGET, max_steps=6)])
+    assert FL.TERMINAL_BUDGET in s["truncation_reasons"]
+    assert flow(FL.TERMINAL_BUDGET, max_steps=6)["step_budget"] == 6
+
+
+def test_an_empty_crawl_summarises_without_crashing():
+    s = FL.summarize([])
+    assert s["flows_found"] == 0 and s["branch_coverage"] is False
+
+
+def test_the_outcome_a_funnel_produced_is_kept():
+    """A premium or an eligibility decision is what the journey was FOR - and in the
+    next phase it decides whether a different choice produced a different path."""
+    f = FL.build_flow(entry_fingerprint="e", entry_url="/q", entry_title="Q",
+                      steps=steps(4), terminal=FL.TERMINAL_SUBMIT_BOUNDARY,
+                      outcome_values=[{"label": "Monthly premium", "value": "$92.40",
+                                       "value_type": "currency"}])
+    assert f["outcome_values"][0]["value"] == "$92.40"
+    assert f["outcome_values"][0]["value_type"] == "currency"
+
+
+_CRAWLER = crawler_subsystem_source()  # M0.3: subsystem, not one file
+
+
+def _code_only(source: str) -> str:
+    """``source`` with comments stripped, so a tripwire tests CODE not PROSE.
+
+    These guards assert that a safety word does not appear in a region of the
+    crawler. Scanning raw source conflates the two: a comment that EXPLAINS the
+    separation ("this is not the danger gate") reads to the guard exactly like
+    code that violates it. That made the guards both noisy and weak — noisy
+    because documenting the invariant broke them, weak because they could be
+    satisfied by deleting an explanation.
+    """
+    out = []
+    for line in source.splitlines():
+        code = line.split("#", 1)[0] if "#" in line else line
+        if code.strip():
+            out.append(code)
+    return "\n".join(out)
+
+
+def test_the_step_budget_never_changes_what_may_be_clicked():
+    """A deeper walk must not be a laxer one. The commit-word veto, the danger gate
+    and the submit boundary decide what may be clicked - not the step count, and
+    not the traversal posture that sizes it."""
+    assert "_E2E_WIZARD_STEPS" in _CRAWLER and "_E2E_WIZARD_ADVANCES" in _CRAWLER
+    seg = _CRAWLER[_CRAWLER.index("self._crawl_mode = "):]
+    seg = seg[:seg.index("self._flows")]
+    seg = _code_only(seg)
+    for gate in ("submit_approvals", "danger", "_WIZARD_COMMIT_RE", "attestation"):
+        assert gate not in seg, "%s must not depend on the walk DEPTH" % gate
+
+
+def test_the_deeper_budget_is_still_bounded():
+    n = int(re.search(r"_E2E_WIZARD_STEPS = (\d+)", _CRAWLER).group(1))
+    a = int(re.search(r"_E2E_WIZARD_ADVANCES = (\d+)", _CRAWLER).group(1))
+    assert 6 < n <= 40 and 24 < a <= 200
+
+
+def test_an_app_nobody_attested_gets_the_shallow_budget():
+    """Walk depth is chosen by ONE expression, and its fallback is the probe
+    budget. Depth is owned by the traversal posture (derived from the signed env
+    attestation) rather than by ``crawl_mode``, which is a SCOPE dial: an app
+    onboarded with the default scope was silently getting a sampled walk of every
+    funnel it found. ``_full_traversal`` still honours an explicit ``e2e`` mode,
+    so an app already configured that way is not demoted.
+
+    The behavioural pins live in ``tests/test_traversal_posture.py``; this one
+    keeps the fallback from being inverted by a future edit."""
+    # M0.3/T-DE-14: the derivation moved into TraversalBudget.for_posture, so
+    # the crawl's two budget systems sit together. The pin is unchanged — ONE
+    # expression chooses depth, and its fallback is still the probe budget.
+    seg = _code_only(_CRAWLER[_CRAWLER.index("def for_posture"):][:2200])
+    assert "if full_traversal:" in seg
+    assert "max_wizard_steps=_MAX_WIZARD_STEPS" in seg, (
+        "the fallback branch must still be the PROBE budget")
+    assert "_MAX_WIZARD_STEPS" in seg
+
+
+def test_full_traversal_is_a_depth_decision_with_no_safety_inputs():
+    """``_full_traversal`` is what widens the walk, so what FEEDS it is
+    safety-relevant: it must be a function of the declared posture and the scope
+    mode only. If an attestation or approval ever appears in this expression,
+    depth and permission have been fused into one dial."""
+    seg = _code_only(
+        _CRAWLER[_CRAWLER.index("self._full_traversal = "):][:300])
+    expr = seg[:seg.index(")") + 1]
+    for gate in ("submit", "danger", "attestation", "approv"):
+        assert gate not in expr, f"{gate} must not decide walk DEPTH"
+
+
+def test_a_single_page_form_is_still_a_journey():
+    """FOUND LIVE. Recording only multi-step wizards made an application with a real
+    quote form report ZERO flows — which reads as "no journeys here" when the truth
+    is "one journey, one step long"."""
+    seg = _CRAWLER[_CRAWLER.index("walked = False"):]
+    seg = seg[:seg.index("async def ")]
+    assert "if not walked and is_form and fill is not None:" in seg
+    assert "flow_ledger.build_flow(" in seg
+    assert "TERMINAL_SUBMIT_BOUNDARY" in seg
+
+
+def test_a_one_step_journey_that_reaches_submit_counts_as_covered():
+    f = FL.build_flow(entry_fingerprint="one", entry_url="/quote", entry_title="Quote",
+                      steps=steps(1), terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    assert f["completed"] is True and f["step_count"] == 1
+
+
+# ── self-contradiction tripwire ──────────────────────────────────────────────
+
+def _step(fp="f1", filled=0, unfilled=0):
+    return {"fingerprint": fp, "url": "u", "title": "t",
+            "fields_filled": filled, "fields_unfilled": unfilled}
+
+
+def test_filled_fields_plus_a_refused_advance_raises_the_tripwire():
+    """We claim to have filled the form; the app refuses to move. Both cannot be
+    comfortable — either the app is blocked (a finding) or a fill was recorded
+    successful while the control never took the value (a defect).
+
+    This is the cheapest check on our own honesty: no LLM, no app knowledge,
+    true everywhere. An entire class of defects hid behind "filled" — a locator
+    matching nothing, a read-back in the wrong vocabulary, a placeholder taken
+    as an answer — and every one of them would have raised THIS flag on the
+    first crawl of the first application."""
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Coverage",
+        steps=[_step(filled=2)], terminal=FL.TERMINAL_LOOP, max_steps=20)
+    assert f["advance_contradicts_fills"] is True
+    assert f["fields_filled_total"] == 2
+
+
+def test_reaching_the_end_of_a_funnel_is_not_a_contradiction():
+    """no_advance means "nothing here could advance it", which at the END of a
+    funnel is correct completion. A review page that displays a premium and
+    offers no next step is what success looks like — firing the tripwire there
+    flagged the very journey it exists to protect, and a tripwire that cries
+    wolf on success is one nobody reads."""
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Review",
+        steps=[_step(filled=1)], terminal=FL.TERMINAL_NO_ADVANCE,
+        outcome_values=[{"label": "Monthly Premium", "text": "$4.24",
+                         "value_type": "currency"}],
+        max_steps=20)
+    assert f["advance_contradicts_fills"] is False
+
+
+def test_a_page_we_never_filled_is_not_suspicious():
+    """A funnel stopped at an unanswered decision is EXPECTED to loop. Flagging
+    that would bury the real signal in noise."""
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Product",
+        steps=[_step(filled=0, unfilled=4)], terminal=FL.TERMINAL_LOOP,
+        max_steps=20)
+    assert f["advance_contradicts_fills"] is False
+
+
+def test_a_flow_that_reached_the_submit_boundary_is_not_suspicious():
+    f = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Review",
+        steps=[_step(filled=3)], terminal=FL.TERMINAL_SUBMIT_BOUNDARY,
+        max_steps=20)
+    assert f["advance_contradicts_fills"] is False
+
+
+def test_summary_rolls_the_contradiction_up_for_fleet_monitoring():
+    """Across 1000 applications this count is how a systemic fill defect is
+    found ONCE instead of rediscovered per app."""
+    bad = FL.build_flow(
+        entry_fingerprint="fpA", entry_url="u", entry_title="Coverage",
+        steps=[_step(filled=2)], terminal=FL.TERMINAL_LOOP, max_steps=20)
+    good = FL.build_flow(
+        entry_fingerprint="fpB", entry_url="u", entry_title="Review",
+        steps=[_step(filled=3)], terminal=FL.TERMINAL_SUBMIT_BOUNDARY,
+        max_steps=20)
+    s = FL.summarize([bad, good])
+    assert s["advance_contradicts_fills"] == 1
+
+
+def test_the_outcome_value_survives_the_fold():
+    """Regression: the crawl captured "Estimated Monthly Premium = $9.26" on the
+    review page and the journey recorded a premium of "".
+
+    The displayed-value contract is {label, selector, TEXT}; build_flow read only
+    ``value``, so every outcome folded to empty. A journey without its outcome is
+    a walk, not evidence — and the premium is the whole point of a quote funnel."""
+    f = FL.build_flow(
+        entry_fingerprint="fpQ", entry_url="u", entry_title="Quote",
+        steps=[_step(filled=3)],
+        outcome_values=[
+            {"label": "Estimated Monthly Premium", "selector": "#prem",
+             "text": "$9.26", "value_type": "currency"},
+            {"label": "Coverage Amount", "selector": "#cov",
+             "text": "$50,000", "value_type": "currency"},
+        ],
+        terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    got = {o["label"]: o["value"] for o in f["outcome_values"]}
+    assert got == {"Estimated Monthly Premium": "$9.26",
+                   "Coverage Amount": "$50,000"}
+
+
+def test_an_explicit_value_key_still_wins():
+    """Producers that already speak {label, value} are unaffected."""
+    f = FL.build_flow(
+        entry_fingerprint="fpQ", entry_url="u", entry_title="Quote",
+        steps=[_step(filled=1)],
+        outcome_values=[{"label": "Premium", "value": "$1.00",
+                         "text": "ignored", "value_type": "currency"}],
+        terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    assert f["outcome_values"][0]["value"] == "$1.00"
+
+
+def test_build_flow_preserves_next_action_option_classes():
+    """The sanitizer whitelists decision_point keys, so option_classes (the
+    forward/destructive/navigational classification of a next-action fork) must be
+    explicitly carried or the fold cannot tell which branch is walkable."""
+    step = {
+        "fingerprint": "review", "url": "/quote/review", "title": "Review",
+        "fields_filled": 0, "fields_unfilled": 0,
+        "decision_points": [{
+            "control_signature": "nextaction:abc",
+            "control_label": "Next action",
+            "options": ["Apply Now", "Start Over", "Back to Dashboard"],
+            "provenance": "next_action",
+            "option_classes": {
+                "Apply Now": "forward",
+                "Start Over": "destructive",
+                "Back to Dashboard": "navigational",
+            },
+        }],
+    }
+    built = FL.build_flow(entry_fingerprint="review", entry_url="/quote/review",
+                          entry_title="Review", steps=[step],
+                          terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    dp = built["steps"][0]["decision_points"][0]
+    assert dp["option_classes"] == {
+        "Apply Now": "forward",
+        "Start Over": "destructive",
+        "Back to Dashboard": "navigational",
+    }
+
+
+# ── P1: activated_signatures (trigger→child) + reveals passthrough ───────────────
+
+def test_activated_signatures_detects_a_brand_new_control():
+    before = [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    after = before + [{"kind": "input", "name": "Details"}]
+    assert FL.activated_signatures(before, after) == ["input:details"]
+
+
+def test_activated_signatures_detects_a_revealed_same_label_question():
+    # Answering Yes reveals ANOTHER Yes/No question — same labels, higher count.
+    before = [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    after = before + [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    revealed = FL.activated_signatures(before, after)
+    assert "button:yes" in revealed and "button:no" in revealed
+
+
+def test_activated_signatures_empty_when_nothing_new():
+    ctrls = [{"kind": "button", "name": "Yes"}, {"kind": "button", "name": "No"}]
+    assert FL.activated_signatures(ctrls, ctrls) == []
+
+
+def test_reveals_are_carried_through_the_decision_point_sanitizer():
+    step = {
+        "fingerprint": "s0", "url": "/apply/health", "title": "Health",
+        "fields_filled": 0, "fields_unfilled": 0,
+        "decision_points": [{
+            "control_signature": "q:abc", "control_label": "Question 1",
+            "options": ["Yes", "No"], "provenance": "questionnaire",
+            "choice": "Yes", "reveals": ["button:yes", "button:no", "input:details"],
+        }],
+    }
+    f = FL.build_flow(entry_fingerprint="e", entry_url="/apply", entry_title="Apply",
+                      steps=[step], terminal=FL.TERMINAL_SUBMIT_BOUNDARY, max_steps=20)
+    dp = f["steps"][0]["decision_points"][0]
+    assert dp["reveals"] == ["button:yes", "button:no", "input:details"]
+    assert dp["choice"] == "Yes"

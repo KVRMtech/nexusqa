@@ -1,0 +1,61 @@
+{
+  "$comment": [
+    "M1.7 / T-GW-04 — THE FROZEN WIRE SHAPE OF A DISCOVERED BUSINESS RULE.",
+    "",
+    "WHY THIS FILE EXISTS AT ALL. The rule-reuse loop crosses two services:",
+    "",
+    "    qe-explorer  app/rules.DiscoveredRule.as_dict()     (produces, on completion)",
+    "        -> POST /internal/crawls/{id}/complete  coverage.discovered_rules",
+    "    qe-central   app/services/rule_store._clean()       (consumes, persists)",
+    "    qe-central   app/services/rule_store.fetch_rules()  (produces, on dispatch)",
+    "        -> POST /crawl  known_rules",
+    "    qe-explorer  app/rules.DiscoveredRule.from_mapping() (consumes, reuses)",
+    "",
+    "Neither service can test the other. Both ship a top-level `app` package, so a",
+    "single pytest process cannot import both — which is precisely why this seam",
+    "was proven only in halves. A rename of `field_label` on either side passed",
+    "both suites and silently turned every reused rule back into a repeated",
+    "experiment: the T-GW-04 acceptance would report success while the learning",
+    "loop was severed. A dropped loop is SILENT by construction, because falling",
+    "back to re-running the experiment still produces a correct crawl.",
+    "",
+    "So the contract is frozen HERE, as data, and each side asserts against it in",
+    "its own process. A rename on either side now fails that side's own suite.",
+    "The file is the shared vocabulary; the two tests are the two halves of one",
+    "proof that could not otherwise be written.",
+    "",
+    "CHANGING THIS FILE IS A PROTOCOL CHANGE. Bump schema_version, ship the",
+    "reader on both sides FIRST (both parsers are fail-closed on an unknown",
+    "version, so an unrecognised rule is ignored rather than misapplied), and add",
+    "the new version here beside this one rather than editing it in place."
+  ],
+  "schema_version": 1,
+  "required_fields": [
+    "key",
+    "kind",
+    "url_template",
+    "blocked_label",
+    "field_label",
+    "proof",
+    "schema_version"
+  ],
+  "identity_fields": ["key"],
+  "must_be_present_or_the_rule_is_a_fragment": ["key", "blocked_label", "field_label"],
+  "column_bounds": {
+    "key": 64,
+    "kind": 32,
+    "url_template": 500,
+    "blocked_label": 120,
+    "field_label": 120,
+    "proof": 500
+  },
+  "sample": {
+    "key": "rule:57915c15af59a515a06c1fa5",
+    "kind": "advance_gate",
+    "url_template": "a.test/x/*/step",
+    "blocked_label": "Continue",
+    "field_label": "Health Conditions",
+    "proof": "Continue requires an answer to 'Health Conditions' before it is enabled (proven: the app enabled it when the agent answered)",
+    "schema_version": 1
+  }
+}

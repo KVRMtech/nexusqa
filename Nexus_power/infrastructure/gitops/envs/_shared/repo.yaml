@@ -1,0 +1,23 @@
+# Canonical repo identity. Every Application/ApplicationSet substitutes
+# ${PLATFORM_REPO_URL} from this single file (rendered by the Makefile
+# during bootstrap, and stored as a ConfigMap that the ArgoCD repo-server
+# reads after bootstrap).
+#
+# Changing the repo URL or the default branch is a controlled operation:
+# this file changes, the change is reviewed, and after merge the
+# bootstrap script must be re-run on every cluster to update the
+# substituted manifests.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitops-repo-config
+  namespace: argocd
+data:
+  # The repo URL is intentionally a placeholder. Set the real URL in the
+  # bootstrap step (see Makefile target `bootstrap`). The bootstrap step
+  # substitutes this value into every Application/ApplicationSet manifest
+  # via envsubst before kubectl-applying them.
+  repoURL: REPLACE_WITH_REPO_URL
+  # Default branch / revision used by Applications that don't override.
+  # Per-env overrides live in envs/<env>/config.yaml.
+  defaultRevision: main

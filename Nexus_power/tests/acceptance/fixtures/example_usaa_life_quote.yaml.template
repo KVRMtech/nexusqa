@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────
+#  Example fixture — rename to ``example_usaa_life_quote.yaml`` when you
+#  drop in a real video and replace the artifact_id below with the
+#  pipeline's output for your recording.  As a *.template file this is
+#  ignored by the pytest collector so it never runs as a test on its own.
+# ─────────────────────────────────────────────────────────────────────
+
+name: usaa-life-quote-form-fill
+description: |
+  SME demos the USAA term-life insurance quote form.  Recording starts
+  on usaa.com home, navigates to /insurance/life, fills birthdate /
+  nicotine / military fields, and reviews the estimate.
+
+# Pre-process the recording through the canonical pipeline once and
+# paste the resulting artifact_id here.  When set, the acceptance suite
+# fetches evidence_steps directly without re-running visual extraction.
+artifact_id: REPLACE_WITH_ARTIFACT_UUID
+
+# Optional — for offline reprocessing.  Resolved relative to this file.
+# video_path: ../recordings/usaa_life_quote.mp4
+
+thresholds:
+  action_kind_accuracy: 0.80
+  target_match_rate:    0.70
+  value_match_rate:     0.50
+  max_spurious_steps:   3
+
+expected_actions:
+  - timestamp_ms_min: 5000
+    timestamp_ms_max: 12000
+    action_kind: navigate
+    target_label_contains: usaa
+    notes: 'User opens usaa.com'
+
+  - timestamp_ms_min: 13000
+    timestamp_ms_max: 17000
+    action_kind: navigate
+    target_label_contains: life
+    notes: 'Selects Life Insurance from menu'
+
+  - timestamp_ms_min: 17000
+    timestamp_ms_max: 19500
+    action_kind: click_cta
+    target_label_contains: quote
+    notes: 'Clicks Get a Quote'
+
+  - timestamp_ms_min: 20000
+    timestamp_ms_max: 35000
+    action_kind: enter_text
+    target_label_contains: birthdate
+    observed_value_contains: '1990'
+    notes: 'Enters birth year 1990'
+
+  - timestamp_ms_min: 36000
+    timestamp_ms_max: 40000
+    action_kind: select_option
+    target_label_contains: nicotine
+    observed_value_contains: 'no'
+    notes: 'Selects No on nicotine question'
+
+  - timestamp_ms_min: 41000
+    timestamp_ms_max: 49000
+    action_kind: select_option
+    target_label_contains: military
+    notes: 'Selects military status option'
+
+  - timestamp_ms_min: 53000
+    timestamp_ms_max: 64000
+    action_kind: review
+    target_label_contains: estimate
+    notes: 'Reviews the resulting policy estimate'

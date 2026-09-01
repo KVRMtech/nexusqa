@@ -1,0 +1,25 @@
+{
+  "purpose": "Prove the crawler ANSWERS native browser dialogs with intent rather than letting Playwright auto-dismiss them: a funnel confirm() is accepted and the journey advances, a leave warning is dismissed and the journey survives, an alert is acknowledged, a destructive confirm is refused without an operator approval, and a prompt is declined rather than answered with invented input.",
+  "targeted_defect": "BUG-M15-DIALOG-AUTODISMISS — the crawler attached no page.on('dialog') listener, so Playwright's documented default applied and EVERY native dialog was auto-dismissed. A confirm-gated 'Continue' therefore answered CANCEL on every crawl of every application: location.href never ran, the action recorded outcome 'none', and a working funnel was indistinguishable from a dead button. The bug is invisible in the DOM — capture of this page is identical before and after the fix — which is why it needs a behavioural fixture rather than an inventory assertion.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 6,
+  "expect_controls": [
+    {"where": {"css_hint": "button#continue-confirmed"}, "fields": {"name": "Continue", "role": "button", "name_source": "content", "disabled": false},
+     "why": "the funnel actuator whose confirm() must be ACCEPTED"},
+    {"where": {"css_hint": "button#leave-warned"}, "fields": {"name": "Return to dashboard", "role": "button"},
+     "why": "raises a leave warning that must be DISMISSED"},
+    {"where": {"css_hint": "button#notice-alert"}, "fields": {"name": "Show session notice", "role": "button"}},
+    {"where": {"css_hint": "button#delete-destructive"}, "fields": {"name": "Delete Application", "role": "button"},
+     "why": "a native confirm is not an approved crossing; refused without an A4.3 grant"},
+    {"where": {"css_hint": "button#prompt-unanswerable"}, "fields": {"name": "Add a reference code", "role": "button"}},
+    {"where": {"css_hint": "button#no-dialog"}, "fields": {"name": "Print summary", "role": "button"},
+     "why": "raises no dialog at all — proves the dialog path is not taken indiscriminately"}
+  ],
+  "describes_runtime_behaviour": [
+    {"behaviour": "clicking Continue accepts a confirm() and lands on step2.html", "lanes": ["playwright"]},
+    {"behaviour": "clicking Return to dashboard dismisses a leave warning and stays on index.html", "lanes": ["playwright"]},
+    {"behaviour": "every dialog decision is recorded as a browser_event with its type, message, action, intent and reason", "lanes": ["playwright"]}
+  ],
+  "lane_note": "Both lanes read the same INVENTORY_JS contract; only the Playwright lane can adjudicate the BEHAVIOURAL expectations above, because jsdom has no dialog primitive. Those are declared playwright-only and are exercised by tests/browser/test_page_lifecycle_execution.py rather than by the capture assertions."
+}

@@ -1,0 +1,300 @@
+{{/*
+=================================================================
+Redis Sentinel — High Availability Configuration
+=================================================================
+Deploys Redis in a 3-node Sentinel topology:
+  - 1 master + 2 replicas (StatefulSet)
+  - 3 Sentinel pods monitoring the master
+  - Automatic failover if master goes down
+
+Only deployed when redis.sentinel.enabled=true.
+Otherwise, the standard single-instance redis.yaml is used.
+*/}}
+
+{{- if and .Values.redis.enabled (index .Values.redis "sentinel" | default dict).enabled }}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+---
+# ── Sentinel ConfigMap ────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-redis-sentinel-config
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis-sentinel") | nindent 4 }}
+data:
+  sentinel.conf: |
+    port 26379
+    sentinel monitor nexus-master {{ $fullname }}-redis-0.{{ $fullname }}-redis.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.redis.port | default 6379 }} 2
+    sentinel down-after-milliseconds nexus-master 5000
+    sentinel failover-timeout nexus-master 10000
+    sentinel parallel-syncs nexus-master 1
+    {{- if .Values.secrets.redisPassword }}
+    sentinel auth-pass nexus-master $(REDIS_PASSWORD)
+    {{- end }}
+
+  redis-master.conf: |
+    bind 0.0.0.0
+    port {{ .Values.redis.port | default 6379 }}
+    maxmemory {{ .Values.redis.maxMemory | default "512mb" }}
+    maxmemory-policy allkeys-lru
+    appendonly yes
+    appendfsync everysec
+    save 900 1
+    save 300 10
+    save 60 10000
+    min-replicas-to-write 1
+    min-replicas-max-lag 10
+    {{- if .Values.secrets.redisPassword }}
+    requirepass $(REDIS_PASSWORD)
+    masterauth $(REDIS_PASSWORD)
+    {{- end }}
+
+  redis-replica.conf: |
+    bind 0.0.0.0
+    port {{ .Values.redis.port | default 6379 }}
+    maxmemory {{ .Values.redis.maxMemory | default "512mb" }}
+    maxmemory-policy allkeys-lru
+    appendonly yes
+    appendfsync everysec
+    replicaof {{ $fullname }}-redis-0.{{ $fullname }}-redis.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.redis.port | default 6379 }}
+    {{- if .Values.secrets.redisPassword }}
+    requirepass $(REDIS_PASSWORD)
+    masterauth $(REDIS_PASSWORD)
+    {{- end }}
+
+  start-redis.sh: |
+    #!/bin/bash
+    set -e
+
+    HOSTNAME=$(hostname)
+    INDEX=${HOSTNAME##*-}
+
+    # Substitute env vars (REDIS_PASSWORD) into config files
+    # ConfigMaps contain $(REDIS_PASSWORD) placeholders that Redis can't expand
+    mkdir -p /tmp/redis-config
+    for f in /config/redis-master.conf /config/redis-replica.conf /config/sentinel.conf; do
+      if [ -f "$f" ]; then
+        envsubst < "$f" > "/tmp/redis-config/$(basename $f)"
+      fi
+    done
+
+    if [ "$INDEX" = "0" ]; then
+      echo "Starting as MASTER"
+      exec redis-server /tmp/redis-config/redis-master.conf
+    else
+      echo "Starting as REPLICA (index=$INDEX)"
+      exec redis-server /tmp/redis-config/redis-replica.conf
+    fi
+
+---
+# ── Redis StatefulSet (Master + Replicas) ─────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-redis
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-redis
+  replicas: {{ .Values.redis.sentinel.replicas | default 3 }}
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis") | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsNonRoot: true
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command: ["bash", "/config/start-redis.sh"]
+          {{- if .Values.secrets.redisPassword }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: redis-password
+          {{- end }}
+          ports:
+            - name: redis
+              containerPort: {{ .Values.redis.port | default 6379 }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-redis-sentinel-config
+            defaultMode: 0755
+  {{- if .Values.redis.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+
+---
+# ── Headless Service for StatefulSet DNS ──────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-redis
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: {{ .Values.redis.port | default 6379 }}
+      targetPort: redis
+      protocol: TCP
+      name: redis
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+
+---
+# ── Client Service (routes to master) ─────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-redis-master
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis-master") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.redis.port | default 6379 }}
+      targetPort: redis
+      protocol: TCP
+      name: redis
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis") | nindent 4 }}
+    statefulset.kubernetes.io/pod-name: {{ $fullname }}-redis-0
+
+---
+# ── Sentinel Deployment ───────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-redis-sentinel
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis-sentinel") | nindent 4 }}
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis-sentinel") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis-sentinel") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsNonRoot: true
+      containers:
+        - name: sentinel
+          image: {{ .Values.redis.image }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - |
+              mkdir -p /tmp/sentinel-config
+              envsubst < /config/sentinel.conf > /tmp/sentinel-config/sentinel.conf
+              exec redis-sentinel /tmp/sentinel-config/sentinel.conf
+          {{- if .Values.secrets.redisPassword }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: redis-password
+          {{- end }}
+          ports:
+            - name: sentinel
+              containerPort: 26379
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "-p", "26379", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "-p", "26379", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-redis-sentinel-config
+
+---
+# ── Sentinel Service ──────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-redis-sentinel
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "redis-sentinel") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 26379
+      targetPort: sentinel
+      protocol: TCP
+      name: sentinel
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "redis-sentinel") | nindent 4 }}
+
+{{- end }}

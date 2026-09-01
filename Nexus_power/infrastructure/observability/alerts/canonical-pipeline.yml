@@ -1,0 +1,225 @@
+# Prometheus alert rules for the Nexus QA canonical pipeline (Phase 4).
+#
+# Severity convention:
+#   page      — wake-someone-up; production user-visible breakage.
+#   ticket    — actionable within one business day.
+#   info      — operator awareness; no immediate action required.
+#
+# Burn-rate alerts follow the multi-window approach from the Google SRE
+# Workbook: a fast 5-min window flags acute outages, a 1-h window flags
+# slow burns. SLO target: 99 % success on canonical workflows. The error
+# budget over 30 days is 1 % => 7.2h. The 14.4x burn rate (5m window)
+# would consume the entire budget in 2 days — page immediately.
+
+groups:
+  - name: nexus.canonical.slo
+    interval: 30s
+    rules:
+      # ─── SLO burn-rate alerts ────────────────────────────────
+      - alert: NexusCanonicalSLOBurnRateFast
+        expr: |
+          (
+            sum(rate(nexus_workflow_completed_total{status!="success"}[5m]))
+            /
+            clamp_min(sum(rate(nexus_workflow_completed_total[5m])), 1e-9)
+          ) > 0.144
+        for: 2m
+        labels:
+          severity: page
+          slo: canonical_success_99
+        annotations:
+          summary: "Canonical pipeline burning SLO error budget fast (14.4x)"
+          description: |
+            Over the last 5 min, canonical workflows are failing at >14.4%
+            (14.4× the 1% error budget). At this rate the 30-day budget is
+            gone in <2 days. Check:
+              - DLQ depth: nexus_workflow_dlq_depth
+              - Stuck workflows: nexus_workflow_stuck_count
+              - Vision/OCR degraded: nexus_eyes_vision_degraded_total
+            Runbook: docs/runbooks/canonical-pipeline.md#slo-burn
+
+      - alert: NexusCanonicalSLOBurnRateSlow
+        expr: |
+          (
+            sum(rate(nexus_workflow_completed_total{status!="success"}[1h]))
+            /
+            clamp_min(sum(rate(nexus_workflow_completed_total[1h])), 1e-9)
+          ) > 0.03
+        for: 15m
+        labels:
+          severity: ticket
+          slo: canonical_success_99
+        annotations:
+          summary: "Canonical pipeline error rate >3 % (1h window)"
+          description: |
+            Failure rate has exceeded 3% over the past hour. This is a slow
+            burn — not on fire, but the error budget is draining. Investigate
+            within one business day.
+
+      # ─── Queue health ────────────────────────────────────────
+      - alert: NexusQueueOldestPendingHigh
+        expr: nexus_workflow_queue_oldest_pending_age_seconds > 1800
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Queue {{ $labels.lane }} has a job pending >30 min"
+          description: |
+            Oldest pending entry on {{ $labels.lane }} is {{ $value | humanizeDuration }} old.
+            A worker has likely crashed mid-step without surfacing as orphan
+            (claim_idle_ms = 30m; this should never exceed it for long).
+            Check worker logs and consumer-group XPENDING.
+
+      - alert: NexusQueueDepthGrowing
+        expr: |
+          (
+            (nexus_workflow_queue_depth - nexus_workflow_queue_depth offset 10m) > 100
+          )
+          and nexus_workflow_queue_depth > 50
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Queue {{ $labels.lane }} depth growing (+100 in 10 min)"
+          description: |
+            {{ $labels.lane }} added 100+ messages in the last 10 min without
+            corresponding drainage. Likely causes:
+              - Worker pool too small for current load — scale up.
+              - Steps timing out repeatedly and being requeued.
+
+      - alert: NexusDLQDepthHigh
+        expr: nexus_workflow_dlq_depth > 10
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "DLQ {{ $labels.lane }} has {{ $value }} messages"
+          description: |
+            DLQ depth exceeded 10 messages. Use POST /api/v1/admin/dlq/workflows/replay-all-quarantined
+            to bulk-replay after diagnosing the root cause.
+
+      # ─── Stuck workflows ─────────────────────────────────────
+      - alert: NexusWorkflowsStuck
+        expr: nexus_workflow_stuck_count > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $value }} workflow(s) stuck (running + stale heartbeat)"
+          description: |
+            One or more workflows are in RUNNING state with a heartbeat
+            stale beyond the orphan threshold (default 120s). The orphan
+            sweeper should pick these up — if they persist 5 min,
+            investigate:
+              - Worker actually alive? (xpending shows consumer)
+              - Heartbeat reaching DB? (last_heartbeat column)
+              - Use POST /api/v1/admin/dlq/workflows/{id}/force-unstick
+                to clear in_flight + heartbeat and let dispatch retry.
+
+      - alert: NexusOrphanRecoveryStorm
+        expr: rate(nexus_workflow_orphans_recovered_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Orphan recovery rate >0.1/sec for 5 min"
+          description: |
+            Workers are crashing or losing heartbeat faster than expected.
+            Check pod restart counts and worker logs for OOM / panic.
+
+      # ─── PEL replay storm (restart loops) ────────────────────
+      - alert: NexusPELReplayStorm
+        expr: |
+          sum by (lane) (increase(nexus_queue_pel_replay_total[10m])) > 50
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Lane {{ $labels.lane }} replayed {{ $value }} PEL entries in 10 min"
+          description: |
+            Repeated own-PEL replays suggest a worker restart loop — the
+            worker keeps claiming messages, crashing, and replaying its PEL
+            on next start. Check container restart count and exit code.
+
+      # ─── Phase 3 architectural pivot ─────────────────────────
+      - alert: NexusEnrichmentLagGrowing
+        expr: |
+          (
+            sum(increase(nexus_artifact_minimal_persisted_total[1h]))
+            -
+            sum(increase(nexus_artifact_enriched_total[1h]))
+          ) > 20
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Enrichment lag >20 artifacts behind for 15 min"
+          description: |
+            More minimal artifacts are being written than enriched. The
+            enrichment branch (eyes + spine update) is falling behind. Users
+            will see artifacts stuck on "Partial · enriching" badges longer
+            than expected.
+
+      - alert: NexusVisionDegradedSpike
+        expr: |
+          sum(rate(nexus_eyes_vision_degraded_total[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Vision degraded events >0.05/sec for 10 min"
+          description: |
+            LLaVA / vision model is failing repeatedly. Workflows are
+            completing with OCR-only descriptions (degraded_stages includes
+            analyze_scenes). Check:
+              - Ollama / LLaVA host availability.
+              - GPU memory pressure on eyes-engine.
+              - Model file integrity (corrupted weights).
+
+      - alert: NexusOCRFrameTimeoutSpike
+        expr: rate(nexus_eyes_ocr_frame_timeout_total[10m]) > 0.1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "OCR frame timeouts >0.1/sec for 10 min"
+          description: |
+            EasyOCR is timing out on individual frames. Possible causes:
+              - GPU contention (LLaVA + OCR competing).
+              - EYES_OCR_MAX_WORKERS too high for available RAM.
+              - Bad input frames (corrupted / oversized).
+            Drops the affected frames to placeholders — workflow still
+            completes but with reduced OCR coverage.
+
+      # ─── Workflow duration regression ────────────────────────
+      - alert: NexusWorkflowDurationP95Regression
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, kind) (rate(nexus_workflow_duration_seconds_bucket{status="success"}[15m]))
+          ) > 3600
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 workflow duration for kind={{ $labels.kind }} >1h"
+          description: |
+            p95 end-to-end duration exceeded 1 hour for 15 min. Capacity or
+            model-latency issue. Inspect step durations:
+              histogram_quantile(0.95, sum by (le, engine, step) (
+                rate(nexus_workflow_step_duration_seconds_bucket[15m])
+              ))
+
+      # ─── Sweeper health ──────────────────────────────────────
+      - alert: NexusDeadlineQuarantineSpike
+        expr: sum(rate(nexus_workflow_deadline_quarantined_total[10m])) > 0.05
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Deadline quarantines >0.05/sec for 5 min"
+          description: |
+            Workflows hitting their workflow-level deadline. Either:
+              - System is overloaded — increase capacity.
+              - Plan deadlines too aggressive — review canonical_pipeline_plan().
+              - Specific step regressing — check per-step duration.

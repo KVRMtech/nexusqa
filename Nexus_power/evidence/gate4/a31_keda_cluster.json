@@ -1,0 +1,108 @@
+{
+  "milestone": "A31",
+  "recorded_at_utc": "2026-08-21T03:56:00.531729Z",
+  "cluster": {
+    "name": "gate4-keda",
+    "context": "kind-gate4-keda",
+    "nodes": [
+      {
+        "name": "gate4-keda-control-plane",
+        "kubelet": "v1.32.2",
+        "runtime": "containerd://2.0.3",
+        "os": "Debian GNU/Linux 12 (bookworm)"
+      }
+    ]
+  },
+  "keda": {
+    "operator_image": "ghcr.io/kedacore/keda:2.20.2"
+  },
+  "manifest": {
+    "path": "infrastructure/keda/qe-explorer-scaledobject.yaml",
+    "applied_unedited": true,
+    "admission_warnings": []
+  },
+  "trigger": {
+    "ready": true,
+    "server": "http://prometheus-operated.monitoring:9090",
+    "queries": [
+      "sum(qec_crawl_queue_depth)",
+      "max(qec_crawl_queue_oldest_wait_seconds)"
+    ]
+  },
+  "scale_event": {
+    "replicas_at_queue_0": 1,
+    "queue_depth_applied": 8,
+    "replicas_observed": 4,
+    "seconds_to_scale": 30,
+    "running_pods": 4,
+    "placement": [
+      {
+        "pod": "qe-explorer-7948bd758d-85mg5",
+        "node": "gate4-keda-control-plane",
+        "phase": "Running"
+      },
+      {
+        "pod": "qe-explorer-7948bd758d-ffwkk",
+        "node": "gate4-keda-control-plane",
+        "phase": "Running"
+      },
+      {
+        "pod": "qe-explorer-7948bd758d-pn9mw",
+        "node": "gate4-keda-control-plane",
+        "phase": "Running"
+      },
+      {
+        "pod": "qe-explorer-7948bd758d-w2pgz",
+        "node": "gate4-keda-control-plane",
+        "phase": "Running"
+      }
+    ],
+    "hpa_status": {
+      "current": 1,
+      "desired": 4,
+      "metrics": [
+        {
+          "external": {
+            "current": {
+              "averageValue": "8"
+            },
+            "metric": {
+              "name": "s0-prometheus",
+              "selector": {
+                "matchLabels": {
+                  "scaledobject.keda.sh/name": "qe-explorer-queue-depth"
+                }
+              }
+            }
+          },
+          "type": "External"
+        },
+        {
+          "external": {
+            "current": {
+              "averageValue": "60"
+            },
+            "metric": {
+              "name": "s1-prometheus",
+              "selector": {
+                "matchLabels": {
+                  "scaledobject.keda.sh/name": "qe-explorer-queue-depth"
+                }
+              }
+            }
+          },
+          "type": "External"
+        }
+      ]
+    },
+    "hpa_rescale_events": [
+      "New size: 4; reason: external metric s0-prometheus(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: qe-explorer-queue-depth,},MatchExpressions:[]LabelSelectorRequirement{},}) above target"
+    ],
+    "replicas_60s_after_queue_emptied": 4
+  },
+  "boundaries": [
+    "The queue gauge is published by a stand-in exporter, not by qe-central's queue_drainer._publish_fleet_metrics tick.",
+    "The scaled container is a sleeping busybox, not the 3GB Playwright explorer image; what is proven is the scaling control loop, not the explorer runtime.",
+    "Single-node kind cluster: node placement is observed but multi-node spreading is not exercised."
+  ]
+}

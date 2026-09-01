@@ -1,0 +1,40 @@
+# Root application — the "app-of-apps". Pulls every ApplicationSet under
+# infrastructure/gitops/applicationsets/ and keeps them reconciled.
+#
+# Once this Application exists in the cluster, every other deployment in
+# the platform is driven by Git commits to this repo. No further
+# imperative kubectl commands are required for routine operations.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: ${PLATFORM_REPO_URL}
+    targetRevision: ${PLATFORM_TARGET_REVISION}
+    path: infrastructure/gitops/applicationsets
+    directory:
+      recurse: true
+      include: '*.yaml'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m

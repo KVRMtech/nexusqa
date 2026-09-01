@@ -1,0 +1,84 @@
+═══════════════════════════════════════════════════════════════
+ VKPower Verdict — installed
+═══════════════════════════════════════════════════════════════
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Env:       {{ .Values.env.nexusEnv }}   (KEK provider: {{ .Values.kek.provider }})
+
+{{- $fullname := include "verdict.fullname" . }}
+
+── Fail-closed boot ───────────────────────────────────────────
+{{- if or (eq .Values.env.nexusEnv "staging") (eq .Values.env.nexusEnv "production") }}
+This is a DEPLOYED env — qe-central will REFUSE to boot on a dev/empty
+JWT secret, explorer token, DB password, or the `local` KEK. If the
+qe-central pod CrashLoops right after install, that is the safety spine
+working: check its logs for `qe_central.boot_safety.REFUSED` and set the
+missing secret / a real KMS provider.
+{{- else }}
+env.nexusEnv={{ .Values.env.nexusEnv }} — the boot gate is WARN-only here
+(dev/test). Do NOT run a client's data on a non-production env.
+{{- end }}
+
+── Access the portal ──────────────────────────────────────────
+{{- if .Values.ingress.enabled }}
+  https://{{ .Values.ingress.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-verdict-portal {{ .Values.portal.port }}:{{ .Values.portal.port }}
+  # then open http://localhost:{{ .Values.portal.port }}
+{{- end }}
+
+── Health + metrics ───────────────────────────────────────────
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-qe-central {{ .Values.qeCentral.port }}:{{ .Values.qeCentral.port }}
+  curl -s localhost:{{ .Values.qeCentral.port }}/health | python -m json.tool
+  #   expect status "healthy" and kek.is_production_grade true in a deployed env
+  curl -s localhost:{{ .Values.qeCentral.port }}{{ .Values.env.metricsPath }} | head
+
+── Services ───────────────────────────────────────────────────
+  qe-central:    {{ $fullname }}-qe-central:{{ .Values.qeCentral.port }}
+{{- if .Values.qeExplorer.enabled }}
+  qe-explorer:   {{ $fullname }}-qe-explorer:{{ .Values.qeExplorer.port }}   (quarantined — no DB, no direct internet)
+{{- end }}
+{{- if .Values.egressProxy.enabled }}
+  egress-proxy:  {{ $fullname }}-egress-proxy:{{ .Values.egressProxy.port }}   (single NAT hop, host allowlist)
+{{- end }}
+{{- if .Values.repoIntel.enabled }}
+  repo-intel:    {{ $fullname }}-repo-intel:{{ .Values.repoIntel.port }}
+{{- end }}
+{{- if .Values.portal.enabled }}
+  portal:        {{ $fullname }}-verdict-portal:{{ .Values.portal.port }}
+{{- end }}
+{{- if .Values.postgres.enabled }}
+  qecentral DB:  {{ $fullname }}-postgres:{{ .Values.postgres.port }} (chart-managed)
+{{- else }}
+  qecentral DB:  {{ .Values.postgres.external.host }}:{{ default .Values.postgres.port .Values.postgres.external.port }} (external)
+{{- end }}
+
+── Egress allowlist (fail-closed) ─────────────────────────────
+{{- if .Values.egressProxy.allowedDomains }}
+  Target domains the explorer may reach (squid host allowlist):
+  {{- range .Values.egressProxy.allowedDomains }}
+    - {{ . }}
+  {{- end }}
+{{- else }}
+  ⚠  egressProxy.allowedDomains is EMPTY ⇒ the proxy denies ALL real egress
+     (fail-closed). Set it to the onboarded target app's domain(s) before a
+     live crawl.
+{{- end }}
+
+── One-time prerequisite (OUTSIDE this chart) ─────────────────
+The `qec_substrate` role + its least-privilege grants on the factory
+`nexus` DB are a superuser step this chart does NOT perform (VKPower stays
+untouchable). Run scripts/qec_db_bootstrap.sql once. See the runbook:
+  QECentral/docs/ONPREM_INSTALL.md
+
+── Data residency ─────────────────────────────────────────────
+All Verdict data + evidence stays in THIS cluster/tenant. The only outbound
+path is the egress proxy to the allowlisted target app during a crawl.
+{{- if .Values.networkPolicies.enabled }}
+NetworkPolicies are ON (requires a policy-enforcing CNI).
+{{- else }}
+⚠  networkPolicies.enabled is FALSE — the explorer isolation invariants are
+   NOT enforced. Turn this ON for any regulated install.
+{{- end }}
+═══════════════════════════════════════════════════════════════

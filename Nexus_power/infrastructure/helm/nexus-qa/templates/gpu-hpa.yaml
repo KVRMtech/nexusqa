@@ -1,0 +1,201 @@
+{{/*
+=================================================================
+GPU Engine HPA — Queue-Depth Based Auto-Scaling
+=================================================================
+Scales GPU worker pods (Ears, Eyes, Heart) based on Redis Streams
+queue depth instead of CPU utilization.
+
+Requires:
+  1. prometheus-adapter or KEDA installed in the cluster
+  2. Queue metrics exporter running (nexus_sdk.queue_metrics)
+  3. PrometheusRule scraping the exporter
+
+This template supports two scaling modes:
+  - "prometheus": Uses custom.metrics.k8s.io from prometheus-adapter
+  - "keda": Uses KEDA ScaledObject (comment out HPA, enable ScaledObject)
+*/}}
+
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+
+{{/* GPU engines that need queue-based scaling */}}
+{{- $gpuEngines := dict
+  "ears"  "ears-engine"
+  "eyes"  "eyes-engine"
+  "heart" "heart-engine"
+}}
+
+{{- range $key, $component := $gpuEngines }}
+{{- $svc := index $root.Values.engines $key }}
+{{- if and $svc.enabled (default false (dig "autoscaling" "enabled" false $svc)) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullname }}-{{ $component }}
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" $component) | nindent 4 }}
+  annotations:
+    nexus-qa/scaling-mode: "gpu-queue-depth"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullname }}-{{ $component }}
+  minReplicas: {{ $svc.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ $svc.autoscaling.maxReplicas | default 10 }}
+  metrics:
+    {{- if $svc.autoscaling.targetQueueDepth }}
+    # Primary: Scale based on queue depth (jobs waiting per replica)
+    - type: External
+      external:
+        metric:
+          name: nexus_queue_depth
+          selector:
+            matchLabels:
+              engine: {{ $key }}
+        target:
+          type: AverageValue
+          averageValue: {{ $svc.autoscaling.targetQueueDepth | quote }}
+    {{- end }}
+    {{- if $svc.autoscaling.targetPendingCount }}
+    # Secondary: Scale based on pending (claimed but unacked) jobs
+    - type: External
+      external:
+        metric:
+          name: nexus_queue_pending
+          selector:
+            matchLabels:
+              engine: {{ $key }}
+        target:
+          type: AverageValue
+          averageValue: {{ $svc.autoscaling.targetPendingCount | quote }}
+    {{- end }}
+    {{- if $svc.autoscaling.targetCPU }}
+    # Fallback: CPU-based scaling (useful when queue metrics unavailable)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $svc.autoscaling.targetCPU }}
+    {{- end }}
+  behavior:
+    scaleDown:
+      # Conservative scale-down: wait 5 minutes, scale 1 pod at a time
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      # Aggressive scale-up: react within 30s, up to 2 pods at a time
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+      selectPolicy: Max
+{{- end }}
+{{- end }}
+
+{{/*
+=================================================================
+Queue Metrics Exporter Deployment
+=================================================================
+Lightweight pod that exposes Prometheus metrics for GPU queue depth.
+Required for the HPA above to function.
+*/}}
+{{- if .Values.queueMetrics.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-queue-metrics
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "queue-metrics") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "queue-metrics") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "queue-metrics") | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.queueMetrics.port | default 9191 | quote }}
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "nexus-qa.fullname" .) }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: queue-metrics
+          image: {{ include "nexus-qa.image" (dict "root" $root "service" "queue-metrics" "tag" "") }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command: ["python", "-m", "nexus_sdk.queue_metrics"]
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.queueMetrics.port | default 9191 }}
+              protocol: TCP
+          env:
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "nexus-qa.configName" $root }}
+                  key: REDIS_PORT
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus-qa.secretName" $root }}
+                  key: redis-password
+            - name: REDIS_QUEUE_DB
+              value: "3"
+            - name: METRICS_PORT
+              value: {{ .Values.queueMetrics.port | default 9191 | quote }}
+            - name: METRICS_INTERVAL_SECONDS
+              value: {{ .Values.queueMetrics.intervalSeconds | default 10 | quote }}
+            - name: GPU_ENGINES
+              value: "ears,eyes,heart"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-queue-metrics
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "queue-metrics") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.queueMetrics.port | default 9191 }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "nexus-qa.componentSelectorLabels" (dict "root" $root "component" "queue-metrics") | nindent 4 }}
+{{- end }}

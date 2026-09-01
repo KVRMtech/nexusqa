@@ -1,0 +1,148 @@
+{{/*
+=================================================================
+Argo Rollouts AnalysisTemplates
+
+Reusable analysis blocks consumed by per-Rollout `analysis.templates`
+entries. Each template parameterises its Prometheus query via `args`
+so a Rollout can supply the service / engine label without forking
+the template.
+
+These templates assume:
+  - A Prometheus accessible at .Values.monitoring.prometheus.url
+    (default in-cluster service).
+  - The standard RED metrics are exposed by every service under the
+    `service=<component>` label (handled by ServiceMonitor template
+    in M0.6.d below).
+
+Templates emitted:
+  - slo-burn-rate     — multi-window multi-burn-rate (Google SRE book)
+  - error-rate        — short-window error ratio over total requests
+  - latency-p95       — p95 latency must stay below an SLO threshold
+  - prometheus-up     — defensive guard: aborts if Prometheus is down
+
+Argo Rollouts CRDs ship at apiVersion argoproj.io/v1alpha1.
+=================================================================
+*/}}
+
+{{- if .Values.rollout.enabled }}
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $prom := default (printf "http://%s-prometheus:%v" $fullname (default 9090 .Values.monitoring.prometheus.port)) .Values.rollout.prometheus.address }}
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ $fullname }}-slo-burn-rate
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: service
+    - name: namespace
+      value: {{ .Release.Namespace | quote }}
+    # Burn-rate threshold. 14.4 = "2% of monthly budget burned in 1h"
+    # which is the SRE-book fast-burn threshold. Tune per-env in values.
+    - name: burn-rate-threshold
+      value: {{ .Values.rollout.analysis.burnRateThreshold | default "14.4" | quote }}
+    # SLO target for availability (request success rate). 0.995 = 99.5%.
+    - name: slo
+      value: {{ .Values.rollout.analysis.slo | default "0.995" | quote }}
+  metrics:
+    - name: fast-burn-rate
+      interval: 1m
+      count: 5                       # observe at least 5 samples
+      successCondition: result[0] < {{`{{args.burn-rate-threshold}}`}}
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: {{ $prom | quote }}
+          # Burn-rate = (1 - SuccessRate) / (1 - SLO)
+          # The numerator is over a 1h window (sensitive); the denominator
+          # uses (1 - slo) so the threshold is dimensionless.
+          query: |
+            (
+              sum(rate(http_requests_total{namespace="{{`{{args.namespace}}`}}",service="{{`{{args.service}}`}}",code=~"5.."}[1h]))
+              /
+              sum(rate(http_requests_total{namespace="{{`{{args.namespace}}`}}",service="{{`{{args.service}}`}}"}[1h]))
+            )
+            /
+            (1 - {{`{{args.slo}}`}})
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ $fullname }}-error-rate
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: service
+    - name: namespace
+      value: {{ .Release.Namespace | quote }}
+    - name: max-error-rate
+      value: {{ .Values.rollout.analysis.maxErrorRate | default "0.01" | quote }}
+  metrics:
+    - name: error-rate
+      interval: 30s
+      count: 5
+      successCondition: isNaN(result[0]) || result[0] <= {{`{{args.max-error-rate}}`}}
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: {{ $prom | quote }}
+          query: |
+            sum(rate(http_requests_total{namespace="{{`{{args.namespace}}`}}",service="{{`{{args.service}}`}}",code=~"5.."}[2m]))
+            /
+            sum(rate(http_requests_total{namespace="{{`{{args.namespace}}`}}",service="{{`{{args.service}}`}}"}[2m]))
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ $fullname }}-latency-p95
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: service
+    - name: namespace
+      value: {{ .Release.Namespace | quote }}
+    - name: max-latency-seconds
+      value: {{ .Values.rollout.analysis.maxLatencyP95Seconds | default "1.5" | quote }}
+  metrics:
+    - name: latency-p95
+      interval: 30s
+      count: 5
+      successCondition: isNaN(result[0]) || result[0] <= {{`{{args.max-latency-seconds}}`}}
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: {{ $prom | quote }}
+          query: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(http_request_duration_seconds_bucket{namespace="{{`{{args.namespace}}`}}",service="{{`{{args.service}}`}}"}[2m])
+              )
+            )
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ $fullname }}-prometheus-up
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  metrics:
+    - name: prometheus-up
+      interval: 30s
+      count: 3
+      successCondition: result[0] == 1
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: {{ $prom | quote }}
+          query: vector(1)
+{{- end }}

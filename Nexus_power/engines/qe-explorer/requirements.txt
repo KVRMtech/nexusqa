@@ -1,0 +1,65 @@
+# QE-Central Contained Explorer (S2) — service dependencies.
+#
+# Base image mcr.microsoft.com/playwright/python:v1.48.0-jammy already ships
+# CPython 3.10 (jammy) + Playwright 1.48.0 + the browser binaries under
+# /ms-playwright, so `playwright` is deliberately NOT pinned here (it is baked
+# into the image at the version the Dockerfile FROM line locks). Only the
+# service-specific web stack is installed. All pins are exact for reproducible,
+# auditable builds (this container touches client apps).
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+httpx==0.27.2
+pydantic==2.10.3
+pydantic-settings==2.6.1
+PyYAML==6.0.2
+structlog==24.4.0
+# M0.6 observability — the /metrics exposition + the crawl-lifecycle metric
+# families (app/metrics.py). Import-guarded on the app side, so a checkout
+# without it still runs; the container always has it.
+prometheus-client==0.21.1
+# The playwright browsers are baked into the base image (/ms-playwright), but the
+# playwright PYTHON package is not exposed to the app interpreter in this build —
+# pin it explicitly (matching the base's browser version) so the crawler can
+# ``import playwright``. pip installs only the package; the browsers come from the base.
+playwright==1.48.0
+# M1.3 - Ed25519 verification of platform-issued disposable-environment
+# attestations (app/attest.py). VERIFICATION ONLY: this service holds public
+# keys and never a private half, so it cannot mint a proof it would accept.
+# Pinned exactly, like every other dependency in this container.
+cryptography==43.0.1
+# M3.3 / T-FL-03 — the durable evidence handoff. This service publishes a
+# finished crawl's manifest + frames to object storage BEFORE the completion
+# callback, so a qe-central pod on another node can ingest it and a pod restart
+# cannot destroy it.
+#
+# boto3 (not the SDK's aiobotocore) because the contained explorer deliberately
+# carries no ``nexus_sdk`` dependency — see app/evidence_publisher.py. Pinned
+# exactly, like every other dependency in this container.
+boto3==1.35.36
+# Gate 0 / A4 — the crawl-wide performance baseline (measure_crawl_performance.py)
+# samples RSS and CPU across this process AND its children, because the browser is
+# a child process and a crawl's real footprint is both. The instrument degrades to
+# timings-only without psutil rather than failing, so this pin is what makes the
+# memory and CPU columns of the baseline present instead of "not measured".
+psutil==7.0.0
+# M3.1 / T-VIS-05 — the pixel redaction that must run BEFORE any screenshot can
+# egress to a model (app/pixel_redaction.py), and the perceptual hash that gives a
+# canvas app distinct state fingerprints (app/perception.py).
+#
+# UNDECLARED UNTIL NOW, AND THAT WAS NOT A HARMLESS OMISSION. Both modules import
+# Pillow lazily and degrade honestly without it — `redact_screenshot` returns None
+# and the vision path treats None as "do not send", so no image has ever leaked.
+# What DID happen is quieter: four test modules skip at import when PIL is absent,
+# so `qe-explorer-tests` reported `1967 passed, 4 skipped` and the four skip lines
+# concealed 69 tests. Among them is the whole of test_vision_loop.py — the unit
+# suite for the law that a vision prediction is never catalog truth until R0
+# verifies it. The single most safety-critical promotion rule in this engine had
+# never executed in CI, and the lane was green throughout.
+#
+# The failure class is the one this repository keeps rediscovering: a missing
+# dependency produces a SMALLER true suite, never a failing one.
+#
+# Exact pin, like every other dependency in this container. 10.4.0 is the highest
+# release inside the >=10.2,<11.0 range that engines/eyes-engine already runs, so
+# the two services that decode PNGs agree on the decoder.
+Pillow==10.4.0

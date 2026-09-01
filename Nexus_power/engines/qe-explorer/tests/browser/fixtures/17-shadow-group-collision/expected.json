@@ -1,0 +1,22 @@
+{
+  "purpose": "Two independent questions, one per shadow root, neither with any declared container identity. They must remain TWO questions. This guards a collision introduced by the CAP-02 shadow-scoping fix itself: scoping name resolution to the owning root also scopes groupContainerKey's positional lookup, so both containers index as 0 within their own root.",
+  "targeted_defect": "Regression guard (introduced-by-the-fix). Without a root discriminator in the container key, the two radiogroups both key 'ix:0', GROUP_ASSEMBLE merges them into one question of four answers, and the crawl records a form the application does not have - answering one question with the other's option.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {
+      "where": {"name": "Tobacco Yes"},
+      "fields": {"role": "radio", "frame_selector": ""}
+    },
+    {
+      "where": {"name": "Alcohol No"},
+      "fields": {"role": "radio", "frame_selector": ""}
+    }
+  ],
+  "group_key_partition": {
+    "expect_distinct_nonempty": 2,
+    "expect_group_sizes": 2,
+    "why": "TWO distinct questions of TWO answers each. A single distinct key means the roots collided and the questions merged; four would mean the grouping shattered."
+  }
+}

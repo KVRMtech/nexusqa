@@ -1,0 +1,160 @@
+{{/*
+=================================================================
+verdict-portal — the Verdict Command Center SPA (nginx static + API proxy).
+
+The portal holds NO server credentials: its only authority is the
+operator's own JWT, entered at sign-in and kept in sessionStorage. The
+chart ships an nginx config that proxies /api, /health and /webhooks to
+the in-cluster qe-central Service (the baked image config points at the
+compose service name "qe-central", which does not resolve under Helm's
+fullname-prefixed Service names — so this ConfigMap overrides it).
+=================================================================
+*/}}
+{{- if .Values.portal.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+{{- $qecUpstream := printf "%s-qe-central:%d" $fullname (int .Values.qeCentral.port) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-portal-nginx
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "verdict-portal") | nindent 4 }}
+data:
+  default.conf: |
+    server {
+        listen {{ .Values.portal.port }};
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+        location /assets/ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            try_files $uri =404;
+        }
+
+        location /api/ {
+            proxy_pass http://{{ $qecUpstream }};
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        location = /health {
+            proxy_pass http://{{ $qecUpstream }}/health;
+        }
+        location /webhooks/ {
+            proxy_pass http://{{ $qecUpstream }};
+            proxy_set_header Host $host;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-verdict-portal
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "verdict-portal") | nindent 4 }}
+spec:
+  replicas: {{ .Values.portal.replicas }}
+  selector:
+    matchLabels:
+      {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "verdict-portal") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "verdict-portal") | nindent 8 }}
+      annotations:
+        # Restart the portal when its nginx config actually changes. Hash the config's
+        # inputs (portal values + the qe-central upstream) — NOT the whole template
+        # file, which contains this Deployment and would self-include → infinite recursion.
+        checksum/nginx: {{ printf "%v-%v" (.Values.portal | toYaml) $qecUpstream | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "verdict.fullname" .) }}
+      {{- include "verdict.podSpecCommon" $root | nindent 6 }}
+      containers:
+        - name: verdict-portal
+          image: {{ include "verdict.image" (dict "root" $root "name" .Values.portal.image.name "tag" .Values.portal.image.tag) }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.portal.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.portal.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 4
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: {{ $fullname }}-portal-nginx
+        - name: nginx-cache
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: nginx-run
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-verdict-portal
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "verdict-portal") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.portal.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "verdict-portal") | nindent 4 }}
+{{- end }}

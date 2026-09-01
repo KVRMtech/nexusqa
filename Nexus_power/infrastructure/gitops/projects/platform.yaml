@@ -1,0 +1,66 @@
+# AppProject for the canonical processing platform itself.
+#
+# This project is the tightest of the three. The only source allowed is
+# the in-repo Helm chart at infrastructure/helm/nexus-qa/, and the only
+# destination is the nexus-platform namespace. An Application that
+# references any other chart or namespace cannot exist under this project.
+#
+# The repoURL placeholder ${PLATFORM_REPO_URL} is rendered by the
+# Makefile / CI from envs/_shared/repo.yaml during bootstrap. After
+# bootstrap, every commit to that chart path triggers an Argo CD sync.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: |
+    Universal canonical processing platform. Sourced exclusively from
+    this repo, deployed exclusively to nexus-platform namespace.
+  sourceRepos:
+    - ${PLATFORM_REPO_URL}
+  destinations:
+    - namespace: nexus-platform
+      server: '*'
+  clusterResourceWhitelist:
+    # CRDs the platform legitimately needs at cluster scope. Anything
+    # outside this list cannot be created via a platform Application.
+    - group: cert-manager.io
+      kind: '*'
+    - group: external-secrets.io
+      kind: ClusterSecretStore
+    - group: networking.k8s.io
+      kind: '*'
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: argoproj.io
+      kind: '*'
+    - group: monitoring.coreos.com
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  signatureKeys:
+    # Production deploys must be signed. Public key fingerprints are
+    # uploaded via the ArgoCD GPG configuration; revisions whose tags or
+    # commits are not signed by an approved key are rejected at sync time.
+    # Production env config in envs/production/config.yaml enables this.
+    - keyID: REPLACE_WITH_GPG_KEY_ID
+  roles:
+    - name: release-engineer
+      description: Sync platform Applications across all environments
+      policies:
+        - p, proj:platform:release-engineer, applications, sync, platform/*, allow
+        - p, proj:platform:release-engineer, applications, action/*, platform/*, allow
+      groups:
+        - platform-release-engineers
+    - name: production-approver
+      description: Approve production sync of new image tags
+      policies:
+        - p, proj:platform:production-approver, applications, override, platform/*-production, allow
+      groups:
+        - platform-production-approvers

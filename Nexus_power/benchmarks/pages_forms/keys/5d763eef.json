@@ -1,0 +1,204 @@
+{
+  "artifact_id": "5d763eef-9f85-4277-8ee1-fa26d158afda",
+  "key_status": "draft",
+  "video_class": "TODO: describe the recording (human)",
+  "pages": [
+    {
+      "host": "34.124.214.109",
+      "path_prefix": "/apply/profile"
+    },
+    {
+      "host": "34.124.214.109",
+      "path_prefix": "/apply/coverage"
+    },
+    {
+      "host": "34.124.214.109",
+      "path_prefix": "/apply/review"
+    },
+    {
+      "host": "34.124.214.109",
+      "path_prefix": "/apply/done"
+    }
+  ],
+  "values": [
+    {
+      "label": "Email",
+      "value": "jordan.reyes@example.com"
+    },
+    {
+      "label": "Email",
+      "value": "you@example.com"
+    },
+    {
+      "label": "First name",
+      "value": "reddy"
+    },
+    {
+      "label": "Last name",
+      "value": "karna"
+    },
+    {
+      "label": "Country",
+      "value": "United States"
+    },
+    {
+      "label": "State / Province",
+      "value": "Texas"
+    },
+    {
+      "label": "Date of birth",
+      "value": "01/01/2005"
+    },
+    {
+      "label": "Tax ID / SSN",
+      "value": "455"
+    },
+    {
+      "label": "Phone",
+      "value": "(985) 544-5552"
+    },
+    {
+      "label": "Employment",
+      "value": "Employed"
+    },
+    {
+      "label": "E-signature \u2014 type your full legal name",
+      "value": "reddirt"
+    },
+    {
+      "label": "Date of birth",
+      "value": "01/01/2025"
+    },
+    {
+      "label": "Beneficiary full name",
+      "value": "reddd"
+    },
+    {
+      "label": "Email",
+      "value": "jordan.reyes@example.com"
+    },
+    {
+      "label": "Last name",
+      "value": "karna"
+    },
+    {
+      "label": "Phone",
+      "value": "(985) 544-5552"
+    },
+    {
+      "label": "Tax ID / SSN",
+      "value": "455-24-5225"
+    },
+    {
+      "label": "Employment",
+      "value": "Self-employed"
+    },
+    {
+      "label": "Plan tier",
+      "value": "Silver \u2014 Balanced"
+    },
+    {
+      "label": "Beneficiary full name",
+      "value": "reddd"
+    },
+    {
+      "label": "State / Province",
+      "value": "Texas"
+    },
+    {
+      "label": "First name",
+      "value": "reddy"
+    }
+  ],
+  "forms": [
+    {
+      "label": "Phone",
+      "value": "(555) 123-4567"
+    },
+    {
+      "label": "Country",
+      "value": "United States"
+    },
+    {
+      "label": "State / Province",
+      "value": "Texas"
+    },
+    {
+      "label": "Plan tier",
+      "value": "Silver \u2014 Balanced"
+    },
+    {
+      "label": "Coverage amount",
+      "value": "$250,000"
+    },
+    {
+      "label": "Plan tier",
+      "value": "Silver \u2014 Balanced"
+    },
+    {
+      "label": "Coverage amount",
+      "value": "$250,000"
+    },
+    {
+      "label": "Beneficiary full name",
+      "value": "reddd"
+    },
+    {
+      "label": "Tobacco & hazardous activity disclosure",
+      "value": "I confirm the disclosures above are accurate."
+    },
+    {
+      "label": "Phone",
+      "value": "(985) 544-5552"
+    },
+    {
+      "label": "Country",
+      "value": "United States"
+    },
+    {
+      "label": "Last name",
+      "value": "karna"
+    },
+    {
+      "label": "First name",
+      "value": "reddy"
+    },
+    {
+      "label": "Tax ID / SSN",
+      "value": "455-24-5225"
+    },
+    {
+      "label": "Date of birth",
+      "value": "01/01/2025"
+    },
+    {
+      "label": "State / Province",
+      "value": "Texas"
+    },
+    {
+      "label": "Plan tier",
+      "value": "Silver \u2014 Balanced"
+    },
+    {
+      "label": "Coverage amount",
+      "value": "$250,000"
+    },
+    {
+      "label": "Risk disclosure",
+      "value": "Tobacco & hazardous activity disclosure"
+    },
+    {
+      "label": "Beneficiary full name",
+      "value": "reddd"
+    },
+    {
+      "label": "E-signature \u2014 type your full legal name",
+      "value": "reddat"
+    },
+    {
+      "label": "E-signature \u2014 type your full legal name",
+      "value": "reddirt"
+    }
+  ],
+  "notes": "DRAFT seeded from the pipeline's own extraction \u2014 CIRCULAR until a human verifies every entry against the actual video and sets key_status='verified'. Add anything the pipeline MISSED."
+}

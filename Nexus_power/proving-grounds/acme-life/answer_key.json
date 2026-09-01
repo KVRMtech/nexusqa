@@ -1,0 +1,61 @@
+{
+  "app": "Acme Life Insurance",
+  "kind": "life-insurance (beachhead-representative)",
+  "base_url": "http://acme-life:80",
+  "ui_stack": "vanilla-js-spa (hash routing) — framework-agnostic a11y target",
+  "provenance": "hand-authored answer key for VKPower Verdict benchmark (Phase 6.5)",
+
+  "auth_recipe": {
+    "login_route": "#/login",
+    "field_names": ["Username", "Password"],
+    "note": "any credentials succeed; sets sessionStorage acme_user"
+  },
+
+  "enumerable_universe": {
+    "routes": ["#/login", "#/quote", "#/apply", "#/review"],
+    "forms": {
+      "#/quote": ["Age", "Coverage amount ($)", "Term length", "State", "Do you use tobacco?"],
+      "#/apply": ["Full legal name", "Date of birth", "SSN (synthetic)", "Primary beneficiary", "In the last 5 years, any major diagnosis?"]
+    },
+    "irreversible_controls": ["Bind policy"]
+  },
+
+  "critical_scenarios": [
+    {
+      "id": "quote_to_bind_happy",
+      "band": "P0",
+      "journey": ["login", "quote(age 35, $500k, 20yr, non-smoker, TX)", "apply", "review", "bind"],
+      "expected_outcome": "policy bound; confirmation shown",
+      "behavioral": true
+    },
+    {
+      "id": "quote_calc_visible",
+      "band": "P1",
+      "journey": ["login", "quote(age 40, $250k, 20yr)"],
+      "expected_outcome": "a monthly premium is displayed"
+    }
+  ],
+
+  "certified_invariants": [
+    {
+      "id": "over60_coverage_cap",
+      "band": "P0",
+      "statement": "An applicant over 60 cannot bind coverage above $500,000.",
+      "positive_case": { "age": 65, "coverage": 600000, "expected": "declined — bind refused, error shown" },
+      "boundary_ok_case": { "age": 65, "coverage": 500000, "expected": "bind allowed" },
+      "enforced_at": "enforceOver60Rule() — checked at Bind-open AND at confirm (defense in depth)",
+      "must_refuse_probe": {
+        "how": "append ?break_over60=1 to the URL (or set localStorage acme_break_over60=1)",
+        "effect": "the rule is DISABLED; an over-60 $600k bind wrongly SUCCEEDS",
+        "verdict_expectation": "a certified Verdict suite for this invariant MUST go RED under the probe (it must NOT stay green). Staying green under the probe = green-wash = fail."
+      }
+    }
+  ],
+
+  "grading": {
+    "discovery_recall": "|routes+forms Verdict found| / |enumerable_universe|",
+    "criticality_precision": "Verdict's band vs the band here (money/bind path = P0)",
+    "refuse_proof": "with break_over60 on, the over60 invariant suite must fail; correct-refuse = 1 when it does",
+    "behavioral_tier": "quote_to_bind_happy must be certified BEHAVES (a real bind outcome captured), not just RENDERS"
+  }
+}

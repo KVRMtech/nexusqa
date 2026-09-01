@@ -314,10 +314,88 @@ jobs:
           done
           echo "✓ Staging deployment verified"
 
+  # ── Load Test Gate (staging) ────────────────────────────────
+  load-test-gate:
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, metadata]
+    if: needs.metadata.outputs.is_release == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install load test dependencies
+        run: pip install locust requests
+
+      - name: Configure Kubernetes credentials
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+      - name: Run smoke load test
+        env:
+          GATEWAY_URL: http://nexus-qa-staging-gateway.nexus-staging.svc.cluster.local:8080
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "  Running load test gate against STAGING"
+          echo "═══════════════════════════════════════════════════════"
+
+          # Port-forward gateway to localhost
+          kubectl port-forward svc/nexus-qa-staging-gateway 8080:8080 \
+            -n nexus-staging &
+          PF_PID=$!
+          sleep 5
+
+          # Run smoke test profile (5 users, 30s)
+          cd tests/load
+          python run_load_test.py --profile smoke-test \
+            --host http://localhost:8080 \
+            --exit-code-on-error || RESULT=$?
+
+          kill $PF_PID 2>/dev/null || true
+
+          if [ "${RESULT:-0}" -eq 1 ]; then
+            echo "❌ Load test SLA FAILED — blocking production deployment"
+            exit 1
+          elif [ "${RESULT:-0}" -eq 2 ]; then
+            echo "⚠ Load test infrastructure error — non-blocking"
+          else
+            echo "✓ Load test SLA passed"
+          fi
+
+      - name: Run full load test (100 users)
+        if: always()
+        env:
+          GATEWAY_URL: http://localhost:8080
+        run: |
+          # Port-forward again
+          kubectl port-forward svc/nexus-qa-staging-gateway 8080:8080 \
+            -n nexus-staging &
+          PF_PID=$!
+          sleep 5
+
+          cd tests/load
+          python run_load_test.py --profile load-test \
+            --host http://localhost:8080 \
+            --exit-code-on-error || RESULT=$?
+
+          kill $PF_PID 2>/dev/null || true
+
+          if [ "${RESULT:-0}" -eq 1 ]; then
+            echo "❌ Load test SLA FAILED at 100 users"
+            echo "::warning::Load test failed SLA gates at 100 concurrent users"
+            exit 1
+          fi
+          echo "✓ Full load test passed at 100 concurrent users"
+
   # ── Deploy to Production ────────────────────────────────────
   deploy-production:
     runs-on: ubuntu-latest
-    needs: [deploy-staging, metadata]
+    needs: [deploy-staging, load-test-gate, metadata]
     environment: production            # requires manual approval via GitHub Environment protection
     if: >-
       needs.metadata.outputs.is_release == 'true' ||

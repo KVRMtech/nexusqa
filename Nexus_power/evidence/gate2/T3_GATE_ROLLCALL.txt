@@ -1,0 +1,12 @@
+::error::Phase 1 needs 3 admissible crossings, has 1.
+  [ADMISSIBLE] evidence/gate2/r3_acme_reproduced/journey.json
+  [REFUSED]    evidence\gate2\r1_vkpower_live\journey.json: provenance is not the certified SHA — bundle head=8c443f294136 certified=e24bcf54d088
+  [REFUSED]    evidence\gate2\r1_vkpower_live\journey.json: NO CROSSING — boundaries_crossed == 0
+  [REFUSED]    evidence\gate2\r1_vkpower_live\journey.json: no confirmation observed — a crossing without an observed outcome proves a click, not an effect
+  [REFUSED]    evidence\gate2\r1_vkpower_live\journey.json: no outcome milestone stored — nothing durable to replay against
+  [REFUSED]    evidence\gate2\r2_summit_live\journey.json: provenance is not the certified SHA — bundle head=8c443f294136 certified=e24bcf54d088
+  [REFUSED]    evidence\gate2\r2_summit_live\journey.json: NO CROSSING — boundaries_crossed == 0
+  [REFUSED]    evidence\gate2\r2_summit_live\journey.json: no confirmation observed — a crossing without an observed outcome proves a click, not an effect
+  [REFUSED]    evidence\gate2\r2_summit_live\journey.json: no outcome milestone stored — nothing durable to replay against
+
+admissible: 1/3

@@ -1,0 +1,28 @@
+# QE-Central — substrate writer + Phase-0 REFUSE harness + S5 control plane.
+# The nexus-base image preinstalls the SDK (fastapi, uvicorn, pydantic v2,
+# pydantic-settings, SQLAlchemy 2 async, asyncpg, alembic, PyJWT, httpx,
+# cryptography) — only service-specific extras belong here.
+# M3.3 / T-FL-03 — the ``storage-s3`` extra (aiobotocore) is REQUIRED, not
+# optional: the durable crawl-evidence handoff goes through
+# ``nexus_sdk.storage``'s S3 backend, and without aiobotocore that backend
+# raises at first use. NOTE this also fixes a pre-existing latent gap —
+# ``app/substrate/assets.py`` already used the same S3 backend for screenshot
+# assets and would have failed the same way on any s3-configured deployment.
+-e ../../sdk/nexus-sdk[storage-s3]
+structlog>=24.1,<25.0
+# S5 control plane — cron schedule parsing for the cycle driver (design §3.5).
+# Import-guarded at the driver so a local checkout without it still loads.
+croniter>=2.0,<3.0
+# Phase-5.5 distributed scale-out — the shared, atomic, fail-closed admission
+# limiter backend (QEC_ADMISSION_BACKEND=redis). Import-guarded at
+# app/controlplane/scheduling/distributed.py, so its absence NEVER breaks the
+# default in-memory (memory) mode. redis.asyncio ships in redis-py 5+.
+redis>=5,<6
+# Phase-5.5 observability — Prometheus exposition for the /metrics endpoint.
+# Import-guarded in app.observability.metrics so a local checkout without it
+# still loads (every record_* helper then no-ops).
+prometheus-client>=0.20,<1.0
+# Phase-6 safety spine — google-cloud-kms backs nexus_sdk.security.envelope's
+# GcpKmsProvider (the production KEK). Required so the fail-closed boot can prove
+# the envelope with a real GCP KMS key (else envelope_ready=false → degraded).
+google-cloud-kms>=2.21,<4

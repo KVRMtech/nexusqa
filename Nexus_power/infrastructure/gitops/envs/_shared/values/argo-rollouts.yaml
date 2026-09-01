@@ -1,0 +1,52 @@
+# Argo Rollouts — shared baseline.
+#
+# Owns spec.replicas on Rollout resources. The platform Helm chart's
+# Rollout templates (added in M0.6) declare canary strategy + analysis
+# templates that consult Prometheus for SLO burn-rate gating.
+
+installCRDs: true
+
+controller:
+  replicas: 2
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  # Run unprivileged
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    readOnlyRootFilesystem: true
+
+# The rollouts dashboard. Disabled in baseline; enable per env if needed.
+dashboard:
+  enabled: false
+
+# Notifications controller — sends slack / email / webhook alerts on
+# rollout events. The actual notification destinations are configured in
+# infra-resources/argo-rollouts/notification-configuration.yaml.
+notifications:
+  enabled: true
+
+# Topology spread
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: argo-rollouts

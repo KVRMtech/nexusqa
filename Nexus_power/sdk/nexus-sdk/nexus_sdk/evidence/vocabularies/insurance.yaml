@@ -1,0 +1,86 @@
+# Insurance vocabulary — life, P&C, and health-plan workflows.
+#
+# Covers Guardian, MetLife, Prudential, USAA, Geico, Progressive,
+# Liberty Mutual, and standard ACORD form fields.
+vertical: insurance
+display_name: Insurance
+description: >
+  Policy, claim, and group identifiers across life / P&C / health
+  insurance.  ACORD field names are first-class so demo recordings
+  of broker portals or carrier admin systems get clean synonym hits.
+
+synonyms:
+  - canonical: policy_number
+    aliases:
+      - "Policy #"
+      - "Policy No"
+      - "Policy Number"
+      - "Pol #"
+      - "Cert Number"
+      - "Certificate Number"
+  - canonical: claim_number
+    aliases:
+      - "Claim #"
+      - "Claim No"
+      - "Claim Number"
+      - "Claim ID"
+      - "Loss #"
+      - "FNOL Number"
+  - canonical: member_id
+    aliases:
+      - "Member ID"
+      - "Subscriber ID"
+      - "Insured ID"
+      - "Cert #"
+      - "Group Member #"
+  - canonical: group_number
+    aliases:
+      - "Group #"
+      - "Group Number"
+      - "Plan Group"
+      - "Employer Group"
+  - canonical: agent_id
+    aliases:
+      - "Agent #"
+      - "Producer ID"
+      - "Broker ID"
+      - "Writing Agent"
+
+pii_patterns:
+  # Policy number — alphanumeric, 6-15 chars, labelled context.
+  # Real policy numbers vary widely (Guardian uses 9-digit numeric,
+  # Progressive uses 8-9 alpha+digit) — keep it permissive but bound.
+  - name: policy_number
+    regex: "(?i)\\b(?:Policy|Pol|Cert)\\s*(?:#|No\\.?|Number)?[:\\s]{0,4}([A-Z0-9]{6,15})\\b"
+    severity: high
+    description: Policy / certificate number (labelled)
+    redaction: "[REDACTED_POLICY]"
+
+  # Claim number — alphanumeric, labelled.
+  - name: claim_number
+    regex: "(?i)\\bClaim\\s*(?:#|No\\.?|Number|ID)?[:\\s]{0,4}([A-Z0-9-]{6,18})\\b"
+    severity: high
+    description: Claim identifier
+    redaction: "[REDACTED_CLAIM]"
+
+  # Member / Subscriber ID — 6-15 alphanumeric.
+  - name: member_id
+    regex: "(?i)\\b(?:Member|Subscriber|Insured)\\s*ID[:\\s]{0,4}([A-Z0-9]{6,15})\\b"
+    severity: high
+    description: Insured / member identifier
+    redaction: "[REDACTED_MEMBER]"
+
+  # VIN — 17-char structured identifier; high-confidence shape so
+  # we don't need a label prefix.
+  - name: vin
+    regex: "\\b[A-HJ-NPR-Z0-9]{17}\\b"
+    severity: medium
+    description: Vehicle Identification Number (17 chars)
+    redaction: "[REDACTED_VIN]"
+
+  # FNOL / loss number — same shape as claim, distinct label.
+  - name: fnol_number
+    regex: "(?i)\\bFNOL[:\\s#]{0,4}([A-Z0-9-]{6,18})\\b"
+    severity: medium
+    description: First Notice of Loss identifier
+    redaction: "[REDACTED_FNOL]"

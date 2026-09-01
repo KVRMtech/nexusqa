@@ -1,0 +1,68 @@
+# Alerts on ESO sync health. A stale ExternalSecret means rotations
+# stop reaching the cluster; alert before a credential expires.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: external-secrets-platform
+  namespace: external-secrets
+  labels:
+    nexus-qa.io/category: external-secrets
+spec:
+  groups:
+    - name: external-secrets.platform
+      interval: 30s
+      rules:
+        # Any ExternalSecret stuck in error state for > 10 min.
+        - alert: ExternalSecretSyncFailing
+          expr: |
+            (
+              max by (namespace, name) (
+                externalsecret_sync_calls_error_total
+              ) - max by (namespace, name) (
+                externalsecret_sync_calls_error_total offset 10m
+              )
+            ) > 0
+          for: 10m
+          labels:
+            severity: critical
+            owner: platform
+          annotations:
+            summary: "ExternalSecret {{ $labels.namespace }}/{{ $labels.name }} failing to sync"
+            description: >-
+              ESO has been emitting sync errors for {{ $labels.namespace }}/{{ $labels.name }}
+              for at least 10 minutes. Credential rotations are blocked.
+              Investigate ESO controller logs and the upstream secret store ACL.
+
+        # The platform Secret hasn't been refreshed within twice the
+        # refresh interval — store unreachable or RBAC broken.
+        - alert: ExternalSecretStale
+          expr: |
+            time() - max by (namespace, name) (
+              externalsecret_sync_calls_total{status="success"}
+                * on() group_left() externalsecret_status_timestamp_seconds
+            ) > 7200
+          for: 15m
+          labels:
+            severity: warning
+            owner: platform
+          annotations:
+            summary: "ExternalSecret {{ $labels.namespace }}/{{ $labels.name }} is stale"
+            description: >-
+              The last successful sync was > 2h ago. Stale credentials risk
+              accumulating; verify ClusterSecretStore status and provider
+              connectivity.
+
+        # ClusterSecretStore itself broken.
+        - alert: ClusterSecretStoreUnavailable
+          expr: |
+            clustersecretstore_status_condition{condition="Ready",status="False"} == 1
+          for: 5m
+          labels:
+            severity: critical
+            owner: platform
+          annotations:
+            summary: "ClusterSecretStore {{ $labels.name }} is not Ready"
+            description: >-
+              The cluster cannot pull secrets from {{ $labels.name }}. Check
+              ESO controller logs and the underlying KMS / Secret Manager
+              IAM bindings.

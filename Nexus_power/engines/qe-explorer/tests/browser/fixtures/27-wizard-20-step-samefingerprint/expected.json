@@ -1,0 +1,38 @@
+{
+  "purpose": "A TWENTY-STEP wizard whose every step is structurally identical: one Yes/No radio group, a Back and a Continue, and nothing else. Fixture 09 puts 20 indistinguishable questions on ONE page and asks whether capture keeps them apart; this one puts them on 20 SEPARATE STEPS and asks whether the crawl can tell that it moved. The two failure modes are opposite and neither fixture can see the other's.",
+  "targeted_defect": "Regression guard for F1 (same-shape state collapse) and for the Gate 1 journey-crossing adjudication. Twenty steps that hash to one state make a 20-step funnel look like a loop the walk should abandon; a walk that abandons it reports a completed crawl having crossed nothing, which is exactly the zero-crossing completion app.completion.adjudicate now refuses.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "exact_control_count": 4,
+  "expect_controls": [
+    {"where": {"css_hint": "input#opt-yes"}, "fields": {"name": "Yes", "role": "radio"}},
+    {"where": {"css_hint": "input#opt-no"}, "fields": {"name": "No", "role": "radio"}},
+    {"where": {"css_hint": "button#next"}, "fields": {"name": "Continue", "role": "button", "disabled": true}},
+    {"where": {"css_hint": "button#back"}, "fields": {"name": "Back", "role": "button", "disabled": true}}
+  ],
+  "group_key_partition": {
+    "why": "The two radios on the CURRENT step must be one question, declared by the radio name attribute the application rewrites on every transition. One group of two, never two groups of one — a shattered group would offer each answer as its own question.",
+    "expect_distinct_nonempty": 1,
+    "expect_group_sizes": 2
+  },
+  "name_fingerprint_collapse": {
+    "why": "Records the adversarial property explicitly: the (role, name) pair of the two radios takes exactly two values on EVERY one of the twenty steps, so no accumulation of (role, name) evidence can ever distinguish step 3 from step 17.",
+    "expect_distinct_role_name_pairs_among_radios": 2
+  },
+  "describes_runtime_behaviour": [
+    {
+      "behaviour": "Continue is disabled until the step's radio question is answered, and the rule is stated only in script — `required` on a radio does not mean 'this question must be answered', so there is nothing in the markup for a static read to find. This is the exact shape walker._answer_to_unblock's radio path (Gate 1 / T-RG-01) exists to discover by experiment."
+    },
+    {
+      "behaviour": "Answering a question and pressing Back returns to the previous step with its own earlier answer still selected and its Continue already enabled: state persists across backward navigation, so a re-visited step is the same step rather than a fresh one."
+    },
+    {
+      "behaviour": "Answering 'Yes' at step 7 inserts a follow-up step 7a and the route becomes 21 steps long; answering 'No' leaves it at 20. The branch is recomputed from the answers on every transition, so changing that answer on a Back-and-forward pass removes the step again."
+    },
+    {
+      "behaviour": "Every transition is a synchronous function of (step, answers) with no timer, no network and no randomness, so two crawls of this fixture that make the same choices produce the same route in the same order — which is what makes it usable as a replay target."
+    }
+  ],
+  "lane_note": "The runtime behaviours above are adjudicated by tests/browser/test_wizard_20_step.py, which drives the fixture through real navigation rather than reading one capture. The capture-shaped assertions in this file describe the FIRST step only, because that is the page a single collect() sees; the twenty-step claim is by construction a multi-observation claim and cannot be made by a lane that collects once."
+}

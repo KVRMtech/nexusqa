@@ -1,0 +1,50 @@
+{
+  "purpose": "Prove a CUSTOM (non-native) choice control is catalogued as a question with its answer set: option LABELS read from the listbox it owns, and a committed value read from the trigger's rendered text rather than a .value property it does not have.",
+  "targeted_defect": "None (regression guard) - this pins the v8/v9 fixes for custom choice triggers, including the documented Radix data-placeholder rule, so the 'placeholder recorded as a committed answer' regression cannot come back unnoticed.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "button#term-trigger"},
+      "fields": {
+        "name": "Term Length",
+        "name_source": "aria-labelledby",
+        "role": "combobox",
+        "haspopup": "listbox",
+        "expanded": "false",
+        "options": ["10 years", "15 years", "20 years", "30 years"],
+        "options_total": 4,
+        "value_committed": "20 years"
+      }
+    },
+    {
+      "where": {"css_hint": "button#rider-trigger"},
+      "fields": {
+        "name": "Optional Rider",
+        "role": "combobox",
+        "options_total": 3,
+        "value_committed": ""
+      }
+    },
+    {
+      "where": {"css_hint": "div#payment-mode"},
+      "fields": {
+        "name": "Payment Mode",
+        "name_source": "aria-label",
+        "role": "combobox",
+        "options": ["Monthly", "Quarterly", "Annual"],
+        "options_total": 3
+      }
+    },
+    {
+      "where": {"css_hint": "button#lazy-trigger"},
+      "fields": {
+        "name": "Beneficiary Relationship",
+        "role": "combobox",
+        "options": [],
+        "options_total": 0
+      }
+    }
+  ]
+}

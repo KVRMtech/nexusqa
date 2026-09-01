@@ -1,0 +1,497 @@
+name: Browser Test Harness (M0.2)
+
+# The verification foundation for every Capture, Crawl, Inventory and Manifest
+# change. Three jobs, deliberately separated so a failure names its own cause:
+#
+#   jsdom          — the production capture JS executed in a JS engine (fast)
+#   browser        — the same JS executed in real Chromium through the PRODUCTION
+#                    injection path, plus characterization goldens and coverage
+#   proving-ground — real proving-ground applications crawled end to end
+#
+# Nothing here mocks a crawl. A proving-ground job that cannot reach an
+# application FAILS; it never reports a mocked success.
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      # GATE 3 — BOOTSTRAP TRIGGER, the same one and for the same reason as
+      # ci.yml's. These lanes carry the ONLY CI evidence that a real crawl of a
+      # real application still records what the catalogue is built from — M2.3's
+      # retirement recording and A21's three-change recording — and on this
+      # branch they had never run even once:
+      #
+      #   * `pull_request` cannot fire: `origin/develop` is a single flattened
+      #     "Initial commit" sharing NO history with this branch, so GitHub
+      #     refuses to open the PR at all.
+      #   * `workflow_dispatch` cannot fire either — GitHub resolves a dispatch
+      #     against the DEFAULT branch, and that flattened develop does not
+      #     contain this file. `gh workflow run` answers 404.
+      #
+      # So a push trigger scoped to this one branch is the only way to execute
+      # these lanes before the histories are reconciled. The `paths:` filter
+      # below still applies, so it fires only when the explorer, a proving
+      # ground, or this workflow actually changes — not on every push.
+      - feat/qec-dynamic-catalog-p0-p6
+    paths:
+      - "Nexus_power/engines/qe-explorer/**"
+      - "Nexus_power/proving-grounds/**"
+      - "Nexus_power/evidence/**"
+      - ".github/workflows/browser-harness.yml"
+  # GATE 0 / A5 — NO `paths:` FILTER HERE, DELIBERATELY.
+  #
+  # These lanes are REQUIRED status checks on `develop` and `main`. A required
+  # check that never runs is never reported, and GitHub blocks the pull request
+  # forever waiting for it — so a path-filtered required check does not gate
+  # merges, it prevents them. The filter was safe only while these lanes were
+  # advisory.
+  #
+  # The consequence is deliberate and is the point of A5: every pull request now
+  # pays the Chromium lane, including one that touches only qe-central. A
+  # fast-lane green while the browser lane was skipped by a path filter is
+  # exactly the "partial-lane merge" this action exists to refuse.
+  #
+  # `push` KEEPS its filter: pushes to main/develop arrive through a pull request
+  # that has already run these lanes, so re-running them on the merge commit buys
+  # nothing and costs 45 minutes of runner time.
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: browser-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+  EXPLORER: Nexus_power/engines/qe-explorer
+
+jobs:
+  # ── Lane 1: jsdom ────────────────────────────────────────────────────────
+  jsdom:
+    name: jsdom execution lane
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.EXPLORER }}/browser_harness/package-lock.json
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install jsdom
+        working-directory: ${{ env.EXPLORER }}/browser_harness
+        run: npm ci
+
+      - name: Fixture library validation
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_fixture_library.py -v -m "not playwright"
+
+      - name: jsdom execution lane
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_jsdom_execution.py -v
+
+  # ── Lane 2: real Chromium ────────────────────────────────────────────────
+  browser:
+    name: Chromium lane + characterization + coverage
+    runs-on: ubuntu-latest
+    # 45 -> 75. This lane now carries FOUR real crawls of a real application:
+    # M2.3 records two (~7 min together) and Gate 3 / A21 records two more
+    # (~14 min, because its second crawl meets a larger form). Those recordings
+    # ARE the lane's purpose and cannot be made faster without making them less
+    # real. Raised deliberately rather than discovered as a cancellation:
+    # `qe-explorer-browser` in ci.yml was cancelled at its own 25-minute limit on
+    # run 32441252806 for exactly this reason, and a cancelled job reports
+    # nothing at all about whether the suite passes.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.EXPLORER }}/browser_harness/package-lock.json
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install jsdom
+        working-directory: ${{ env.EXPLORER }}/browser_harness
+        run: npm ci
+
+      # `--with-deps` installs the system libraries headless Chromium needs on a
+      # bare ubuntu runner. Without it the browser launches and immediately dies,
+      # which surfaces as an unrelated-looking timeout.
+      - name: Install Chromium
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m playwright install --with-deps chromium
+
+      - name: Chromium execution lane (production injection path)
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_playwright_execution.py -v
+
+      - name: Regression guards + open bug reproductions
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_known_bugs.py tests/browser/test_capture_contract.py -v -rxX
+
+      # ── ORDERING, AND IT IS DELIBERATE ─────────────────────────────────
+      # These four REAL CRAWLS used to sit AFTER the characterization steps, and
+      # that made them unreachable. A GitHub step failure halts the job, the 28
+      # committed `tests/browser/golden/manifest_*.json` files have been stale
+      # since commit 3420d88 added `journey_crossings`/`journeys_walked` without
+      # re-recording them, and so characterization goes red and every step below
+      # it is SKIPPED — including the only CI evidence that a real application
+      # change is still recorded by a real crawl.
+      #
+      # Nothing here depends on a golden: these steps write under
+      # `Nexus_power/evidence/`, the characterization steps write under
+      # `tests/browser/golden/`, and the two guards diff their own paths. So the
+      # recordings run first and report for themselves, and a stale golden owned
+      # by another milestone can no longer take the crawl evidence down with it.
+      # The job is still RED while those goldens are stale — this changes what
+      # gets measured before the red, not whether it is red.
+      # ── THE GOLDEN GATE ──────────────────────────────────────────────────
+      # A real crawl, in real Chromium, must still walk a real application's
+      # funnel to its end and CROSS the irreversible control it was granted.
+      # That capability was broken for the whole of Phase 1 without a single red
+      # test, because every other lane stops short of the boundary. A build that
+      # cannot cross fails here, and the failure names what it saw instead.
+      - name: Golden Gate — the crawl still crosses an approved boundary
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_boundary_crossing_gate.py -v
+
+      # ── M2.3 · CATALOG RETIREMENT (producer half) ────────────────────────
+      # Crawls acme-life, DELETES a question from it, crawls it again, and
+      # writes both coverage accounts to Nexus_power/evidence/m23_retirement/.
+      # qe-central's half folds those two accounts into a real Postgres and
+      # asserts the catalogue retires the question and the diff reports it as
+      # removed — the two services cannot share a process, so the recording is
+      # the seam between them.
+      - name: M2.3 — a real application change is recorded by two real crawls
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_catalog_retirement_regression.py -v
+
+      # The recording is under version control and qe-central's job asserts the
+      # committed stamp against the acme-life that ships. If this run produced a
+      # different recording, either the proving ground or the crawler changed and
+      # a human has to say which — CI must never absorb it silently. Same rule as
+      # the characterization goldens above.
+      #
+      # SCOPED TO stamp.json, NOT THE WHOLE DIRECTORY — a correction, made with a
+      # measurement rather than a guess. This step used to diff
+      # `evidence/m23_retirement` entirely, which includes the two coverage
+      # accounts, and those are NOT byte-reproducible: `FixtureServer` binds an
+      # ephemeral port and every `*_ms` field is a wall clock. Re-running this
+      # producer against an unchanged application with an unchanged crawler
+      # rewrote 117 lines — every one of them a port or a timing, not one of them
+      # a fact about the application. So this guard could only ever fail, and a
+      # guard that always fails is a guard someone deletes.
+      #
+      # stamp.json carries what actually has to hold still (the question that was
+      # removed, the control group, and the app hashes before and after), and the
+      # substance of the two accounts is asserted where it belongs — in the
+      # consumer half's `test_the_two_recordings_really_differ_by_one_question`,
+      # which reads the questions rather than the bytes.
+      - name: Fail if the M2.3 crawl evidence changed
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          if ! git diff --quiet -- ../../evidence/m23_retirement/stamp.json; then
+            echo "::error::The M2.3 retirement recording changed during this run."
+            echo "Either proving-grounds/acme-life or the crawler produces"
+            echo "different coverage than the committed evidence. Review the diff,"
+            echo "and if the change is intended commit the re-recorded evidence"
+            echo "(all three files, not just the stamp)."
+            git diff -- ../../evidence/m23_retirement/stamp.json
+            exit 1
+          fi
+          echo "M2.3 crawl evidence is unchanged."
+
+      # ── GATE 3 / A21 · CATALOG DIFF (producer half) ──────────────────────
+      # Crawls acme-life, makes THREE deliberate changes to it — removes a
+      # question, adds a question, and grows one question's answer set by a
+      # single option — then crawls it again and writes both coverage accounts
+      # to Nexus_power/evidence/a21_catalog_diff/.
+      #
+      # qe-central's half folds those two accounts into a real Postgres and
+      # asserts the diff puts each of the three in the right bucket. The two
+      # services cannot share a process, so the recording is the seam between
+      # them — the same shape as M2.3 above, proving all three classifications
+      # rather than only `removed`.
+      - name: A21 — three real application changes, recorded by two real crawls
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_a21_catalog_diff_regression.py -v
+
+      # THE GUARD IS ON stamp.json, NOT ON THE COVERAGE ACCOUNTS, and that is a
+      # measured decision rather than a weaker one.
+      #
+      # `FixtureServer` binds an EPHEMERAL port, so every URL in a fresh
+      # recording differs from the committed one, and every *_ms field is a wall
+      # clock. Re-running the equivalent M2.3 producer against an unchanged
+      # application and an unchanged crawler rewrote 117 lines of its evidence —
+      # every one of them a port or a timing, not one of them a fact about the
+      # application. A byte-equality guard over those files can therefore only
+      # ever fail, and a guard that always fails is a guard someone deletes.
+      #
+      # stamp.json carries the SUBSTANCE instead: the questions each crawl
+      # asked, with their types and answer sets. It is stable across runs and it
+      # still moves the instant the proving ground or the crawler starts
+      # producing different coverage — which is all the guard was ever for.
+      - name: Fail if the A21 crawl evidence changed in substance
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          if ! git diff --quiet -- ../../evidence/a21_catalog_diff/stamp.json; then
+            echo "::error::The A21 recording changed during this run."
+            echo "Either proving-grounds/acme-life or the crawler produces"
+            echo "different coverage than the committed evidence. Review the"
+            echo "diff, and if the change is intended commit the re-recorded"
+            echo "evidence (all three files, not just the stamp)."
+            git diff -- ../../evidence/a21_catalog_diff/stamp.json
+            exit 1
+          fi
+          echo "A21 crawl evidence is unchanged in substance."
+
+      # ── GATE 3 / A22 · THE BLOCKER'S TRIPWIRE ────────────────────────────
+      # A22 is BLOCKED: no application in this repository is both walkable by
+      # the crawler AND calling a backend, so a real discovered journey with real
+      # endpoint traffic cannot be produced. The milestone's stop condition is
+      # kept in the file as a STRICT xfail rather than deleted.
+      #
+      # A strict xfail is only a tripwire if it RUNS. This step is what makes it
+      # one: the day either half of the blocker closes — the bare-button wizard
+      # gate in discovery.py, or the `if not signals and not controls: return`
+      # that discards a funnel's result page from coverage.states — the xfail
+      # XPASSes, this step goes RED, and A22 cannot be quietly forgotten.
+      #
+      # It is NOT in ci.yml's fast browser lane: it drives a real crawl and
+      # carries the `proving_ground` mark that lane now excludes.
+      - name: A22 — the generation blocker is still exactly where it was
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_a22_generation_crawl.py -v -rxX
+
+      # Run the characterization suite TWICE in the same job. A golden that only
+      # holds on the first run is not a golden, and a nondeterminism that appears
+      # once per ten runs is far cheaper to find here than as an unexplained red
+      # build three months from now.
+      - name: Characterization — pass 1
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_browser_characterization.py -v
+
+      - name: Characterization — pass 2 (determinism)
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_browser_characterization.py -v
+
+      # Goldens are recorded artefacts under version control. If a run rewrote
+      # one, the behaviour changed and the diff must be reviewed by a human —
+      # never absorbed silently by CI.
+      - name: Fail if any golden was rewritten
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          if ! git diff --quiet -- tests/browser/golden; then
+            echo "::error::A characterization golden changed during this run."
+            echo "Capture behaviour has changed. Review the diff below and, if the"
+            echo "change is intended, re-record with QEC_UPDATE_GOLDENS=1 and commit."
+            git diff -- tests/browser/golden
+            exit 1
+          fi
+          echo "All characterization goldens are byte-identical."
+
+      - name: Execution coverage for the injected capture JS
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_coverage.py -v
+
+      - name: Coverage summary
+        if: always()
+        working-directory: ${{ env.EXPLORER }}
+        run: |
+          test -f tests/browser/coverage_report.json || exit 0
+          python - <<'PY'
+          import json
+          rep = json.load(open("tests/browser/coverage_report.json", encoding="utf-8"))
+          rows = ["| snippet | branches (blocks) | functions | lines |",
+                  "|---|---|---|---|"]
+          for name, r in sorted(rep.items()):
+              rows.append(
+                  f"| `{name}` | {r['blocks']['pct']}% "
+                  f"({r['blocks']['covered']}/{r['blocks']['total']}) | "
+                  f"{r['functions']['pct']}% | {r['lines']['pct']}% |")
+          body = "## Injected-JS execution coverage\n\n" + "\n".join(rows) + "\n"
+          import os
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write(body)
+          print(body)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-harness-coverage
+          path: ${{ env.EXPLORER }}/tests/browser/coverage_report.json
+          if-no-files-found: warn
+
+  # ── Lane 3: proving grounds, crawled for real ────────────────────────────
+  proving-ground:
+    name: Crawl ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false          # one broken app must not hide the others
+      matrix:
+        include:
+          # `port` is the port the IMAGE listens on, read from its own
+          # Dockerfile -- not guessed from the framework. A14/A17: this leg
+          # published container port 3000 for summit-life-carrier while its
+          # Dockerfile sets `ENV PORT=3002` and `EXPOSE 3002`, so nothing was
+          # ever listening behind the publish and the lane could only ever have
+          # failed at "never served on :8099". Verified against a real
+          # container: :3000 gives no answer, :3002 gives 200.
+          - app: acme-life
+            port: 80
+            min_controls: 5
+          - app: summit-life-carrier
+            port: 3002
+            min_controls: 5
+          - app: vkpower-life
+            port: 80
+            min_controls: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install Chromium
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m playwright install --with-deps chromium
+
+      # Start the application from its OWN Dockerfile — the same image the
+      # proving ground ships. Building it here is what makes this a real crawl
+      # target rather than a copy of its markup.
+      - name: Build and start ${{ matrix.app }}
+        run: |
+          set -euo pipefail
+          docker build -t pg-${{ matrix.app }}:ci Nexus_power/proving-grounds/${{ matrix.app }}
+          docker run -d --name pg-${{ matrix.app }} -p 8099:${{ matrix.port }} pg-${{ matrix.app }}:ci
+
+      - name: Wait for the application to serve
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8099/ > /dev/null 2>&1; then
+              echo "${{ matrix.app }} is serving after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::${{ matrix.app }} never served on :8099"
+          docker logs pg-${{ matrix.app }} || true
+          exit 1
+
+      # Dispatch a REAL crawl through the production Crawler + production port,
+      # wait for completion, read the manifest off disk, and assert on what was
+      # discovered. A mocked success is not accepted: the test fails if the
+      # manifest is absent, empty, or reports no page state.
+      - name: Crawl and validate the manifest
+        working-directory: ${{ env.EXPLORER }}
+        env:
+          QEC_PROVING_GROUND_URL: http://127.0.0.1:8099/
+          QEC_PROVING_GROUND_NAME: ${{ matrix.app }}
+          QEC_PROVING_GROUND_MIN_CONTROLS: ${{ matrix.min_controls }}
+        # M1.4 / T-CF-04: the confirmation recognizer is asserted against the
+        # REAL rendered pages on the vkpower-life leg. It skips itself on the
+        # other two legs (they serve different applications), so one line here
+        # covers all three without a matrix condition.
+        run: |
+          python -m pytest tests/browser/test_proving_grounds.py                            tests/browser/test_m12_confirmation_live.py -v -rs
+
+      - name: Application logs on failure
+        if: failure()
+        run: docker logs pg-${{ matrix.app }} || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crawl-manifest-${{ matrix.app }}
+          path: ${{ env.EXPLORER }}/tests/browser/_crawl_out/**
+          if-no-files-found: warn
+
+      - name: Stop the application
+        if: always()
+        run: docker rm -f pg-${{ matrix.app }} || true
+
+  # ── Lane 4: GATE 2 — the three applications, and what each one PROVES ─────
+  # A17. The proving-ground lane above asserts that a crawl DISCOVERED an
+  # application. This one asserts what the crawl ACHIEVED on it: how many
+  # irreversible boundaries it crossed, whether a confirmation was observed,
+  # and that no boundary was crossed twice.
+  #
+  # It is a two-way ratchet against a committed declaration, not a floor. An
+  # application that stops crossing fails here — the regression this job
+  # exists to catch. An application that STARTS crossing also fails here,
+  # because its declaration is now understated and a human has to look at the
+  # new evidence and raise it deliberately. A one-way floor would let a lucky
+  # crawl satisfy the gate and would never tell anyone the platform improved.
+  #
+  # Each application is built from its OWN Dockerfile and crawled over HTTP,
+  # never served from its source directory: for vkpower-life those are two
+  # different applications (a hand-written hash-routed index.html vs the
+  # Next.js export in out/), and a journey proven against the wrong one would
+  # not reproduce here.
+  gate2-journeys:
+    name: Gate 2 — three real applications
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Python deps
+        working-directory: ${{ env.EXPLORER }}
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Install Chromium
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m playwright install --with-deps chromium
+
+      # The test builds and runs each image itself, so a port or Dockerfile
+      # change is exercised by the same code path that reads it — there is no
+      # second copy of the port table in this workflow to drift out of sync.
+      - name: Crawl all three applications and assert what each achieved
+        working-directory: ${{ env.EXPLORER }}
+        run: python -m pytest tests/browser/test_gate2_three_applications.py -v
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate2-journey-evidence
+          path: ${{ env.EXPLORER }}/tests/browser/_crawl_out/gate2/**
+          if-no-files-found: warn

@@ -1,0 +1,15 @@
+# Production Kyverno — fail-closed webhooks. An outage of the admission
+# controller blocks new pods rather than admitting them unvalidated.
+admissionController:
+  replicas: 5
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 1.5Gi
+
+config:
+  webhooks:
+    - failurePolicy: Fail
+      timeoutSeconds: 15

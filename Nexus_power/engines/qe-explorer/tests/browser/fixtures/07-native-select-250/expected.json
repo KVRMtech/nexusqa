@@ -1,0 +1,45 @@
+{
+  "purpose": "Prove a native <select> is catalogued with its COMPLETE answer set up to the documented ceiling, and that when the ceiling clips the read, options_total still reports the true size so a prefix is never presented as the whole question.",
+  "targeted_defect": "None (regression guard) - pins MAX_OPTIONS=300 and the options/options_total split. The predecessor value (60) silently truncated a 250-country list, and a catalogue holding the first 60 of 250 answers is not a catalogue of that question.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "select#country"},
+      "fields": {
+        "name": "Country of Residence",
+        "name_source": "label-for",
+        "role": "combobox",
+        "options_total": 250,
+        "value_committed": "c001"
+      },
+      "list_lengths": {"options": 250},
+      "list_edges": {"options": {"first": "Country 001", "last": "Country 250"}}
+    },
+    {
+      "where": {"css_hint": "select#birth-year"},
+      "fields": {
+        "name": "Year of Birth",
+        "role": "combobox",
+        "options_total": 320,
+        "value_committed": "y1700"
+      },
+      "list_lengths": {"options": 300},
+      "list_edges": {"options": {"first": "1700", "last": "1999"}}
+    },
+    {
+      "where": {"css_hint": "select#state"},
+      "fields": {
+        "name": "State",
+        "options_total": 4,
+        "value_committed": ""
+      },
+      "list_edges": {"options": {"first": "Select state", "last": "Texas"}}
+    },
+    {
+      "where": {"css_hint": "select#riders"},
+      "fields": {"name": "Riders", "role": "listbox", "options_total": 2}
+    }
+  ]
+}

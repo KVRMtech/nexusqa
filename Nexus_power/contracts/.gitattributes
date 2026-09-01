@@ -1,0 +1,13 @@
+# A11 / Gate 1 — FROZEN CROSS-SERVICE CONTRACTS.
+#
+# These files are pinned by SHA-256 in `certification/a11/A11_SNAPSHOT.sha256`,
+# so their BYTES are load-bearing, not just their content. Without a rule here
+# `core.autocrlf` decides: git stores LF, checks out LF on Linux and CRLF on
+# Windows, and the same commit therefore hashes to two different digests
+# depending on who cloned it. The certification reproducer then reports
+# "the certified bytes moved" on one platform and not the other — drift that
+# is really a checkout setting, which is the single most misleading failure a
+# certification tool can produce.
+#
+# Pin to LF so one commit means one digest everywhere.
+*.json    text eol=lf

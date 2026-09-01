@@ -1,0 +1,76 @@
+{
+  "artifact_id": "9cef3242-8f5e-4537-bef6-562c9bcd679e",
+  "key_status": "draft",
+  "video_class": "TODO: describe the recording (human)",
+  "pages": [
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/inventory.html"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/cart.html"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/checkout-step-one.html"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/checkout-step-twohtml"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/checkout-step-tohtml"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/checkout-complete.html"
+    },
+    {
+      "host": "saucedemo.com",
+      "path_prefix": "/checkout-complete"
+    }
+  ],
+  "values": [
+    {
+      "label": "First Name",
+      "value": "test"
+    },
+    {
+      "label": "Last Name",
+      "value": "test"
+    },
+    {
+      "label": "Username",
+      "value": "visual_user"
+    }
+  ],
+  "forms": [
+    {
+      "label": "Username",
+      "value": "visual_user"
+    },
+    {
+      "label": "Sort order",
+      "value": "Name (A to Z)"
+    },
+    {
+      "label": "Last Name",
+      "value": "test"
+    },
+    {
+      "label": "First Name",
+      "value": "test"
+    },
+    {
+      "label": "Zip/Postal Code",
+      "value": "78006"
+    },
+    {
+      "label": "Sort order",
+      "value": "Name (A to Z)"
+    }
+  ],
+  "notes": "DRAFT seeded from the pipeline's own extraction \u2014 CIRCULAR until a human verifies every entry against the actual video and sets key_status='verified'. Add anything the pipeline MISSED."
+}

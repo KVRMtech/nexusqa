@@ -1,88 +1,139 @@
+# =============================================================================
+# Nexus QA — .gitignore
+# All real product source lives under Nexus_power/. The repository ROOT is a
+# scratch area accumulated from live iteration on the VM (deploy/debug/patch/
+# verify scripts + docker-cp'd VM snapshots) and must NOT be committed.
+# =============================================================================
+
+# ---- Python ----
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / client build ----
+node_modules/
 dist/
-build/
-.eggs/
-*.egg
+.vite/
 
-# ===== SECURITY: Secrets & Credentials =====
-# Environment files (NEVER commit secrets)
-.env
-.env.local
-.env.*.local
-.env.ci
-.env.production
-.env.staging
-
-# Token / credential files
-_token.txt
-_token2.txt
-_token*.txt
-**/credentials.txt
-**/secrets.*
-
-# Private keys & certificates
-*.pem
-*.key
-*.p12
-*.pfx
-*.crt
-*.cer
-
-# JWT check script (contains secret references)
-_check_jwt.py
-
-# ===== IDE =====
+# ---- Local tooling / agent + editor state ----
+.claude/
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# ===== OS =====
-.DS_Store
-Thumbs.db
+# ---- Deploy-gate RUNTIME state (M0.4 / T-GT-04) ----
+# The golden-crawl baseline is git-tracked, reviewable evidence and must stay
+# byte-identical across a gate run. Per-host mutable bookkeeping — how many runs
+# a never-met floor has been unmet, and which services the last deploy touched —
+# lives in these files instead. Committing either would dirty the tree on every
+# gate run and turn the next `git pull` on the VM into a merge conflict.
+.gate_runtime_state.json
+.deploy_manifest.json
+.last_green_deploy
 
-# ===== Virtual environments =====
-.venv/
-venv/
-env/
-
-# ===== Docker =====
-docker-compose.override.yml
-
-# ===== Data (large files — not in git) =====
-/data/
-/models/
-*.wav
-*.mp3
-*.mp4
-*.avi
-*.mov
-
-# ===== Logs =====
+# ---- Archives, images, logs, patches (scratch artifacts) ----
+*.tgz
+*.tar.gz
 *.log
-logs/
+*.patch
+/*.png
 
-# ===== Test artifacts =====
-.coverage
-htmlcov/
-.pytest_cache/
-test_*_output.txt
-test_output*.txt
-test_full*.txt
-failing_*.txt
+# =============================================================================
+# Root-level scratch scripts & docker-cp'd VM snapshots (anchored to repo root
+# with a leading slash so nothing under Nexus_power/ is ever matched).
+# =============================================================================
+/_*
+/dep_*
+/debug_*
+/diff_*
+/probe*
+/patch_*
+/deploy_*
+/verify_*
+/check_*
+/diag_*
+/find_*
+/read_*
+/scout_*
+/probe_*
+/repro_*
+/validate_*
+/trigger_*
+/inspect_*
+/measure_*
+/recreate_*
+/reapply_*
+/refreeze*
+/discover.sh
+/dump_*
+/edit_*.py
+/gap*.py
+/gen_preflight.py
+/heal_evidence.py
+/preflight*.py
+/proposer.py
+/redaction.py
+/real_frame_probe.py
+/run_*.py
+/run_*.sh
+/show_*.py
+/fetch_graph.py
+/tf_override_block.py
+/unfreeze_and_patch.sh
+/watch_logs.sh
+/iso_*
+/kms_*
+/peek_*
+/prove_*
+/e2e_*.sh
+/anthropic_probe.py
+/append_*.py
+/apply_and_test.sh
+/backup_db.sh
+/call_heart_direct.py
+/commit_*
+/confirm_fix.sh
+/fix_bearer_token.py
+/explore_runner.sh
+/freeze_*.txt
+/q_*.sql
+/mig_*.py
+/test_*.py
+/test_*.sh
+/combobox_validate.spec.ts
+/validate_combobox.js
+/repro_runlive*.js
+/runner_deployed.js
+/failshot*.png
 
-# ===== Temp directory =====
-/temp/
+# ---- Root-level scratch directories ----
+/_nxdeploy/
+/_pf_stub/
+/_vm_inspect/
+/proving-ground/
+/pwbundle/
+vm-backups/
+enable_production.sh
+recover_*.sh
+redeploy_*.sh
+scaffold_llm_env.sh
+deploy_portal.sh
+e2e_*.py
+*.tgz
+reconstruct_env.sh
+prep_llm_factory.sh
+apply_llm_main.py
+pin_factory_secrets.sh
+activate_llm_factory.sh
+verify_llm_e2e.py
+fix_jwt_align.sh
+provision_customer.py
+provision_customer.sh
+extract_token.sh
+add_onboarding_ttl.sh
 
-# ===== Node (dashboard/client) =====
-node_modules/
-.next/
-
-# ===== Database =====
-*.db
-*.sqlite
-*.sqlite3
+# Gate 4 fault-injection scratch (A35 writes real crawl output + ledgers here)
+Nexus_power/engines/qe-explorer/.gate4_a35/
+Nexus_power/engines/qe-explorer/.gate4_ctl/

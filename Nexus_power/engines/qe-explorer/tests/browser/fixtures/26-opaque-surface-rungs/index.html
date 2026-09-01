@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 26 — opaque-surface selector rungs</title>
+<style>
+  iframe { display: block; width: 380px; height: 80px; border: 1px solid #ddd; }
+  legacy-disclosure-panel { display: block; width: 380px; height: 120px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Vendor embeds</h1>
+
+    <label for="order-total">Order Total</label>
+    <input id="order-total" name="order_total" type="text" value="42.00" readonly>
+
+    <!-- Fixtures 04 and 25 both embed a foreign frame carrying an ID, so only the
+         FIRST rung of the selector recipe was ever reached from OPAQUE_JS - the
+         snippet that names a frame the walker cannot read, and therefore the one
+         that decides whether the port can enter it at all. Each embed below drops
+         to a different rung. -->
+
+    <!-- (a) + (b) TITLE, and the same title twice: the ambiguity path, on the
+         cross-origin side. -->
+    <iframe title="vendor step" src="__ALT_ORIGIN__/26-opaque-surface-rungs/child-a.html"></iframe>
+    <iframe title="vendor step" src="__ALT_ORIGIN__/26-opaque-surface-rungs/child-b.html"></iframe>
+
+    <!-- (c) SRC only - no id, no name, no title. -->
+    <iframe src="__ALT_ORIGIN__/26-opaque-surface-rungs/child-c.html"></iframe>
+
+    <!-- (d) A FOREIGN EMBED INSIDE AN OPEN SHADOW ROOT WHOSE HOST HAS NO ID.
+         The frame is addressed through its host, and the host itself has to be
+         addressed positionally among its own siblings - which is why there are
+         two slots and the SECOND one carries the widget. -->
+    <div class="widget-slot"></div>
+    <div class="widget-slot"></div>
+
+    <!-- (e) THE OTHER HOST SHAPE. `div` above needs a positional ordinal because
+         there are two of them; this <aside> is the only one in its root, so its
+         bare tag addresses it. Both shapes have to be reached from OPAQUE_JS,
+         because a component library that never expected to be addressed from
+         outside gives its hosts neither ids nor unique tags reliably. -->
+    <aside class="vendor-slot"></aside>
+
+    <!-- (e) A DECLARATIVE CLOSED SHADOW ROOT. `<template shadowrootmode="closed">`
+         is attached by the HTML PARSER and never calls Element.prototype
+         .attachShadow, so the capture init script cannot observe it - a stated
+         limitation of T-FR-02, fixtured here so it is a measured fact rather than
+         a sentence in a docstring. This surface must stay a NAMED blind spot. -->
+    <legacy-disclosure-panel>
+      <template shadowrootmode="closed">
+        <label for="legacy-ack">Legacy Acknowledgement</label>
+        <input id="legacy-ack" name="legacy_ack" type="checkbox">
+        <button type="button">Acknowledge</button>
+      </template>
+    </legacy-disclosure-panel>
+  </main>
+
+  <script>
+    (function () {
+      function embed(host, child) {
+        var root = host.attachShadow({ mode: "open" });
+        var frame = document.createElement("iframe");
+        frame.setAttribute("src", "__ALT_ORIGIN__/26-opaque-surface-rungs/" + child);
+        root.appendChild(frame);
+      }
+      embed(document.querySelectorAll("div.widget-slot")[1], "child-d.html");
+      embed(document.querySelector("aside.vendor-slot"), "child-e.html");
+    })();
+  </script>
+</body>
+</html>

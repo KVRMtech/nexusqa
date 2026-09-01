@@ -1,0 +1,44 @@
+# Pod Security Standards — restricted profile, enforced at admission.
+#
+# Kyverno's pod-security policy is the canonical implementation of the
+# upstream PSS restricted profile. Adding it here is equivalent to
+# applying the namespace label `pod-security.kubernetes.io/enforce=restricted`
+# but is enforced cluster-wide on the namespaces we care about, and
+# produces auditable PolicyReports for every rejection.
+#
+# Scope: applies to namespaces labelled platform=true. That label is
+# applied to nexus-platform in bootstrap/00-namespaces.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pss-restricted
+  annotations:
+    policies.kyverno.io/title: Pod Security Standards — Restricted
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Enforces the upstream PSS restricted profile across platform and
+      application namespaces. Blocks privileged pods, host namespace
+      mounts, hostPath volumes, host port use, root-running containers,
+      and dropped-capability bypasses.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: restricted
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchLabels:
+                  pod-security.kubernetes.io/enforce: restricted
+      validate:
+        podSecurity:
+          level: restricted
+          version: latest
+          # The standard PSS restricted profile is applied verbatim.
+          # Exemptions, if ever needed, go here as explicit per-image
+          # entries — never as global toggles.
+          exclude: []

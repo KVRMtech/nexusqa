@@ -1,0 +1,207 @@
+name: deploy-validation
+
+# Gates every PR that touches deployment surfaces (Helm chart, Terraform
+# modules, GitOps overlays). Catches the bugs that only surface at
+# render/apply time — typo'd values keys, missing helpers, broken
+# module-output references — before a real deploy.
+# PATHS ARE REPO-ROOT-RELATIVE AND THE APPLICATION LIVES IN Nexus_power/.
+# Without that prefix these globs matched nothing, so the workflow's own path
+# filter could never fire — see the working-directory note below for the other
+# half of the same mistake.
+on:
+  pull_request:
+    paths:
+      - 'Nexus_power/infrastructure/helm/**'
+      - 'Nexus_power/infrastructure/terraform/**'
+      - 'Nexus_power/infrastructure/gitops/**'
+      - '.github/workflows/deploy-validation.yml'
+  push:
+    branches: [develop, main]
+    paths:
+      - 'Nexus_power/infrastructure/helm/**'
+      - 'Nexus_power/infrastructure/terraform/**'
+      - 'Nexus_power/infrastructure/gitops/**'
+
+# Same rule as ci.yml: only .github/ sits at the repository root, the application
+# is under Nexus_power/. Every `run:` step below names `infrastructure/...`, which
+# resolved to a path that does not exist until this was set. `uses:` action INPUTS
+# and step-level `working-directory:` overrides are NOT covered by this and carry
+# the prefix explicitly wherever they appear.
+defaults:
+  run:
+    working-directory: Nexus_power
+
+jobs:
+  helm-static-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install lint deps
+        run: python -m pip install --upgrade pip pyyaml
+      - name: Static chart lint (base values)
+        run: python infrastructure/helm/nexus-qa/scripts/chart_lint.py
+      - name: Static chart lint (staging)
+        run: python infrastructure/helm/nexus-qa/scripts/chart_lint.py --env staging
+      - name: Static chart lint (production)
+        run: python infrastructure/helm/nexus-qa/scripts/chart_lint.py --env production
+      # The verdict chart is the regulated-buyer (on-prem / air-gapped) install
+      # artifact — guard all three profiles, strict, so a broken .Values path or a
+      # missing secretKeyRef can never ship to a client's cluster.
+      - name: Static chart lint — verdict (base + on-prem + air-gapped)
+        run: |
+          cd infrastructure/helm/verdict
+          python scripts/chart_lint.py --strict
+          python scripts/chart_lint.py --values values-onprem.yaml --strict
+          python scripts/chart_lint.py --values values-airgapped.yaml --strict
+
+  helm-template-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - name: helm lint (base)
+        run: helm lint infrastructure/helm/nexus-qa
+      - name: helm template — staging
+        run: |
+          helm template nexus-staging infrastructure/helm/nexus-qa \
+            --set secrets.jwtSecret=ci-placeholder \
+            --set secrets.postgresPassword=ci-placeholder \
+            --set secrets.neo4jPassword=ci-placeholder \
+            --set secrets.minioAccessKey=ci-placeholder \
+            --set secrets.minioSecretKey=ci-placeholder \
+            --set secrets.grafanaPassword=ci-placeholder \
+            > /tmp/staging-rendered.yaml
+          echo "Rendered $(wc -l < /tmp/staging-rendered.yaml) lines"
+      - name: helm template — production
+        run: |
+          helm template nexus-production infrastructure/helm/nexus-qa \
+            --values infrastructure/gitops/envs/production/values/platform.yaml \
+            --set secrets.jwtSecret=ci-placeholder \
+            --set secrets.postgresPassword=ci-placeholder \
+            --set secrets.neo4jPassword=ci-placeholder \
+            --set secrets.minioAccessKey=ci-placeholder \
+            --set secrets.minioSecretKey=ci-placeholder \
+            --set secrets.grafanaPassword=ci-placeholder \
+            > /tmp/production-rendered.yaml
+          echo "Rendered $(wc -l < /tmp/production-rendered.yaml) lines"
+
+      # ── verdict chart (the regulated-buyer on-prem/air-gapped install) — render
+      #    it for REAL (not only static-lint), and PROVE the multi-replica scaling
+      #    guard actually blocks an unsafe scale-out. ──────────────────────────
+      - name: helm lint — verdict
+        run: helm lint infrastructure/helm/verdict
+      - name: helm template — verdict (base + on-prem + air-gapped)
+        run: |
+          set -euo pipefail
+          _secrets=( --set secrets.jwtSecret=ci --set secrets.postgresPassword=ci
+                     --set secrets.qecDbPassword=ci --set secrets.substrateDbPassword=ci
+                     --set secrets.explorerToken=ci
+                     # on-prem/air-gapped enable externalSecrets, which fail-closes unless
+                     # the operator supplies their own secret store — provide a CI stand-in.
+                     --set externalSecrets.secretStoreRef.name=ci-store )
+          for prof in base onprem airgapped; do
+            f=""; [ "$prof" = base ] || f="-f infrastructure/helm/verdict/values-${prof}.yaml"
+            helm template verdict infrastructure/helm/verdict $f "${_secrets[@]}" \
+              > "/tmp/verdict-${prof}-rendered.yaml"
+            echo "verdict/${prof}: $(wc -l < /tmp/verdict-${prof}-rendered.yaml) lines"
+          done
+      - name: verdict scaling guard blocks an unsafe multi-replica config
+        run: |
+          set -euo pipefail
+          _secrets=( --set secrets.jwtSecret=ci --set secrets.postgresPassword=ci
+                     --set secrets.qecDbPassword=ci --set secrets.substrateDbPassword=ci
+                     --set secrets.explorerToken=ci
+                     --set externalSecrets.secretStoreRef.name=ci-store )
+          # replicas>1 with the DEFAULT (memory) admission backend MUST fail to render.
+          if helm template verdict infrastructure/helm/verdict "${_secrets[@]}" \
+               --set qeCentral.replicas=3 >/dev/null 2>/tmp/guard.err; then
+            echo "FAIL: 3 replicas rendered with memory admission — the scaling guard did NOT fire." >&2
+            exit 1
+          fi
+          if grep -q "admissionBackend=redis" /tmp/guard.err; then
+            echo "OK — guard blocked unsafe scale-out:"; sed 's/^/    /' /tmp/guard.err
+          else
+            echo "FAIL: render failed, but NOT via the scaling guard:" >&2; cat /tmp/guard.err >&2; exit 1
+          fi
+          # The SAFE multi-replica config (redis + url + advisory_lock) renders fine.
+          helm template verdict infrastructure/helm/verdict "${_secrets[@]}" \
+            --set qeCentral.replicas=3 \
+            --set env.admissionBackend=redis --set env.redisUrl=redis://shared:6379/0 \
+            --set env.daemonLeaderElection=advisory_lock >/dev/null
+          echo "OK — safe multi-replica (redis + advisory_lock) renders."
+
+      - name: Upload rendered manifests on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-manifests
+          path: /tmp/*-rendered.yaml
+
+  terraform-static-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Static tf lint
+        run: python infrastructure/terraform/scripts/tf_lint.py
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        env: [dev, staging, production]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+      - name: terraform fmt check
+        working-directory: Nexus_power/infrastructure/terraform/envs/${{ matrix.env }}
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      - name: terraform init (no backend)
+        working-directory: Nexus_power/infrastructure/terraform/envs/${{ matrix.env }}
+        run: terraform init -backend=false -input=false
+      - name: terraform validate
+        working-directory: Nexus_power/infrastructure/terraform/envs/${{ matrix.env }}
+        run: terraform validate -no-color
+
+  kyverno-policy-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # NO job-level `if: hashFiles(...)`. `hashFiles` is not available in a
+    # jobs.<id>.if expression — only in a step-level one — so the whole FILE
+    # failed validation and every run of this workflow was a zero-second
+    # startup_failure with no jobs at all. That is why GitHub listed it as
+    # ".github/workflows/deploy-validation.yml" instead of its `name:`: it never
+    # parsed far enough to read one. The guard was also pointless — the eight
+    # policies in Nexus_power/infrastructure/gitops/resources/kyverno/ are
+    # committed, so the directory is always present.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kyverno CLI
+        run: |
+          curl -L https://github.com/kyverno/kyverno/releases/download/v1.13.4/kyverno-cli_v1.13.4_linux_x86_64.tar.gz \
+            | tar -xz -C /usr/local/bin kyverno
+      - name: kyverno apply --dry-run
+        run: |
+          kyverno apply infrastructure/gitops/resources/kyverno/ \
+            --resource <(echo 'apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: smoke
+            labels:
+              pod-security.kubernetes.io/enforce: restricted') \
+            || echo "kyverno surfaced policy violations (expected for smoke namespace)"

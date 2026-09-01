@@ -1,0 +1,1839 @@
+{
+  "schema": "qec.crawl_perf_baseline/1",
+  "environment": {
+    "python": "3.10.11",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+    "playwright": "1.49.0",
+    "chromium": "131.0.6778.33",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
+    "cpu_logical": 12,
+    "cpu_physical": 10,
+    "ram_total_gb": 15.7
+  },
+  "configuration": {
+    "reps_per_app": 2,
+    "apps_requested": [
+      "acme-life",
+      "vkpower-life",
+      "questionnaire-life",
+      "catalog-evidence"
+    ],
+    "budget": {
+      "max_states": 40,
+      "max_actions": 250,
+      "max_requests": 4000,
+      "max_duration_ms": 420000
+    },
+    "observe_only": false,
+    "submit_flow_approved": false,
+    "boundary_approvals": null,
+    "advance_oracle": "deterministic stand-in (NOT a model) \u2014 see module docstring",
+    "traversal": "TRAVERSAL_FULL"
+  },
+  "methodology": {
+    "timing": "TimedPort proxy around the production PlaywrightBrowserPort; two perf_counter reads per port call",
+    "resources": "psutil sampling this process AND its children every 250 ms",
+    "p95": "nearest-rank over measured samples (never interpolated)",
+    "reproduce": "python measure_crawl_performance.py --reps 3",
+    "not_measured": [
+      "summit-life-carrier \u2014 Next.js SSR, needs a Docker lane (Gate 2 / A16)",
+      "tier-3 oracle latency \u2014 deliberately stubbed",
+      "qe-central ingest \u2014 a separate service, not in this process",
+      "network throughput on apps that issue no XHR \u2014 acme-life is static and correctly measures 0 network events"
+    ]
+  },
+  "per_app": {
+    "acme-life": {
+      "runs": [
+        {
+          "app": "acme-life",
+          "rep": 1,
+          "error": null,
+          "browser_startup_ms": 620.2,
+          "crawl_wall_ms": 98844.8,
+          "artifact_generation_ms": 0.11,
+          "states_discovered": 6,
+          "navigations": 16,
+          "interactions": 99,
+          "network_requests": 0,
+          "forms_found": 2,
+          "port_calls": 685,
+          "port_ms_total": 77176.1,
+          "port_share_of_wall_pct": 78.1,
+          "states_per_s": 0.061,
+          "pages_per_s": 0.162,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 6.93,
+          "artifact_files": 11,
+          "artifact_bytes": 409881,
+          "phases": {
+            "dom_extraction": {
+              "n": 326,
+              "total_ms": 6479.8,
+              "median_ms": 10.2,
+              "mean_ms": 19.88,
+              "p95_ms": 33.52,
+              "worst_ms": 516.91
+            },
+            "interaction": {
+              "n": 99,
+              "total_ms": 57940.1,
+              "median_ms": 574.28,
+              "mean_ms": 585.25,
+              "p95_ms": 640.79,
+              "worst_ms": 1135.57
+            },
+            "navigation": {
+              "n": 214,
+              "total_ms": 12070.6,
+              "median_ms": 0.01,
+              "mean_ms": 56.4,
+              "p95_ms": 505.34,
+              "worst_ms": 1043.84
+            },
+            "network_drain": {
+              "n": 15,
+              "total_ms": 0.1,
+              "median_ms": 0.01,
+              "mean_ms": 0.01,
+              "p95_ms": 0.01,
+              "worst_ms": 0.01
+            },
+            "other": {
+              "n": 21,
+              "total_ms": 84.1,
+              "median_ms": 4.52,
+              "mean_ms": 4.0,
+              "p95_ms": 8.73,
+              "worst_ms": 10.13
+            },
+            "screenshot": {
+              "n": 10,
+              "total_ms": 601.5,
+              "median_ms": 58.73,
+              "mean_ms": 60.15,
+              "p95_ms": 80.14,
+              "worst_ms": 80.14
+            }
+          },
+          "slowest_methods": {
+            "fill": {
+              "n": 49,
+              "total_ms": 28255.3,
+              "median_ms": 571.85,
+              "mean_ms": 576.64,
+              "p95_ms": 623.72,
+              "worst_ms": 647.78
+            },
+            "click": {
+              "n": 34,
+              "total_ms": 20416.2,
+              "median_ms": 575.89,
+              "mean_ms": 600.48,
+              "p95_ms": 653.88,
+              "worst_ms": 1135.57
+            },
+            "goto": {
+              "n": 16,
+              "total_ms": 11743.0,
+              "median_ms": 526.72,
+              "mean_ms": 733.94,
+              "p95_ms": 1043.84,
+              "worst_ms": 1043.84
+            },
+            "select_option": {
+              "n": 16,
+              "total_ms": 9268.6,
+              "median_ms": 580.96,
+              "mean_ms": 579.29,
+              "p95_ms": 616.23,
+              "worst_ms": 616.23
+            },
+            "materialize": {
+              "n": 5,
+              "total_ms": 2480.0,
+              "median_ms": 494.46,
+              "mean_ms": 496.0,
+              "p95_ms": 516.91,
+              "worst_ms": 516.91
+            },
+            "error_texts": {
+              "n": 113,
+              "total_ms": 1090.3,
+              "median_ms": 8.42,
+              "mean_ms": 9.65,
+              "p95_ms": 17.04,
+              "worst_ms": 33.52
+            },
+            "collect_controls": {
+              "n": 54,
+              "total_ms": 998.5,
+              "median_ms": 16.41,
+              "mean_ms": 18.49,
+              "p95_ms": 32.61,
+              "worst_ms": 54.9
+            },
+            "collect_controls_result": {
+              "n": 44,
+              "total_ms": 865.6,
+              "median_ms": 17.09,
+              "mean_ms": 19.67,
+              "p95_ms": 33.63,
+              "worst_ms": 55.8
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 360,
+            "rss_mb_peak": 516.7,
+            "rss_mb_mean": 493.5,
+            "cpu_pct_peak": 66.7,
+            "cpu_pct_mean": 17.3,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        },
+        {
+          "app": "acme-life",
+          "rep": 2,
+          "error": null,
+          "browser_startup_ms": 541.8,
+          "crawl_wall_ms": 147132.0,
+          "artifact_generation_ms": 0.31,
+          "states_discovered": 6,
+          "navigations": 16,
+          "interactions": 99,
+          "network_requests": 0,
+          "forms_found": 2,
+          "port_calls": 685,
+          "port_ms_total": 125207.1,
+          "port_share_of_wall_pct": 85.1,
+          "states_per_s": 0.041,
+          "pages_per_s": 0.109,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 4.66,
+          "artifact_files": 11,
+          "artifact_bytes": 409915,
+          "phases": {
+            "dom_extraction": {
+              "n": 326,
+              "total_ms": 18797.1,
+              "median_ms": 42.74,
+              "mean_ms": 57.66,
+              "p95_ms": 118.33,
+              "worst_ms": 782.66
+            },
+            "interaction": {
+              "n": 99,
+              "total_ms": 90156.4,
+              "median_ms": 981.94,
+              "mean_ms": 910.67,
+              "p95_ms": 1372.76,
+              "worst_ms": 1934.04
+            },
+            "navigation": {
+              "n": 214,
+              "total_ms": 14319.1,
+              "median_ms": 0.03,
+              "mean_ms": 66.91,
+              "p95_ms": 678.85,
+              "worst_ms": 1039.99
+            },
+            "network_drain": {
+              "n": 15,
+              "total_ms": 0.3,
+              "median_ms": 0.02,
+              "mean_ms": 0.02,
+              "p95_ms": 0.04,
+              "worst_ms": 0.04
+            },
+            "other": {
+              "n": 21,
+              "total_ms": 246.1,
+              "median_ms": 4.33,
+              "mean_ms": 11.72,
+              "p95_ms": 31.0,
+              "worst_ms": 43.9
+            },
+            "screenshot": {
+              "n": 10,
+              "total_ms": 1688.1,
+              "median_ms": 179.18,
+              "mean_ms": 168.81,
+              "p95_ms": 252.09,
+              "worst_ms": 252.09
+            }
+          },
+          "slowest_methods": {
+            "fill": {
+              "n": 49,
+              "total_ms": 44276.0,
+              "median_ms": 997.64,
+              "mean_ms": 903.59,
+              "p95_ms": 1286.86,
+              "worst_ms": 1681.21
+            },
+            "click": {
+              "n": 34,
+              "total_ms": 30169.3,
+              "median_ms": 943.37,
+              "mean_ms": 887.33,
+              "p95_ms": 1372.76,
+              "worst_ms": 1771.43
+            },
+            "select_option": {
+              "n": 16,
+              "total_ms": 15711.1,
+              "median_ms": 1043.1,
+              "mean_ms": 981.95,
+              "p95_ms": 1934.04,
+              "worst_ms": 1934.04
+            },
+            "goto": {
+              "n": 16,
+              "total_ms": 13161.8,
+              "median_ms": 722.19,
+              "mean_ms": 822.61,
+              "p95_ms": 1039.99,
+              "worst_ms": 1039.99
+            },
+            "error_texts": {
+              "n": 113,
+              "total_ms": 5311.2,
+              "median_ms": 46.22,
+              "mean_ms": 47.0,
+              "p95_ms": 103.99,
+              "worst_ms": 162.6
+            },
+            "materialize": {
+              "n": 5,
+              "total_ms": 3338.1,
+              "median_ms": 651.45,
+              "mean_ms": 667.63,
+              "p95_ms": 782.66,
+              "worst_ms": 782.66
+            },
+            "collect_controls": {
+              "n": 54,
+              "total_ms": 3260.8,
+              "median_ms": 76.08,
+              "mean_ms": 60.38,
+              "p95_ms": 109.7,
+              "worst_ms": 147.08
+            },
+            "collect_controls_result": {
+              "n": 44,
+              "total_ms": 2812.0,
+              "median_ms": 73.78,
+              "mean_ms": 63.91,
+              "p95_ms": 117.49,
+              "worst_ms": 120.51
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 499,
+            "rss_mb_peak": 519.7,
+            "rss_mb_mean": 501.1,
+            "cpu_pct_peak": 89.4,
+            "cpu_pct_mean": 37.0,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        }
+      ],
+      "summary": {
+        "crawl_wall_ms": {
+          "n": 2,
+          "total_ms": 245976.8,
+          "median_ms": 122988.4,
+          "mean_ms": 122988.4,
+          "p95_ms": 147132.0,
+          "worst_ms": 147132.0
+        },
+        "browser_startup_ms": {
+          "n": 2,
+          "total_ms": 1162.0,
+          "median_ms": 581.0,
+          "mean_ms": 581.0,
+          "p95_ms": 620.2,
+          "worst_ms": 620.2
+        },
+        "artifact_generation_ms": {
+          "n": 2,
+          "total_ms": 0.4,
+          "median_ms": 0.21,
+          "mean_ms": 0.21,
+          "p95_ms": 0.31,
+          "worst_ms": 0.31
+        },
+        "states_per_s": {
+          "n": 2,
+          "total_ms": 0.1,
+          "median_ms": 0.05,
+          "mean_ms": 0.05,
+          "p95_ms": 0.06,
+          "worst_ms": 0.06
+        },
+        "pages_per_s": {
+          "n": 2,
+          "total_ms": 0.3,
+          "median_ms": 0.14,
+          "mean_ms": 0.14,
+          "p95_ms": 0.16,
+          "worst_ms": 0.16
+        },
+        "network_req_per_s": {
+          "n": 2,
+          "total_ms": 0.0,
+          "median_ms": 0.0,
+          "mean_ms": 0.0,
+          "p95_ms": 0.0,
+          "worst_ms": 0.0
+        },
+        "port_calls_per_s": {
+          "n": 2,
+          "total_ms": 11.6,
+          "median_ms": 5.79,
+          "mean_ms": 5.79,
+          "p95_ms": 6.93,
+          "worst_ms": 6.93
+        },
+        "port_share_of_wall_pct": {
+          "n": 2,
+          "total_ms": 163.2,
+          "median_ms": 81.6,
+          "mean_ms": 81.6,
+          "p95_ms": 85.1,
+          "worst_ms": 85.1
+        },
+        "states_discovered": {
+          "median": 6.0,
+          "min": 6,
+          "max": 6,
+          "stable": true
+        },
+        "navigations": {
+          "median": 16.0,
+          "min": 16,
+          "max": 16,
+          "stable": true
+        },
+        "interactions": {
+          "median": 99.0,
+          "min": 99,
+          "max": 99,
+          "stable": true
+        },
+        "network_requests": {
+          "median": 0.0,
+          "min": 0,
+          "max": 0,
+          "stable": true
+        },
+        "port_calls": {
+          "median": 685.0,
+          "min": 685,
+          "max": 685,
+          "stable": true
+        },
+        "artifact_files": {
+          "median": 11.0,
+          "min": 11,
+          "max": 11,
+          "stable": true
+        },
+        "rss_mb_peak": {
+          "n": 2,
+          "total_ms": 1036.4,
+          "median_ms": 518.2,
+          "mean_ms": 518.2,
+          "p95_ms": 519.7,
+          "worst_ms": 519.7
+        },
+        "cpu_pct_mean": {
+          "n": 2,
+          "total_ms": 54.3,
+          "median_ms": 27.15,
+          "mean_ms": 27.15,
+          "p95_ms": 37.0,
+          "worst_ms": 37.0
+        }
+      }
+    },
+    "vkpower-life": {
+      "runs": [
+        {
+          "app": "vkpower-life",
+          "rep": 1,
+          "error": null,
+          "browser_startup_ms": 858.5,
+          "crawl_wall_ms": 75055.2,
+          "artifact_generation_ms": 0.26,
+          "states_discovered": 5,
+          "navigations": 11,
+          "interactions": 38,
+          "network_requests": 0,
+          "forms_found": 1,
+          "port_calls": 318,
+          "port_ms_total": 63594.5,
+          "port_share_of_wall_pct": 84.7,
+          "states_per_s": 0.067,
+          "pages_per_s": 0.147,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 4.24,
+          "artifact_files": 6,
+          "artifact_bytes": 179629,
+          "phases": {
+            "dom_extraction": {
+              "n": 138,
+              "total_ms": 10190.2,
+              "median_ms": 52.16,
+              "mean_ms": 73.84,
+              "p95_ms": 129.03,
+              "worst_ms": 633.13
+            },
+            "interaction": {
+              "n": 38,
+              "total_ms": 40806.1,
+              "median_ms": 1089.91,
+              "mean_ms": 1073.85,
+              "p95_ms": 1334.69,
+              "worst_ms": 1380.86
+            },
+            "navigation": {
+              "n": 112,
+              "total_ms": 11421.7,
+              "median_ms": 0.03,
+              "mean_ms": 101.98,
+              "p95_ms": 991.68,
+              "worst_ms": 1258.86
+            },
+            "network_drain": {
+              "n": 9,
+              "total_ms": 0.1,
+              "median_ms": 0.01,
+              "mean_ms": 0.01,
+              "p95_ms": 0.02,
+              "worst_ms": 0.02
+            },
+            "other": {
+              "n": 15,
+              "total_ms": 260.3,
+              "median_ms": 12.56,
+              "mean_ms": 17.35,
+              "p95_ms": 79.62,
+              "worst_ms": 79.62
+            },
+            "screenshot": {
+              "n": 6,
+              "total_ms": 916.0,
+              "median_ms": 174.65,
+              "mean_ms": 152.67,
+              "p95_ms": 197.0,
+              "worst_ms": 197.0
+            }
+          },
+          "slowest_methods": {
+            "fill": {
+              "n": 16,
+              "total_ms": 16754.3,
+              "median_ms": 1044.43,
+              "mean_ms": 1047.15,
+              "p95_ms": 1380.86,
+              "worst_ms": 1380.86
+            },
+            "click": {
+              "n": 13,
+              "total_ms": 13301.3,
+              "median_ms": 1016.36,
+              "mean_ms": 1023.18,
+              "p95_ms": 1225.71,
+              "worst_ms": 1225.71
+            },
+            "select_option": {
+              "n": 9,
+              "total_ms": 10750.5,
+              "median_ms": 1200.99,
+              "mean_ms": 1194.5,
+              "p95_ms": 1334.69,
+              "worst_ms": 1334.69
+            },
+            "goto": {
+              "n": 11,
+              "total_ms": 10564.0,
+              "median_ms": 991.68,
+              "mean_ms": 960.36,
+              "p95_ms": 1258.86,
+              "worst_ms": 1258.86
+            },
+            "error_texts": {
+              "n": 49,
+              "total_ms": 3010.4,
+              "median_ms": 52.37,
+              "mean_ms": 61.44,
+              "p95_ms": 110.29,
+              "worst_ms": 125.93
+            },
+            "materialize": {
+              "n": 4,
+              "total_ms": 2488.2,
+              "median_ms": 625.6,
+              "mean_ms": 622.05,
+              "p95_ms": 633.13,
+              "worst_ms": 633.13
+            },
+            "collect_controls_result": {
+              "n": 22,
+              "total_ms": 1742.6,
+              "median_ms": 75.73,
+              "mean_ms": 79.21,
+              "p95_ms": 122.71,
+              "worst_ms": 129.03
+            },
+            "collect_controls": {
+              "n": 14,
+              "total_ms": 1057.8,
+              "median_ms": 76.11,
+              "mean_ms": 75.56,
+              "p95_ms": 154.71,
+              "worst_ms": 154.71
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 251,
+            "rss_mb_peak": 531.5,
+            "rss_mb_mean": 515.7,
+            "cpu_pct_peak": 94.7,
+            "cpu_pct_mean": 41.6,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        },
+        {
+          "app": "vkpower-life",
+          "rep": 2,
+          "error": null,
+          "browser_startup_ms": 719.4,
+          "crawl_wall_ms": 75470.4,
+          "artifact_generation_ms": 0.18,
+          "states_discovered": 5,
+          "navigations": 11,
+          "interactions": 38,
+          "network_requests": 0,
+          "forms_found": 1,
+          "port_calls": 318,
+          "port_ms_total": 63836.8,
+          "port_share_of_wall_pct": 84.6,
+          "states_per_s": 0.066,
+          "pages_per_s": 0.146,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 4.21,
+          "artifact_files": 6,
+          "artifact_bytes": 179624,
+          "phases": {
+            "dom_extraction": {
+              "n": 138,
+              "total_ms": 10663.6,
+              "median_ms": 58.34,
+              "mean_ms": 77.27,
+              "p95_ms": 123.8,
+              "worst_ms": 709.69
+            },
+            "interaction": {
+              "n": 38,
+              "total_ms": 40573.7,
+              "median_ms": 1054.63,
+              "mean_ms": 1067.73,
+              "p95_ms": 1238.65,
+              "worst_ms": 1329.34
+            },
+            "navigation": {
+              "n": 112,
+              "total_ms": 11312.5,
+              "median_ms": 0.03,
+              "mean_ms": 101.0,
+              "p95_ms": 1128.0,
+              "worst_ms": 1285.28
+            },
+            "network_drain": {
+              "n": 9,
+              "total_ms": 0.1,
+              "median_ms": 0.01,
+              "mean_ms": 0.01,
+              "p95_ms": 0.02,
+              "worst_ms": 0.02
+            },
+            "other": {
+              "n": 15,
+              "total_ms": 231.8,
+              "median_ms": 22.75,
+              "mean_ms": 15.46,
+              "p95_ms": 25.77,
+              "worst_ms": 25.77
+            },
+            "screenshot": {
+              "n": 6,
+              "total_ms": 1055.1,
+              "median_ms": 180.83,
+              "mean_ms": 175.85,
+              "p95_ms": 192.55,
+              "worst_ms": 192.55
+            }
+          },
+          "slowest_methods": {
+            "fill": {
+              "n": 16,
+              "total_ms": 16620.2,
+              "median_ms": 1026.09,
+              "mean_ms": 1038.76,
+              "p95_ms": 1161.57,
+              "worst_ms": 1161.57
+            },
+            "click": {
+              "n": 13,
+              "total_ms": 13693.1,
+              "median_ms": 1049.44,
+              "mean_ms": 1053.32,
+              "p95_ms": 1329.34,
+              "worst_ms": 1329.34
+            },
+            "goto": {
+              "n": 11,
+              "total_ms": 10411.4,
+              "median_ms": 1128.0,
+              "mean_ms": 946.49,
+              "p95_ms": 1285.28,
+              "worst_ms": 1285.28
+            },
+            "select_option": {
+              "n": 9,
+              "total_ms": 10260.3,
+              "median_ms": 1151.95,
+              "mean_ms": 1140.04,
+              "p95_ms": 1238.65,
+              "worst_ms": 1238.65
+            },
+            "error_texts": {
+              "n": 49,
+              "total_ms": 3019.2,
+              "median_ms": 54.94,
+              "mean_ms": 61.62,
+              "p95_ms": 97.4,
+              "worst_ms": 107.73
+            },
+            "materialize": {
+              "n": 4,
+              "total_ms": 2579.1,
+              "median_ms": 629.54,
+              "mean_ms": 644.78,
+              "p95_ms": 709.69,
+              "worst_ms": 709.69
+            },
+            "collect_controls_result": {
+              "n": 22,
+              "total_ms": 1786.9,
+              "median_ms": 74.3,
+              "mean_ms": 81.22,
+              "p95_ms": 116.69,
+              "worst_ms": 120.39
+            },
+            "collect_controls": {
+              "n": 14,
+              "total_ms": 1164.2,
+              "median_ms": 75.1,
+              "mean_ms": 83.16,
+              "p95_ms": 123.8,
+              "worst_ms": 123.8
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 251,
+            "rss_mb_peak": 526.6,
+            "rss_mb_mean": 516.2,
+            "cpu_pct_peak": 89.4,
+            "cpu_pct_mean": 41.6,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        }
+      ],
+      "summary": {
+        "crawl_wall_ms": {
+          "n": 2,
+          "total_ms": 150525.6,
+          "median_ms": 75262.8,
+          "mean_ms": 75262.8,
+          "p95_ms": 75470.4,
+          "worst_ms": 75470.4
+        },
+        "browser_startup_ms": {
+          "n": 2,
+          "total_ms": 1577.9,
+          "median_ms": 788.95,
+          "mean_ms": 788.95,
+          "p95_ms": 858.5,
+          "worst_ms": 858.5
+        },
+        "artifact_generation_ms": {
+          "n": 2,
+          "total_ms": 0.4,
+          "median_ms": 0.22,
+          "mean_ms": 0.22,
+          "p95_ms": 0.26,
+          "worst_ms": 0.26
+        },
+        "states_per_s": {
+          "n": 2,
+          "total_ms": 0.1,
+          "median_ms": 0.07,
+          "mean_ms": 0.07,
+          "p95_ms": 0.07,
+          "worst_ms": 0.07
+        },
+        "pages_per_s": {
+          "n": 2,
+          "total_ms": 0.3,
+          "median_ms": 0.15,
+          "mean_ms": 0.15,
+          "p95_ms": 0.15,
+          "worst_ms": 0.15
+        },
+        "network_req_per_s": {
+          "n": 2,
+          "total_ms": 0.0,
+          "median_ms": 0.0,
+          "mean_ms": 0.0,
+          "p95_ms": 0.0,
+          "worst_ms": 0.0
+        },
+        "port_calls_per_s": {
+          "n": 2,
+          "total_ms": 8.4,
+          "median_ms": 4.22,
+          "mean_ms": 4.22,
+          "p95_ms": 4.24,
+          "worst_ms": 4.24
+        },
+        "port_share_of_wall_pct": {
+          "n": 2,
+          "total_ms": 169.3,
+          "median_ms": 84.65,
+          "mean_ms": 84.65,
+          "p95_ms": 84.7,
+          "worst_ms": 84.7
+        },
+        "states_discovered": {
+          "median": 5.0,
+          "min": 5,
+          "max": 5,
+          "stable": true
+        },
+        "navigations": {
+          "median": 11.0,
+          "min": 11,
+          "max": 11,
+          "stable": true
+        },
+        "interactions": {
+          "median": 38.0,
+          "min": 38,
+          "max": 38,
+          "stable": true
+        },
+        "network_requests": {
+          "median": 0.0,
+          "min": 0,
+          "max": 0,
+          "stable": true
+        },
+        "port_calls": {
+          "median": 318.0,
+          "min": 318,
+          "max": 318,
+          "stable": true
+        },
+        "artifact_files": {
+          "median": 6.0,
+          "min": 6,
+          "max": 6,
+          "stable": true
+        },
+        "rss_mb_peak": {
+          "n": 2,
+          "total_ms": 1058.1,
+          "median_ms": 529.05,
+          "mean_ms": 529.05,
+          "p95_ms": 531.5,
+          "worst_ms": 531.5
+        },
+        "cpu_pct_mean": {
+          "n": 2,
+          "total_ms": 83.2,
+          "median_ms": 41.6,
+          "mean_ms": 41.6,
+          "p95_ms": 41.6,
+          "worst_ms": 41.6
+        }
+      }
+    },
+    "questionnaire-life": {
+      "runs": [
+        {
+          "app": "questionnaire-life",
+          "rep": 1,
+          "error": null,
+          "browser_startup_ms": 801.1,
+          "crawl_wall_ms": 23817.8,
+          "artifact_generation_ms": 0.21,
+          "states_discovered": 2,
+          "navigations": 3,
+          "interactions": 11,
+          "network_requests": 0,
+          "forms_found": 1,
+          "port_calls": 114,
+          "port_ms_total": 20557.9,
+          "port_share_of_wall_pct": 86.3,
+          "states_per_s": 0.084,
+          "pages_per_s": 0.126,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 4.79,
+          "artifact_files": 4,
+          "artifact_bytes": 132464,
+          "phases": {
+            "dom_extraction": {
+              "n": 53,
+              "total_ms": 4018.0,
+              "median_ms": 57.2,
+              "mean_ms": 75.81,
+              "p95_ms": 120.63,
+              "worst_ms": 630.75
+            },
+            "interaction": {
+              "n": 11,
+              "total_ms": 11669.8,
+              "median_ms": 1079.04,
+              "mean_ms": 1060.89,
+              "p95_ms": 1416.16,
+              "worst_ms": 1416.16
+            },
+            "navigation": {
+              "n": 37,
+              "total_ms": 3903.1,
+              "median_ms": 0.03,
+              "mean_ms": 105.49,
+              "p95_ms": 1185.97,
+              "worst_ms": 1211.58
+            },
+            "network_drain": {
+              "n": 4,
+              "total_ms": 0.1,
+              "median_ms": 0.01,
+              "mean_ms": 0.02,
+              "p95_ms": 0.02,
+              "worst_ms": 0.02
+            },
+            "other": {
+              "n": 5,
+              "total_ms": 28.1,
+              "median_ms": 0.01,
+              "mean_ms": 5.62,
+              "p95_ms": 28.09,
+              "worst_ms": 28.09
+            },
+            "screenshot": {
+              "n": 4,
+              "total_ms": 938.8,
+              "median_ms": 238.35,
+              "mean_ms": 234.71,
+              "p95_ms": 264.41,
+              "worst_ms": 264.41
+            }
+          },
+          "slowest_methods": {
+            "click": {
+              "n": 6,
+              "total_ms": 6371.4,
+              "median_ms": 1033.23,
+              "mean_ms": 1061.9,
+              "p95_ms": 1166.99,
+              "worst_ms": 1166.99
+            },
+            "fill": {
+              "n": 4,
+              "total_ms": 3882.3,
+              "median_ms": 1111.7,
+              "mean_ms": 970.57,
+              "p95_ms": 1294.01,
+              "worst_ms": 1294.01
+            },
+            "goto": {
+              "n": 3,
+              "total_ms": 3562.8,
+              "median_ms": 1185.97,
+              "mean_ms": 1187.6,
+              "p95_ms": 1211.58,
+              "worst_ms": 1211.58
+            },
+            "select_option": {
+              "n": 1,
+              "total_ms": 1416.2,
+              "median_ms": 1416.16,
+              "mean_ms": 1416.16,
+              "p95_ms": 1416.16,
+              "worst_ms": 1416.16
+            },
+            "collect_controls_result": {
+              "n": 11,
+              "total_ms": 1143.8,
+              "median_ms": 98.43,
+              "mean_ms": 103.98,
+              "p95_ms": 146.1,
+              "worst_ms": 146.1
+            },
+            "error_texts": {
+              "n": 18,
+              "total_ms": 1068.1,
+              "median_ms": 52.21,
+              "mean_ms": 59.34,
+              "p95_ms": 114.12,
+              "worst_ms": 114.12
+            },
+            "screenshot_png": {
+              "n": 4,
+              "total_ms": 938.8,
+              "median_ms": 238.35,
+              "mean_ms": 234.71,
+              "p95_ms": 264.41,
+              "worst_ms": 264.41
+            },
+            "materialize": {
+              "n": 1,
+              "total_ms": 630.8,
+              "median_ms": 630.75,
+              "mean_ms": 630.75,
+              "p95_ms": 630.75,
+              "worst_ms": 630.75
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 79,
+            "rss_mb_peak": 526.2,
+            "rss_mb_mean": 514.6,
+            "cpu_pct_peak": 88.7,
+            "cpu_pct_mean": 42.2,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        },
+        {
+          "app": "questionnaire-life",
+          "rep": 2,
+          "error": null,
+          "browser_startup_ms": 851.6,
+          "crawl_wall_ms": 22871.8,
+          "artifact_generation_ms": 0.2,
+          "states_discovered": 2,
+          "navigations": 3,
+          "interactions": 11,
+          "network_requests": 0,
+          "forms_found": 1,
+          "port_calls": 114,
+          "port_ms_total": 19606.6,
+          "port_share_of_wall_pct": 85.7,
+          "states_per_s": 0.087,
+          "pages_per_s": 0.131,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 4.98,
+          "artifact_files": 4,
+          "artifact_bytes": 132464,
+          "phases": {
+            "dom_extraction": {
+              "n": 53,
+              "total_ms": 3723.9,
+              "median_ms": 53.43,
+              "mean_ms": 70.26,
+              "p95_ms": 128.46,
+              "worst_ms": 622.84
+            },
+            "interaction": {
+              "n": 11,
+              "total_ms": 11233.8,
+              "median_ms": 1089.14,
+              "mean_ms": 1021.26,
+              "p95_ms": 1195.27,
+              "worst_ms": 1195.27
+            },
+            "navigation": {
+              "n": 37,
+              "total_ms": 3840.3,
+              "median_ms": 0.03,
+              "mean_ms": 103.79,
+              "p95_ms": 1190.24,
+              "worst_ms": 1194.57
+            },
+            "network_drain": {
+              "n": 4,
+              "total_ms": 0.1,
+              "median_ms": 0.01,
+              "mean_ms": 0.01,
+              "p95_ms": 0.02,
+              "worst_ms": 0.02
+            },
+            "other": {
+              "n": 5,
+              "total_ms": 29.4,
+              "median_ms": 0.01,
+              "mean_ms": 5.87,
+              "p95_ms": 29.33,
+              "worst_ms": 29.33
+            },
+            "screenshot": {
+              "n": 4,
+              "total_ms": 779.1,
+              "median_ms": 190.28,
+              "mean_ms": 194.77,
+              "p95_ms": 255.09,
+              "worst_ms": 255.09
+            }
+          },
+          "slowest_methods": {
+            "click": {
+              "n": 6,
+              "total_ms": 6445.4,
+              "median_ms": 1064.88,
+              "mean_ms": 1074.23,
+              "p95_ms": 1164.02,
+              "worst_ms": 1164.02
+            },
+            "fill": {
+              "n": 4,
+              "total_ms": 3608.3,
+              "median_ms": 1124.17,
+              "mean_ms": 902.09,
+              "p95_ms": 1195.27,
+              "worst_ms": 1195.27
+            },
+            "goto": {
+              "n": 3,
+              "total_ms": 3518.0,
+              "median_ms": 1190.24,
+              "mean_ms": 1172.68,
+              "p95_ms": 1194.57,
+              "worst_ms": 1194.57
+            },
+            "select_option": {
+              "n": 1,
+              "total_ms": 1180.1,
+              "median_ms": 1180.13,
+              "mean_ms": 1180.13,
+              "p95_ms": 1180.13,
+              "worst_ms": 1180.13
+            },
+            "collect_controls_result": {
+              "n": 11,
+              "total_ms": 1044.4,
+              "median_ms": 91.67,
+              "mean_ms": 94.95,
+              "p95_ms": 128.46,
+              "worst_ms": 128.46
+            },
+            "error_texts": {
+              "n": 18,
+              "total_ms": 977.7,
+              "median_ms": 50.87,
+              "mean_ms": 54.32,
+              "p95_ms": 95.09,
+              "worst_ms": 95.09
+            },
+            "screenshot_png": {
+              "n": 4,
+              "total_ms": 779.1,
+              "median_ms": 190.28,
+              "mean_ms": 194.77,
+              "p95_ms": 255.09,
+              "worst_ms": 255.09
+            },
+            "materialize": {
+              "n": 1,
+              "total_ms": 622.8,
+              "median_ms": 622.84,
+              "mean_ms": 622.84,
+              "p95_ms": 622.84,
+              "worst_ms": 622.84
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 76,
+            "rss_mb_peak": 495.5,
+            "rss_mb_mean": 485.8,
+            "cpu_pct_peak": 83.4,
+            "cpu_pct_mean": 39.4,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        }
+      ],
+      "summary": {
+        "crawl_wall_ms": {
+          "n": 2,
+          "total_ms": 46689.6,
+          "median_ms": 23344.8,
+          "mean_ms": 23344.8,
+          "p95_ms": 23817.8,
+          "worst_ms": 23817.8
+        },
+        "browser_startup_ms": {
+          "n": 2,
+          "total_ms": 1652.7,
+          "median_ms": 826.35,
+          "mean_ms": 826.35,
+          "p95_ms": 851.6,
+          "worst_ms": 851.6
+        },
+        "artifact_generation_ms": {
+          "n": 2,
+          "total_ms": 0.4,
+          "median_ms": 0.21,
+          "mean_ms": 0.21,
+          "p95_ms": 0.21,
+          "worst_ms": 0.21
+        },
+        "states_per_s": {
+          "n": 2,
+          "total_ms": 0.2,
+          "median_ms": 0.09,
+          "mean_ms": 0.09,
+          "p95_ms": 0.09,
+          "worst_ms": 0.09
+        },
+        "pages_per_s": {
+          "n": 2,
+          "total_ms": 0.3,
+          "median_ms": 0.13,
+          "mean_ms": 0.13,
+          "p95_ms": 0.13,
+          "worst_ms": 0.13
+        },
+        "network_req_per_s": {
+          "n": 2,
+          "total_ms": 0.0,
+          "median_ms": 0.0,
+          "mean_ms": 0.0,
+          "p95_ms": 0.0,
+          "worst_ms": 0.0
+        },
+        "port_calls_per_s": {
+          "n": 2,
+          "total_ms": 9.8,
+          "median_ms": 4.88,
+          "mean_ms": 4.88,
+          "p95_ms": 4.98,
+          "worst_ms": 4.98
+        },
+        "port_share_of_wall_pct": {
+          "n": 2,
+          "total_ms": 172.0,
+          "median_ms": 86.0,
+          "mean_ms": 86.0,
+          "p95_ms": 86.3,
+          "worst_ms": 86.3
+        },
+        "states_discovered": {
+          "median": 2.0,
+          "min": 2,
+          "max": 2,
+          "stable": true
+        },
+        "navigations": {
+          "median": 3.0,
+          "min": 3,
+          "max": 3,
+          "stable": true
+        },
+        "interactions": {
+          "median": 11.0,
+          "min": 11,
+          "max": 11,
+          "stable": true
+        },
+        "network_requests": {
+          "median": 0.0,
+          "min": 0,
+          "max": 0,
+          "stable": true
+        },
+        "port_calls": {
+          "median": 114.0,
+          "min": 114,
+          "max": 114,
+          "stable": true
+        },
+        "artifact_files": {
+          "median": 4.0,
+          "min": 4,
+          "max": 4,
+          "stable": true
+        },
+        "rss_mb_peak": {
+          "n": 2,
+          "total_ms": 1021.7,
+          "median_ms": 510.85,
+          "mean_ms": 510.85,
+          "p95_ms": 526.2,
+          "worst_ms": 526.2
+        },
+        "cpu_pct_mean": {
+          "n": 2,
+          "total_ms": 81.6,
+          "median_ms": 40.8,
+          "mean_ms": 40.8,
+          "p95_ms": 42.2,
+          "worst_ms": 42.2
+        }
+      }
+    },
+    "catalog-evidence": {
+      "runs": [
+        {
+          "app": "catalog-evidence",
+          "rep": 1,
+          "error": null,
+          "browser_startup_ms": 920.7,
+          "crawl_wall_ms": 101530.8,
+          "artifact_generation_ms": 0.25,
+          "states_discovered": 2,
+          "navigations": 3,
+          "interactions": 25,
+          "network_requests": 0,
+          "forms_found": 1,
+          "port_calls": 127,
+          "port_ms_total": 99221.2,
+          "port_share_of_wall_pct": 97.7,
+          "states_per_s": 0.02,
+          "pages_per_s": 0.03,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 1.25,
+          "artifact_files": 4,
+          "artifact_bytes": 157497,
+          "phases": {
+            "dom_extraction": {
+              "n": 55,
+              "total_ms": 4896.2,
+              "median_ms": 64.35,
+              "mean_ms": 89.02,
+              "p95_ms": 136.44,
+              "worst_ms": 661.17
+            },
+            "interaction": {
+              "n": 25,
+              "total_ms": 89856.9,
+              "median_ms": 1202.53,
+              "mean_ms": 3594.28,
+              "p95_ms": 1584.45,
+              "worst_ms": 61636.54
+            },
+            "navigation": {
+              "n": 35,
+              "total_ms": 3832.7,
+              "median_ms": 0.03,
+              "mean_ms": 109.51,
+              "p95_ms": 1189.11,
+              "worst_ms": 1256.46
+            },
+            "network_drain": {
+              "n": 4,
+              "total_ms": 0.1,
+              "median_ms": 0.02,
+              "mean_ms": 0.02,
+              "p95_ms": 0.02,
+              "worst_ms": 0.02
+            },
+            "other": {
+              "n": 5,
+              "total_ms": 24.1,
+              "median_ms": 0.01,
+              "mean_ms": 4.83,
+              "p95_ms": 24.11,
+              "worst_ms": 24.11
+            },
+            "screenshot": {
+              "n": 3,
+              "total_ms": 611.1,
+              "median_ms": 235.43,
+              "mean_ms": 203.7,
+              "p95_ms": 235.59,
+              "worst_ms": 235.59
+            }
+          },
+          "slowest_methods": {
+            "select_option": {
+              "n": 11,
+              "total_ms": 74838.7,
+              "median_ms": 1271.99,
+              "mean_ms": 6803.51,
+              "p95_ms": 61636.54,
+              "worst_ms": 61636.54
+            },
+            "fill": {
+              "n": 7,
+              "total_ms": 7251.8,
+              "median_ms": 1157.4,
+              "mean_ms": 1035.98,
+              "p95_ms": 1299.18,
+              "worst_ms": 1299.18
+            },
+            "set_checked": {
+              "n": 4,
+              "total_ms": 4460.5,
+              "median_ms": 1097.1,
+              "mean_ms": 1115.13,
+              "p95_ms": 1198.86,
+              "worst_ms": 1198.86
+            },
+            "goto": {
+              "n": 3,
+              "total_ms": 3631.7,
+              "median_ms": 1189.11,
+              "mean_ms": 1210.58,
+              "p95_ms": 1256.46,
+              "worst_ms": 1256.46
+            },
+            "click": {
+              "n": 3,
+              "total_ms": 3305.9,
+              "median_ms": 1052.68,
+              "mean_ms": 1101.97,
+              "p95_ms": 1202.53,
+              "worst_ms": 1202.53
+            },
+            "error_texts": {
+              "n": 25,
+              "total_ms": 1745.8,
+              "median_ms": 57.64,
+              "mean_ms": 69.83,
+              "p95_ms": 114.15,
+              "worst_ms": 127.82
+            },
+            "collect_controls_result": {
+              "n": 8,
+              "total_ms": 1117.1,
+              "median_ms": 111.05,
+              "mean_ms": 139.64,
+              "p95_ms": 360.96,
+              "worst_ms": 360.96
+            },
+            "collect_controls": {
+              "n": 7,
+              "total_ms": 789.6,
+              "median_ms": 117.72,
+              "mean_ms": 112.8,
+              "p95_ms": 129.16,
+              "worst_ms": 129.16
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 334,
+            "rss_mb_peak": 454.9,
+            "rss_mb_mean": 403.6,
+            "cpu_pct_peak": 85.1,
+            "cpu_pct_mean": 27.2,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        },
+        {
+          "app": "catalog-evidence",
+          "rep": 2,
+          "error": null,
+          "browser_startup_ms": 921.0,
+          "crawl_wall_ms": 98778.1,
+          "artifact_generation_ms": 0.21,
+          "states_discovered": 2,
+          "navigations": 3,
+          "interactions": 25,
+          "network_requests": 0,
+          "forms_found": 1,
+          "port_calls": 127,
+          "port_ms_total": 96557.1,
+          "port_share_of_wall_pct": 97.8,
+          "states_per_s": 0.02,
+          "pages_per_s": 0.03,
+          "network_req_per_s": 0.0,
+          "port_calls_per_s": 1.29,
+          "artifact_files": 4,
+          "artifact_bytes": 157492,
+          "phases": {
+            "dom_extraction": {
+              "n": 55,
+              "total_ms": 4359.5,
+              "median_ms": 56.05,
+              "mean_ms": 79.26,
+              "p95_ms": 125.33,
+              "worst_ms": 615.99
+            },
+            "interaction": {
+              "n": 25,
+              "total_ms": 87786.0,
+              "median_ms": 1120.68,
+              "mean_ms": 3511.44,
+              "p95_ms": 1636.0,
+              "worst_ms": 61116.54
+            },
+            "navigation": {
+              "n": 35,
+              "total_ms": 3799.6,
+              "median_ms": 0.02,
+              "mean_ms": 108.56,
+              "p95_ms": 1179.36,
+              "worst_ms": 1204.27
+            },
+            "network_drain": {
+              "n": 4,
+              "total_ms": 0.1,
+              "median_ms": 0.01,
+              "mean_ms": 0.02,
+              "p95_ms": 0.02,
+              "worst_ms": 0.02
+            },
+            "other": {
+              "n": 5,
+              "total_ms": 24.7,
+              "median_ms": 0.01,
+              "mean_ms": 4.94,
+              "p95_ms": 24.66,
+              "worst_ms": 24.66
+            },
+            "screenshot": {
+              "n": 3,
+              "total_ms": 587.3,
+              "median_ms": 237.75,
+              "mean_ms": 195.75,
+              "p95_ms": 252.55,
+              "worst_ms": 252.55
+            }
+          },
+          "slowest_methods": {
+            "select_option": {
+              "n": 11,
+              "total_ms": 73079.6,
+              "median_ms": 1164.42,
+              "mean_ms": 6643.6,
+              "p95_ms": 61116.54,
+              "worst_ms": 61116.54
+            },
+            "fill": {
+              "n": 7,
+              "total_ms": 7240.4,
+              "median_ms": 1078.88,
+              "mean_ms": 1034.34,
+              "p95_ms": 1636.0,
+              "worst_ms": 1636.0
+            },
+            "set_checked": {
+              "n": 4,
+              "total_ms": 4388.6,
+              "median_ms": 1089.54,
+              "mean_ms": 1097.16,
+              "p95_ms": 1183.25,
+              "worst_ms": 1183.25
+            },
+            "goto": {
+              "n": 3,
+              "total_ms": 3541.4,
+              "median_ms": 1179.36,
+              "mean_ms": 1180.47,
+              "p95_ms": 1204.27,
+              "worst_ms": 1204.27
+            },
+            "click": {
+              "n": 3,
+              "total_ms": 3077.3,
+              "median_ms": 1038.83,
+              "mean_ms": 1025.78,
+              "p95_ms": 1094.96,
+              "worst_ms": 1094.96
+            },
+            "error_texts": {
+              "n": 25,
+              "total_ms": 1556.0,
+              "median_ms": 52.77,
+              "mean_ms": 62.24,
+              "p95_ms": 104.67,
+              "worst_ms": 108.78
+            },
+            "collect_controls_result": {
+              "n": 8,
+              "total_ms": 780.0,
+              "median_ms": 95.7,
+              "mean_ms": 97.5,
+              "p95_ms": 125.33,
+              "worst_ms": 125.33
+            },
+            "collect_controls": {
+              "n": 7,
+              "total_ms": 764.2,
+              "median_ms": 110.76,
+              "mean_ms": 109.16,
+              "p95_ms": 127.49,
+              "worst_ms": 127.49
+            }
+          },
+          "resources": {
+            "available": true,
+            "samples": 330,
+            "rss_mb_peak": 537.0,
+            "rss_mb_mean": 516.3,
+            "cpu_pct_peak": 94.7,
+            "cpu_pct_mean": 25.4,
+            "cpu_pct_note": "sum across the process tree; 100% == one fully busy core"
+          },
+          "browser_version": "131.0.6778.33"
+        }
+      ],
+      "summary": {
+        "crawl_wall_ms": {
+          "n": 2,
+          "total_ms": 200308.9,
+          "median_ms": 100154.45,
+          "mean_ms": 100154.45,
+          "p95_ms": 101530.8,
+          "worst_ms": 101530.8
+        },
+        "browser_startup_ms": {
+          "n": 2,
+          "total_ms": 1841.7,
+          "median_ms": 920.85,
+          "mean_ms": 920.85,
+          "p95_ms": 921.0,
+          "worst_ms": 921.0
+        },
+        "artifact_generation_ms": {
+          "n": 2,
+          "total_ms": 0.5,
+          "median_ms": 0.23,
+          "mean_ms": 0.23,
+          "p95_ms": 0.25,
+          "worst_ms": 0.25
+        },
+        "states_per_s": {
+          "n": 2,
+          "total_ms": 0.0,
+          "median_ms": 0.02,
+          "mean_ms": 0.02,
+          "p95_ms": 0.02,
+          "worst_ms": 0.02
+        },
+        "pages_per_s": {
+          "n": 2,
+          "total_ms": 0.1,
+          "median_ms": 0.03,
+          "mean_ms": 0.03,
+          "p95_ms": 0.03,
+          "worst_ms": 0.03
+        },
+        "network_req_per_s": {
+          "n": 2,
+          "total_ms": 0.0,
+          "median_ms": 0.0,
+          "mean_ms": 0.0,
+          "p95_ms": 0.0,
+          "worst_ms": 0.0
+        },
+        "port_calls_per_s": {
+          "n": 2,
+          "total_ms": 2.5,
+          "median_ms": 1.27,
+          "mean_ms": 1.27,
+          "p95_ms": 1.29,
+          "worst_ms": 1.29
+        },
+        "port_share_of_wall_pct": {
+          "n": 2,
+          "total_ms": 195.5,
+          "median_ms": 97.75,
+          "mean_ms": 97.75,
+          "p95_ms": 97.8,
+          "worst_ms": 97.8
+        },
+        "states_discovered": {
+          "median": 2.0,
+          "min": 2,
+          "max": 2,
+          "stable": true
+        },
+        "navigations": {
+          "median": 3.0,
+          "min": 3,
+          "max": 3,
+          "stable": true
+        },
+        "interactions": {
+          "median": 25.0,
+          "min": 25,
+          "max": 25,
+          "stable": true
+        },
+        "network_requests": {
+          "median": 0.0,
+          "min": 0,
+          "max": 0,
+          "stable": true
+        },
+        "port_calls": {
+          "median": 127.0,
+          "min": 127,
+          "max": 127,
+          "stable": true
+        },
+        "artifact_files": {
+          "median": 4.0,
+          "min": 4,
+          "max": 4,
+          "stable": true
+        },
+        "rss_mb_peak": {
+          "n": 2,
+          "total_ms": 991.9,
+          "median_ms": 495.95,
+          "mean_ms": 495.95,
+          "p95_ms": 537.0,
+          "worst_ms": 537.0
+        },
+        "cpu_pct_mean": {
+          "n": 2,
+          "total_ms": 52.6,
+          "median_ms": 26.3,
+          "mean_ms": 26.3,
+          "p95_ms": 27.2,
+          "worst_ms": 27.2
+        }
+      }
+    }
+  },
+  "overall": {
+    "crawl_wall_ms": {
+      "n": 8,
+      "total_ms": 643500.9,
+      "median_ms": 87124.25,
+      "mean_ms": 80437.61,
+      "p95_ms": 147132.0,
+      "worst_ms": 147132.0
+    },
+    "browser_startup_ms": {
+      "n": 8,
+      "total_ms": 6234.3,
+      "median_ms": 826.35,
+      "mean_ms": 779.29,
+      "p95_ms": 921.0,
+      "worst_ms": 921.0
+    },
+    "artifact_generation_ms": {
+      "n": 8,
+      "total_ms": 1.7,
+      "median_ms": 0.21,
+      "mean_ms": 0.22,
+      "p95_ms": 0.31,
+      "worst_ms": 0.31
+    },
+    "states_per_s": {
+      "n": 8,
+      "total_ms": 0.4,
+      "median_ms": 0.06,
+      "mean_ms": 0.06,
+      "p95_ms": 0.09,
+      "worst_ms": 0.09
+    },
+    "pages_per_s": {
+      "n": 8,
+      "total_ms": 0.9,
+      "median_ms": 0.13,
+      "mean_ms": 0.11,
+      "p95_ms": 0.16,
+      "worst_ms": 0.16
+    },
+    "network_req_per_s": {
+      "n": 8,
+      "total_ms": 0.0,
+      "median_ms": 0.0,
+      "mean_ms": 0.0,
+      "p95_ms": 0.0,
+      "worst_ms": 0.0
+    },
+    "port_calls_per_s": {
+      "n": 8,
+      "total_ms": 32.4,
+      "median_ms": 4.45,
+      "mean_ms": 4.04,
+      "p95_ms": 6.93,
+      "worst_ms": 6.93
+    },
+    "port_share_of_wall_pct": {
+      "n": 8,
+      "total_ms": 700.0,
+      "median_ms": 85.4,
+      "mean_ms": 87.5,
+      "p95_ms": 97.8,
+      "worst_ms": 97.8
+    },
+    "states_discovered": {
+      "median": 3.5,
+      "min": 2,
+      "max": 6,
+      "stable": false
+    },
+    "navigations": {
+      "median": 7.0,
+      "min": 3,
+      "max": 16,
+      "stable": false
+    },
+    "interactions": {
+      "median": 31.5,
+      "min": 11,
+      "max": 99,
+      "stable": false
+    },
+    "network_requests": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0,
+      "stable": true
+    },
+    "port_calls": {
+      "median": 222.5,
+      "min": 114,
+      "max": 685,
+      "stable": false
+    },
+    "artifact_files": {
+      "median": 5.0,
+      "min": 4,
+      "max": 11,
+      "stable": false
+    },
+    "rss_mb_peak": {
+      "n": 8,
+      "total_ms": 4108.1,
+      "median_ms": 522.95,
+      "mean_ms": 513.51,
+      "p95_ms": 537.0,
+      "worst_ms": 537.0
+    },
+    "cpu_pct_mean": {
+      "n": 8,
+      "total_ms": 271.7,
+      "median_ms": 38.2,
+      "mean_ms": 33.96,
+      "p95_ms": 42.2,
+      "worst_ms": 42.2
+    }
+  }
+}

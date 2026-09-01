@@ -1,0 +1,19 @@
+# Production Linkerd — proxy log level dropped to error to reduce
+# per-pod log volume, control-plane replicas pinned for HA, sidecar
+# resource ceilings tightened.
+
+proxy:
+  logLevel: warn,linkerd=warn
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# Production runs 5 destination controllers; under load the destination
+# service is the latency-critical path for service discovery.
+destinationController:
+  replicas: 5
+
+controllerReplicas: 5

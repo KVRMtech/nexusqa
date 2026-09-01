@@ -1,0 +1,51 @@
+GOLDEN CRAWL GATE — verbatim output, run on verdict-box against the deployed build
+run by: the verification session, 2026-08-27, via gcloud compute ssh
+deployed HEAD at time of run: be20767 (service code byte-identical to 7d7408b;
+  the be20767..7d7408b delta is tests/browser/ only, zero service files)
+exploration independently re-verified in the VM database this turn:
+  select exploration_id,status from qe_explorations -> c57abb74-...|completed
+NOT CLAIMED: this gate was run pre-fast-forward; it is evidence about the
+  deployed SERVICE CODE, not about the certified commit's test files.
+---------------------------------------------------------------
+=== GOLDEN CRAWL GATE ===
+app: 86203785-1fed-4930-8edf-d83988adafab
+OK    host: disk 37% used
+OK    host: 1 exited containers
+exploration: c57abb74-cae3-4efc-92a8-a5b7328c2326
+
+--- funnel ---
+  traversal              full
+  pages                  30
+  forms                  8
+  auto_filled            34
+  submitted              13
+  confirmed              4
+  flows                  12
+  deepest_flow           5
+  wizard_advances        4
+  tests                  20
+OK    posture: full
+OK    auth: not blocked
+OK    open_choice_unverified: 0
+OK    danger ratio: max 10% per page
+OK    entry control: 'New Application' not danger-flagged
+INFO  advance_oracle: configured
+INFO  catalog_questions: 80
+
+--- ratchet (fails only on regression below the best ever seen) ---
+RISE  pages              30  (was 22 — new floor)
+RISE  forms              8  (was 7 — new floor)
+RISE  auto_filled        34  (was 29 — new floor)
+RISE  selects_filled     11  (was 10 — new floor)
+RISE  forms_confirmed    4  (was 0 — new floor)
+RISE  submitted          13  (was 9 — new floor)
+RISE  flows              12  (was 7 — new floor)
+OK    deepest_flow       5  (holds at 5)
+OK    wizard_advances    4  (holds at 4)
+RISE  tests              20  (was 9 — new floor)
+RISE  catalog_questions  80  (was 67 — new floor)
+
+GATE PASSED — no funnel regression (exploration c57abb74-cae3-4efc-92a8-a5b7328c2326)
+GATE_VERDICT=PASS
+
+[exited with code 0]

@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cascade Life — Health &amp; Lifestyle Questionnaire</title>
+<style>
+  :root { --ink:#16202b; --line:#d6dee6; --accent:#0b6b5f; }
+  *{box-sizing:border-box}
+  body{font:15px/1.55 system-ui,Segoe UI,Roboto,sans-serif;color:var(--ink);margin:0;background:#f6f8fa}
+  main{max-width:760px;margin:0 auto;padding:28px 20px 64px}
+  h1{font-size:24px;margin:0 0 4px}
+  h2{font-size:17px;margin:0 0 14px}
+  .lede{color:#5b6b7a;margin:0 0 24px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:20px;margin:0 0 18px}
+  fieldset{border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:0 0 16px}
+  legend{font-weight:600;padding:0 6px}
+  .answers{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+  button.answer{font:inherit;padding:7px 20px;border:1px solid var(--line);
+    background:#fff;border-radius:6px;cursor:pointer}
+  button.answer[aria-pressed="true"]{background:var(--accent);color:#fff;border-color:var(--accent)}
+  label.opt{display:inline-flex;gap:6px;align-items:center;margin-right:16px}
+  .field{margin:10px 0}
+  .field > label{display:block;font-weight:600;margin-bottom:4px}
+  input[type=text],input[type=number],select{font:inherit;padding:7px 9px;
+    border:1px solid var(--line);border-radius:6px;min-width:220px}
+  .primary{font:inherit;padding:9px 22px;background:var(--accent);color:#fff;
+    border:0;border-radius:6px;cursor:pointer}
+  .hint{color:#5b6b7a;font-size:13px;margin:6px 0 0}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+<main>
+  <h1>Cascade Life</h1>
+  <p class="lede">Underwriting questionnaire. Every question below is stated by
+     this page; nothing about it needs to be guessed.</p>
+
+<!-- ══ STEP 1 · LIFESTYLE ═══════════════════════════════════════════════════
+     BARE-BUTTON QUESTIONS INSIDE A DECLARED CONTAINER.
+
+     This is the shape that produced "Question 1" … "Question N" in the
+     catalogue: the answers are <button>s, not radios, so no choice-grouping the
+     crawler understood applied to them, and the only handle on a question was
+     its position in the DOM. Each question here sits in a <fieldset> whose
+     <legend> states it — the plainest declaration HTML offers, and one every
+     screen reader already uses. The catalogue must carry these sentences, and
+     must identify the question by the fieldset rather than by the ordinal.
+══════════════════════════════════════════════════════════════════════════ -->
+<section id="step-lifestyle">
+  <form class="card" id="lifestyle">
+    <h2>Step 1 of 2 — lifestyle</h2>
+
+    <!-- A plain field, so this step is a FORM.
+
+         Not decoration, and worth stating: the walk that answers a bare-button
+         questionnaire only starts on a state whose FILL committed something
+         (discovery.py's wizard gate), so a step made of nothing but buttons is
+         never walked at all. A real lifestyle step always asks something like
+         this, and keeping it here means this ground exercises the catalogue —
+         which is what it is for — rather than that separate gap. -->
+    <div class="field">
+      <label for="age">Age at last birthday</label>
+      <input id="age" name="age" type="number" min="18" max="85" required>
+    </div>
+
+    <fieldset id="q-tobacco">
+      <legend>Have you used tobacco or nicotine products in the last 12 months?</legend>
+      <div class="answers">
+        <button type="button" class="answer" data-q="tobacco" data-a="yes" aria-pressed="false">Yes</button>
+        <button type="button" class="answer" data-q="tobacco" data-a="no" aria-pressed="false">No</button>
+      </div>
+    </fieldset>
+
+    <!-- ══ THE CHILD ══════════════════════════════════════════════════════
+         Revealed ONLY by answering the question above with "Yes". This is the
+         trigger→child relationship the projector has to be able to state
+         analytically: "Have you used tobacco…" = Yes activates "How many
+         cigarettes per day…", and No skips it. Nothing else on this page
+         reveals anything, so a reveal recorded anywhere else is a fabrication
+         and this ground will catch it.
+    ══════════════════════════════════════════════════════════════════════ -->
+    <fieldset id="q-cigarettes" hidden>
+      <legend>How many cigarettes per day do you smoke?</legend>
+      <div class="answers">
+        <label class="opt"><input type="radio" name="cigsPerDay" value="1-10"> 1 to 10</label>
+        <label class="opt"><input type="radio" name="cigsPerDay" value="11-20"> 11 to 20</label>
+        <label class="opt"><input type="radio" name="cigsPerDay" value="20+"> More than 20</label>
+      </div>
+    </fieldset>
+
+    <fieldset id="q-alcohol">
+      <legend>Do you consume more than 14 units of alcohol per week?</legend>
+      <div class="answers">
+        <button type="button" class="answer" data-q="alcohol" data-a="yes" aria-pressed="false">Yes</button>
+        <button type="button" class="answer" data-q="alcohol" data-a="no" aria-pressed="false">No</button>
+      </div>
+    </fieldset>
+
+    <fieldset id="q-hazard">
+      <legend>Do you take part in scuba diving, motorsport or private aviation?</legend>
+      <div class="answers">
+        <button type="button" class="answer" data-q="hazard" data-a="yes" aria-pressed="false">Yes</button>
+        <button type="button" class="answer" data-q="hazard" data-a="no" aria-pressed="false">No</button>
+      </div>
+    </fieldset>
+
+    <!-- ══ A DECLARED QUESTION WITH NO WORDING ANYWHERE ═══════════════════
+         No legend, no aria-label, no heading. The honest catalogue entry is
+         UNVERIFIED: catalogued (it is a real question with real answers),
+         stably identified, and NOT given text the application never had.
+    ══════════════════════════════════════════════════════════════════════ -->
+    <fieldset id="q-unworded">
+      <div class="answers">
+        <button type="button" class="answer" data-q="unworded" data-a="yes" aria-pressed="false">Yes</button>
+        <button type="button" class="answer" data-q="unworded" data-a="no" aria-pressed="false">No</button>
+      </div>
+    </fieldset>
+  </form>
+  <button class="primary" id="continue" type="button">Continue to applicant details</button>
+  <p class="hint" id="gate">Answer what applies; unanswered questions are treated as declined.</p>
+</section>
+
+<!-- ══ STEP 2 · APPLICANT ═══════════════════════════════════════════════════
+     NATIVE RADIO GROUPS, an ARIA card set and a checkbox group — one question,
+     N answers each. This is the case the catalogue published as N separate
+     questions named after the ANSWERS ("Male", "Female"), each offering none of
+     them, plus one more minted from the group's own branch rows.
+
+     Plus UNGROUPED controls (a number input, a select, a lone checkbox), each a
+     question in its own right whose accessible name IS the wording. Folding must
+     not touch them, or the fix for choice groups would eat the rest of the form.
+══════════════════════════════════════════════════════════════════════════ -->
+<section id="step-applicant" hidden>
+  <form class="card" id="applicant">
+    <h2>Step 2 of 2 — applicant</h2>
+
+    <fieldset id="q-gender">
+      <legend>Gender</legend>
+      <div class="answers">
+        <label class="opt"><input type="radio" name="gender" value="f"> Female</label>
+        <label class="opt"><input type="radio" name="gender" value="m"> Male</label>
+        <label class="opt"><input type="radio" name="gender" value="x"> Prefer not to say</label>
+      </div>
+    </fieldset>
+
+    <!-- A design system's "choose a plan": nameless divs, grouped AND named by
+         the radiogroup's aria-label. A second declaration rung the wording has
+         to be readable from. -->
+    <div role="radiogroup" id="q-product" aria-label="Which product are you applying for?">
+      <div class="answers">
+        <div role="radio" aria-checked="false" tabindex="0">Term Life</div>
+        <div role="radio" aria-checked="false" tabindex="-1">Whole Life</div>
+        <div role="radio" aria-checked="false" tabindex="-1">Universal Life</div>
+      </div>
+    </div>
+
+    <fieldset id="q-conditions">
+      <legend>Which of these have you been diagnosed with?</legend>
+      <div class="answers">
+        <label class="opt"><input type="checkbox" name="cond[]" value="diabetes"> Diabetes</label>
+        <label class="opt"><input type="checkbox" name="cond[]" value="cardiac"> Heart disease</label>
+        <label class="opt"><input type="checkbox" name="cond[]" value="cancer"> Cancer</label>
+        <label class="opt"><input type="checkbox" name="cond[]" value="none"> None of these</label>
+      </div>
+    </fieldset>
+
+    <div class="field">
+      <label for="height">Height in centimetres</label>
+      <input id="height" name="height" type="number" min="120" max="230" step="1">
+    </div>
+    <div class="field">
+      <label for="state">State of residence</label>
+      <select id="state" name="state">
+        <option value="">Select a state…</option>
+        <option>Texas</option><option>Florida</option><option>California</option>
+      </select>
+    </div>
+    <div class="field">
+      <label class="opt"><input type="checkbox" id="consent" name="consent">
+        I consent to a medical records check</label>
+    </div>
+  </form>
+  <p class="hint">Review complete. Nothing here is submitted.</p>
+</section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll("button.answer"), function (btn) {
+      btn.addEventListener("click", function () {
+        var q = btn.getAttribute("data-q");
+        Array.prototype.forEach.call(
+          document.querySelectorAll('button.answer[data-q="' + q + '"]'),
+          function (sib) { sib.setAttribute("aria-pressed", "false"); });
+        btn.setAttribute("aria-pressed", "true");
+        // THE TRIGGER, and the only one on this page.
+        if (q === "tobacco") {
+          document.getElementById("q-cigarettes").hidden =
+            btn.getAttribute("data-a") !== "yes";
+        }
+      });
+    });
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll('#q-product [role=radio]'), function (card) {
+      card.addEventListener("click", function () {
+        Array.prototype.forEach.call(
+          document.querySelectorAll('#q-product [role=radio]'),
+          function (sib) { sib.setAttribute("aria-checked", "false"); });
+        card.setAttribute("aria-checked", "true");
+      });
+    });
+
+  document.getElementById("continue").addEventListener("click", function () {
+    document.getElementById("step-lifestyle").hidden = true;
+    document.getElementById("step-applicant").hidden = false;
+  });
+}());
+</script>
+</body>
+</html>

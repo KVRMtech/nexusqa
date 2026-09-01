@@ -1,0 +1,81 @@
+{
+  "$comment": [
+    "Gate 1 / T-WP-02 — the frozen cross-service attestation contract.",
+    "qe-explorer and qe-central each ship a top-level 'app' package and",
+    "collide in one interpreter, so the seam between the ISSUER (qe-central",
+    "app/services/walk_attestation.py) and the VERIFIER (qe-explorer",
+    "app/attest.py) is frozen here as data and each side asserts against it",
+    "in its own process. Together the two test files are one proof.",
+    "",
+    "THE PRIVATE KEY BELOW IS A TEST KEY. It was generated for this file, it",
+    "signs this golden and nothing else, and it authorises nothing anywhere:",
+    "a real provisioning key lives KMS-sealed in the platform and never",
+    "appears in a repository. It is committed on purpose so the qe-central",
+    "half can RE-MINT this exact envelope and prove the issuer deterministic."
+  ],
+  "version": 1,
+  "issuer": "qe-central.provisioner",
+  "issued_at_ms": 1755000000000,
+  "proof_lifetime_ms": 3600000,
+  "revocation_lifetime_ms": 600000,
+  "test_keys": {
+    "private_key_b64": "HKcFMSMvqVvkM8FoNZ0SMyuCg5FUChqRWb++RfA3QMM=",
+    "public_key_b64": "IaaWVOphaJDYUQ/yBabZROZRyKOMUfpvso8RJu3uMHg=",
+    "kid": "30c3b10e8797eb44"
+  },
+  "grant": {
+    "environment_id": "env-disposable-7f3a",
+    "tenant_id": "tenant-acme",
+    "crawl_id": "crawl-9c21b4e0",
+    "target_url": "https://staging.example.test:8443/apply",
+    "reset_procedure": "terraform destroy && terraform apply (throwaway stack)",
+    "env_kind": "disposable",
+    "max_walk_mutations_per_step": 3,
+    "proof_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+  },
+  "revoked_proof_ids": [
+    "deadbeefdeadbeefdeadbeefdeadbeef"
+  ],
+  "revoked_environment_ids": [
+    "env-retired-0001"
+  ],
+  "expected_target_origin": "https://staging.example.test:8443",
+  "attestation": {
+    "proof": {
+      "claims": {
+        "v": 1,
+        "proof_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "issuer": "qe-central.provisioner",
+        "environment_id": "env-disposable-7f3a",
+        "env_kind": "disposable",
+        "tenant_id": "tenant-acme",
+        "crawl_id": "crawl-9c21b4e0",
+        "target_origin": "https://staging.example.test:8443",
+        "reset_procedure": "terraform destroy && terraform apply (throwaway stack)",
+        "issued_at_ms": 1755000000000,
+        "expires_at_ms": 1755003600000,
+        "max_walk_mutations_per_step": 3
+      },
+      "alg": "ed25519",
+      "kid": "30c3b10e8797eb44",
+      "signature": "xAHhfygsDhSQUIH1QPGsUshjqVadUYr9CcTHhPnVFzHBv/C7GjJh6ITj8oFpwQMtg+EIIddWOD0Et10sdJTnCw=="
+    },
+    "revocations": {
+      "claims": {
+        "v": 1,
+        "issuer": "qe-central.provisioner",
+        "issued_at_ms": 1755000000000,
+        "expires_at_ms": 1755000600000,
+        "revoked_proof_ids": [
+          "deadbeefdeadbeefdeadbeefdeadbeef"
+        ],
+        "revoked_environment_ids": [
+          "env-retired-0001"
+        ]
+      },
+      "alg": "ed25519",
+      "kid": "30c3b10e8797eb44",
+      "signature": "sRQGAiCOd9wdRYNbqtUWm6U1HuUEcQSBtAV8ObNPEHLcj1Y0v1p7JnmcFJt/AIYmqJ/ZoQSXZ/lZBrVx9I/iCw=="
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "purpose": "Prove href capture resolves to an ABSOLUTE destination for every anchor shape (relative, root-relative, hash route, scroll anchor, javascript:, external) so the crawler can follow routes directly, and prove an <a> with no href is not a link at all.",
+  "targeted_defect": "None (regression guard). Pins hrefOf() reading the IDL property rather than the raw attribute - the raw attribute would leave the crawler with 'policy.pdf' and no origin to resolve it against, and every href-follow traversal would dead-end.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 7,
+  "expect_controls": [
+    {"where": {"css_hint": "a#dl-policy"}, "fields": {"name": "Download Policy Document", "role": "link", "name_source": "content"}, "href_suffix": "/12-download-step/policy.pdf"},
+    {"where": {"css_hint": "a#dl-schedule"}, "fields": {"name": "Download Schedule", "role": "link"}, "href_suffix": "/documents/schedule.pdf"},
+    {"where": {"css_hint": "a#route-claims"}, "fields": {"name": "Claims", "role": "link"}, "href_suffix": "/12-download-step/index.html#/claims"},
+    {"where": {"css_hint": "a#anchor-faq"}, "fields": {"name": "Frequently asked questions", "role": "link"}, "href_suffix": "/12-download-step/index.html#faq"},
+    {"where": {"css_hint": "a#js-print"}, "fields": {"name": "Print", "role": "link", "href": "javascript:window.print()"}},
+    {"where": {"css_hint": "button#btn-export"}, "fields": {"name": "Export to PDF", "role": "button", "href": ""}},
+    {"where": {"css_hint": "a#ext-help"}, "fields": {"name": "Help Centre", "role": "link", "href": "https://help.example.com/policies"}}
+  ],
+  "forbid_controls": [
+    {"where": {"css_hint": "a#not-a-link"}}
+  ],
+  "href_absoluteness": {
+    "why": "Every captured anchor href except the javascript: scheme must be absolute. A relative href reaches the crawler with no origin to resolve it against and the follow dead-ends.",
+    "exempt_schemes": ["javascript:"]
+  }
+}

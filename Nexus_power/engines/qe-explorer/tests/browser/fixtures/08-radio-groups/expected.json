@@ -1,0 +1,255 @@
+{
+  "purpose": "Prove group_key answers 'which QUESTION does this control belong to' - scoped to the owning form for native radios, to the declared container for ARIA card sets - and stays empty when no grouping was DECLARED. Plus (M2.1) that question_label carries the application's OWN wording for it, from a declared accessible-name rung only, and is EMPTY when the page declares none.",
+  "targeted_defect": "None (regression guard). Pins groupKeyOf()/groupContainerKey() including the form-scoping rule (two forms may both use name='product' and they are NOT the same question) and the declared-signal-only rule for checkbox groups. Pins questionOf()/questionLabelOf() (M2.1): the catalogue used to name a bare-button question 'Question 3' and a radio group after one of its ANSWERS, because nothing read the container that states the question.",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 26,
+  "expect_controls": [
+    {
+      "where": {
+        "name": "Term 10"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:term-form:product",
+        "value_committed": "false"
+      }
+    },
+    {
+      "where": {
+        "name": "Term 20"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:term-form:product",
+        "value_committed": "true"
+      }
+    },
+    {
+      "where": {
+        "name": "Whole Life"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:whole-form:product"
+      }
+    },
+    {
+      "where": {
+        "name": "Universal Life"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "name:whole-form:product"
+      }
+    },
+    {
+      "where": {
+        "name": "Bronze"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:plan-group",
+        "value_committed": "false",
+        "aria_checked": "false"
+      }
+    },
+    {
+      "where": {
+        "name": "Silver"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:plan-group",
+        "value_committed": "true",
+        "aria_checked": "true"
+      }
+    },
+    {
+      "where": {
+        "name": "Gold"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:plan-group"
+      }
+    },
+    {
+      "where": {
+        "name": "Diabetes"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:conditions-form:conditions[]"
+      }
+    },
+    {
+      "where": {
+        "name": "None of these"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:conditions-form:conditions[]",
+        "value_committed": "true"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#remember"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:doc:remember"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#newsletter"
+      },
+      "fields": {
+        "role": "checkbox",
+        "group_key": "name:doc:newsletter"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "div#tier-basic"
+      },
+      "fields": {
+        "name": "Basic",
+        "role": "radio",
+        "group_key": "grp:id:tier-group"
+      },
+      "why": "the radiogroup is four levels up - found only by walking, not by checking the parent"
+    },
+    {
+      "where": {
+        "css_hint": "div#tier-plus"
+      },
+      "fields": {
+        "name": "Plus",
+        "role": "radio",
+        "group_key": "grp:id:tier-group"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "div#orphan-choice"
+      },
+      "fields": {
+        "name": "Standalone option",
+        "role": "radio",
+        "group_key": ""
+      },
+      "why": "no name attribute and no declared grouping ancestor - ungrouped is the only honest answer"
+    },
+    {
+      "where": {
+        "name": "Yes"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:tobacco-group",
+        "question_key": "q:id:tobacco-group",
+        "question_label": "Have you used tobacco in the last 12 months? Include cigarettes, vaping and nicotine replacement.",
+        "question_label_source": "aria-labelledby"
+      },
+      "why": "the id-reference rung must follow RENDERED text - two block children contribute 'A B', never 'AB'"
+    },
+    {
+      "where": {
+        "name": "No"
+      },
+      "fields": {
+        "role": "radio",
+        "group_key": "grp:id:tobacco-group",
+        "question_key": "q:id:tobacco-group",
+        "question_label": "Have you used tobacco in the last 12 months? Include cigarettes, vaping and nicotine replacement.",
+        "question_label_source": "aria-labelledby"
+      },
+      "why": "the id-reference rung must follow RENDERED text - two block children contribute 'A B', never 'AB'"
+    },
+    {
+      "where": {
+        "name": "Bronze"
+      },
+      "fields": {
+        "question_key": "q:id:plan-group",
+        "question_label": "Choose a plan",
+        "question_label_source": "aria-label"
+      }
+    },
+    {
+      "where": {
+        "name": "Term 10"
+      },
+      "fields": {
+        "question_label": "Term product",
+        "question_label_source": "legend"
+      },
+      "why": "a fieldset's own legend, not a nested one's"
+    },
+    {
+      "where": {
+        "name": "Up to $250,000"
+      },
+      "fields": {
+        "role": "radio",
+        "question_key": "q:id:cover-group",
+        "question_label": "How much cover do you need?",
+        "question_label_source": "heading"
+      }
+    },
+    {
+      "where": {
+        "name": "Option A"
+      },
+      "fields": {
+        "role": "radio",
+        "question_key": "q:id:unworded-group",
+        "question_label": "",
+        "question_label_source": ""
+      },
+      "why": "the honest answer when an application states no wording. The question is still IDENTIFIED (question_key), so the catalogue can carry it as UNVERIFIED rather than invent text for it"
+    },
+    {
+      "where": {
+        "css_hint": "div#orphan-choice"
+      },
+      "fields": {
+        "question_key": "",
+        "question_label": ""
+      },
+      "why": "no declared container anywhere - nothing to read a question from"
+    },
+    {
+      "where": {
+        "name": "Choice A"
+      },
+      "fields": {
+        "role": "radio",
+        "question_key": "q:id:empty-legend-group",
+        "question_label": "",
+        "question_label_source": ""
+      },
+      "why": "a <legend> that is present and says nothing is not wording. Different from having no legend at all, and reported the same honest way: UNVERIFIED, never a guess"
+    }
+  ],
+  "group_key_partition": {
+    "why": "The set of DISTINCT group_keys is the set of questions the page asks. Asserting the partition catches a collapse (two questions merged) and a shatter (one question split) that a per-control assertion alone would miss. Subject G contributes NO key, so the partition also proves that an undeclared group is left undeclared rather than invented. M2.1 adds three more declared questions (an aria-labelledby radiogroup, a role=group headed by an <h2>, and a fieldset that states no wording at all), so the partition moves from 7 to 10.",
+    "expect_distinct_nonempty": 11
+  },
+  "question_label_partition": {
+    "why": "Every DECLARED question either has the application's wording or has none, and which of those it is has to be visible per rung. Counted as a partition so a rung that silently stops resolving cannot be masked by another rung still working.",
+    "expect_sources": {
+      "legend": 3,
+      "aria-label": 2,
+      "aria-labelledby": 1,
+      "heading": 1,
+      "": 2
+    }
+  }
+}

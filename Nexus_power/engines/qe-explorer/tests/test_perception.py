@@ -1,0 +1,183 @@
+"""U2 — pixel perception: G1 fingerprint, G3 signatures, G2/G3 synthesis. Pure."""
+from __future__ import annotations
+
+from io import BytesIO
+
+from app.fingerprint import state_fingerprint
+from app.perception import (
+    average_hash,
+    bbox_bucket,
+    perceptual_hash_png,
+    synthesize_vision_controls,
+    synthesize_vision_outcomes,
+    vision_control_signature,
+)
+
+
+# ── G1: perceptual hash mixed into the fingerprint whenever it is SUPPLIED ───────
+#
+# T-SI-02 MOVED THIS GUARANTEE, it did not drop it. The hasher used to decide for
+# itself whether a supplied phash counted, by counting controls: at most two and
+# it was mixed in, otherwise it was silently discarded. That rule cannot see the
+# case it most needed to serve — a 40-control questionnaire whose twenty steps
+# differ in rendered text alone — because it only ever looks at ONE state.
+#
+# The hasher now honours what it is given (below), and the decision of whether
+# the DOM already suffices lives in WalkIdentity, which holds the previous step
+# and can actually answer the question. The invariant a rich-DOM page needs —
+# "a cosmetic repaint must never fragment my state" — is asserted directly, at
+# the layer that now owns it, in test_state_identity.py.
+
+def test_perceptual_hash_is_honoured_whenever_supplied():
+    controls = [{"role": "button", "name": "A"}, {"role": "button", "name": "B"},
+                {"role": "button", "name": "C"}]
+    a = state_fingerprint("http://x/app", controls)
+    b = state_fingerprint("http://x/app", controls, perceptual_hash="deadbeef")
+    assert a != b                       # the hasher decides nothing; it hashes
+    # ...and it stays deterministic: same inputs, same digest.
+    assert b == state_fingerprint("http://x/app", controls,
+                                  perceptual_hash="deadbeef")
+
+
+def test_perceptual_hash_distinguishes_canvas_screens():
+    # 0 controls, same URL — a canvas app. Different phash → different state.
+    s1 = state_fingerprint("http://x/app", [], perceptual_hash="aaaa")
+    s2 = state_fingerprint("http://x/app", [], perceptual_hash="bbbb")
+    assert s1 != s2
+    assert s1 == state_fingerprint("http://x/app", [], perceptual_hash="aaaa")
+
+
+def test_no_phash_is_byte_compatible_with_before():
+    controls = [{"role": "button", "name": "A"}]
+    assert (state_fingerprint("http://x", controls)
+            == state_fingerprint("http://x", controls, perceptual_hash=""))
+
+
+# ── G1: average hash ─────────────────────────────────────────────────────────────
+
+def test_average_hash_is_deterministic_and_discriminates():
+    assert average_hash([[0, 0], [0, 0]]) == average_hash([[0, 0], [0, 0]])
+    assert average_hash([[0, 0], [0, 0]]) != average_hash([[255, 0], [0, 0]])
+    assert average_hash([]) == ""
+
+
+def test_perceptual_hash_png_degrades_honestly():
+    assert perceptual_hash_png(b"") == ""
+    assert perceptual_hash_png(b"not-a-png") == ""      # bad bytes → "", never crash
+
+
+def test_perceptual_hash_png_on_real_images_if_pillow():
+    try:
+        from PIL import Image
+    except Exception:
+        import pytest
+        pytest.skip("Pillow not installed")
+    b1 = BytesIO(); Image.new("L", (32, 32), 0).save(b1, format="PNG")
+    img = Image.new("L", (32, 32), 0)
+    for x in range(16):
+        for y in range(32):
+            img.putpixel((x, y), 255)
+    b2 = BytesIO(); img.save(b2, format="PNG")
+    h1, h2 = perceptual_hash_png(b1.getvalue()), perceptual_hash_png(b2.getvalue())
+    assert h1 and h2 and h1 != h2
+
+
+# ── G3: jitter-tolerant identity ─────────────────────────────────────────────────
+
+def test_bbox_bucket_is_jitter_tolerant():
+    assert bbox_bucket([0.50, 0.50, 0.10, 0.05]) == bbox_bucket([0.505, 0.498, 0.10, 0.05])
+    assert bbox_bucket([0.10, 0.10, 0.05, 0.05]) != bbox_bucket([0.80, 0.80, 0.05, 0.05])
+
+
+def test_vision_signature_stable_under_label_and_bbox_wobble():
+    a = vision_control_signature("Continue", "button", [0.5, 0.5, 0.1, 0.05])
+    b = vision_control_signature("continue ", "button", [0.505, 0.498, 0.1, 0.05])
+    assert a == b
+    assert a != vision_control_signature("Start Over", "button", [0.5, 0.5, 0.1, 0.05])
+
+
+# ── G2/G3: synthesis into walk-consumable shapes ─────────────────────────────────
+
+def test_synthesize_vision_controls_shape():
+    perceived = [{"label": "Continue", "role": "button",
+                  "bbox": [500, 600, 100, 40], "click_x": 550, "click_y": 620}]
+    r = synthesize_vision_controls(perceived, page_w=1000, page_h=1200)[0]
+    assert r["name"] == "Continue" and r["qec"]["capture_mode"] == "vision"
+    assert r["qec"]["click_x"] == 550 and r["qec"]["click_y"] == 620
+    assert r["signature"].startswith("vis:")
+    assert r["qec"]["bbox"] == [0.5, 0.5, 0.1, round(40 / 1200, 4)]
+
+
+def test_synthesize_vision_outcomes_shape():
+    got = synthesize_vision_outcomes(
+        [{"label": "Monthly Premium", "text": "$42.10"}, {"label": "", "text": ""}])
+    assert got == [{"label": "Monthly Premium", "selector": "", "text": "$42.10",
+                    "source": "vision"}]
+
+
+# ── U1: route opaque surfaces (enterable frame vs vision) ────────────────────────
+
+def test_route_opaque_surfaces():
+    from app.perception import route_opaque_surfaces
+    surfaces = [
+        {"kind": "cross_origin_iframe", "label": "js.stripe.com",
+         "frame_selector": "iframe#pay"},
+        {"kind": "canvas", "label": "chart region"},
+        {"kind": "closed_shadow", "label": "x-widget"},
+        {"kind": "unknown", "label": "?"},
+        "junk",
+    ]
+    routed = route_opaque_surfaces(surfaces)
+    assert [s["label"] for s in routed["enter_frames"]] == ["js.stripe.com"]
+    assert {s["label"] for s in routed["vision"]} == {"chart region", "x-widget"}
+    assert [s["label"] for s in routed["blind"]] == ["?"]
+    assert routed["observed"] == []
+
+
+def test_a_frame_with_no_selector_is_never_offered_as_enterable():
+    """M3.2 / T-FR-01 — the bucket must be ACTIONABLE, not merely classified.
+
+    For as long as a cross-origin row named only a host, `enter_frames` could
+    have no consumer: a host is not something `frame_locator` can be handed. A
+    row without a selector is therefore blind, not enterable — a caller must
+    never be given a "frame to enter" it has no way to address.
+    """
+    from app.perception import route_opaque_surfaces
+    routed = route_opaque_surfaces([
+        {"kind": "cross_origin_iframe", "label": "js.stripe.com"},
+        {"kind": "cross_origin_iframe", "label": "checkout.acme.test",
+         "frame_selector": "  "},
+    ])
+    assert routed["enter_frames"] == []
+    assert [s["label"] for s in routed["blind"]] == [
+        "js.stripe.com", "checkout.acme.test"]
+
+
+def test_an_observed_surface_is_not_routed_to_a_handler():
+    """A closed root the init script already read is evidence, not a blind spot.
+
+    Routing it to vision would escalate work that is done, and pay for a
+    screenshot + model call on a surface the DOM walker just catalogued.
+    """
+    from app.perception import route_opaque_surfaces, should_perceive
+    entered = [{"kind": "closed_shadow_entered", "label": "x-widget",
+                "controls_observed": 3}]
+    routed = route_opaque_surfaces(entered)
+    assert [s["label"] for s in routed["observed"]] == ["x-widget"]
+    assert routed["vision"] == [] and routed["enter_frames"] == []
+    sparse = [{"qec": {"name_confidence": "none"}}]
+    assert should_perceive(sparse, entered) is False
+
+
+# ── U2: escalation decision ──────────────────────────────────────────────────────
+
+def test_should_perceive_escalates_only_on_opaque_surface_and_sparse_dom():
+    from app.perception import should_perceive
+    canvas = [{"kind": "canvas", "label": "chart"}]
+    frame = [{"kind": "cross_origin_iframe", "label": "stripe"}]
+    sparse = [{"qec": {"name_confidence": "none"}}]
+    rich = [{"qec": {"name_confidence": "high"}} for _ in range(5)]
+    assert should_perceive(sparse, canvas) is True    # opaque canvas + sparse DOM
+    assert should_perceive(rich, canvas) is False     # DOM explains the page → skip
+    assert should_perceive(sparse, frame) is False    # frame → entry, not vision
+    assert should_perceive(sparse, []) is False       # no opaque surface

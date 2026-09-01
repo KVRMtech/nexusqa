@@ -1,0 +1,15 @@
+# Self-signed ClusterIssuer — the root of the cluster's internal trust
+# tree. The Linkerd trust anchor (in 10-linkerd-trust-anchor.yaml) chains
+# off this issuer, NOT off a public CA. This isolates inter-pod mTLS from
+# any external dependency.
+#
+# Note: this is "self-signed" in the cert-manager sense — every cert it
+# issues is its own root. For internal mTLS where the cluster controls
+# both ends of the connection, that's the right model. Public-facing
+# certs use the ACME ClusterIssuers below.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-root
+spec:
+  selfSigned: {}

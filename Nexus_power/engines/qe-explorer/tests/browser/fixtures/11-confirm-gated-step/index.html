@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 11 — confirm-gated step</title>
+<style> [hidden] { display: none; } .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); } </style>
+</head>
+<body>
+  <main>
+    <h1>Review and confirm</h1>
+
+    <!-- SUBJECT A: the NATIVE disabled gate. `disabled` is a property, so
+         isDisabled() takes its first branch. -->
+    <label><input type="checkbox" id="agree-terms" name="agree_terms"> I agree to the terms</label>
+    <button type="submit" id="submit-native" disabled>Submit Application</button>
+
+    <!-- SUBJECT B: the ARIA disabled gate. A <div role=button> is not a form
+         element, so `el.disabled` is undefined and only aria-disabled says so.
+         A walker that read only the property would report this control ENABLED
+         and the crawl would click a dead button and record an honest-looking
+         "none" outcome forever. -->
+    <label><input type="checkbox" id="agree-privacy" name="agree_privacy"> I agree to the privacy policy</label>
+    <div role="button" id="submit-aria" tabindex="0" aria-disabled="true">Submit With E-Sign</div>
+
+    <!-- SUBJECT C: the gate that is ALREADY SATISFIED - a checked box and an
+         enabled actuator, so the fixture proves the enabled state is read as
+         faithfully as the disabled one. -->
+    <label><input type="checkbox" id="agree-esign" name="agree_esign" checked> I consent to electronic signature</label>
+    <button type="button" id="continue-enabled">Continue</button>
+
+    <!-- SUBJECT D: a control hidden three different ways. All three must be
+         INVISIBLE to the walker; a hidden control offered to the crawler is a
+         guaranteed action timeout. -->
+    <button type="button" id="hidden-attr" hidden>Hidden By Attribute</button>
+    <button type="button" id="hidden-aria" aria-hidden="true">Hidden By Aria</button>
+    <button type="button" id="hidden-style" style="display:none">Hidden By Style</button>
+    <input type="hidden" id="hidden-input" name="csrf" value="tok">
+
+    <!-- SUBJECT E: an sr-only label. It is clipped, not display:none, so it is
+         VISIBLE to the accessibility tree and must still name its control. -->
+    <label for="promo" class="sr-only">Promotional Code</label>
+    <input id="promo" name="promo" type="text">
+
+    <!-- SUBJECT F: a live region carrying a blocking validation message. -->
+    <div role="alert" id="gate-error">You must accept the terms before continuing.</div>
+
+    <!-- SUBJECT G: a COLLAPSED <details>. The browser renders nothing but the
+         <summary>, so the summary's own controls are reachable and the body's
+         are not. Both halves matter: treating the whole element as hidden loses
+         a real control, and treating it as visible offers the crawler a control
+         the browser will refuse to click. -->
+    <details id="disclosures-closed">
+      <summary id="disclosures-summary">Optional disclosures
+        <button type="button" id="summary-help">What is this?</button>
+      </summary>
+      <label for="closed-field">Prior Claims</label>
+      <input id="closed-field" name="prior_claims" type="text">
+      <button type="button" id="closed-btn">Add Claim</button>
+    </details>
+
+    <!-- SUBJECT H: an OPEN <details>. Same markup, opposite outcome - every
+         control inside is reachable. -->
+    <details id="disclosures-open" open>
+      <summary>Beneficiary disclosures</summary>
+      <label for="open-field">Secondary Beneficiary</label>
+      <input id="open-field" name="secondary_beneficiary" type="text">
+    </details>
+
+    <!-- SUBJECT I: input[type=submit]. It has no text content at all - a
+         submit input is a void element - so name-from-content must fall back to
+         the `value` attribute, which is what the browser renders on its face. -->
+    <input type="submit" id="submit-claim" value="Submit Claim">
+
+    <!-- SUBJECT J: a TRI-STATE checkbox. "mixed" is a real ARIA value meaning
+         "some but not all of my children are checked". It is neither true nor
+         false, and reporting it as either would be a fabricated answer. -->
+    <div role="checkbox" id="all-conditions" aria-checked="mixed" tabindex="0"
+         aria-label="All health conditions">Some selected</div>
+
+    <!-- SUBJECT K: a custom toggle that declares NO state at all. Honest empty:
+         the widget is a switch, but nothing in the DOM says which way it is set,
+         so no value may be invented for it. -->
+    <div role="switch" id="paperless" tabindex="0" aria-label="Paperless delivery">Paperless</div>
+  </main>
+</body>
+</html>

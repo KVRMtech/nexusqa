@@ -1,0 +1,79 @@
+# Nexus QA — Base Dockerfile for all Python engines
+# Multi-stage build for smaller production images
+
+# Pinned upstream base for reproducible builds. The digest makes a clean rebuild
+# deterministic regardless of when `python:3.11-slim` is re-tagged on Docker Hub.
+# To refresh: docker manifest inspect python:3.11-slim → update the @sha256 below.
+# NOTE: the base image currently deployed on the VM (nexus-base:dev,
+# sha256:95bb54a8…, built 2026-05-31) predates this pin — it was built from
+# whatever 3.11-slim was current then. This pin governs FUTURE rebuilds only.
+FROM python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0 AS base
+
+LABEL maintainer="Nexus QA Platform"
+LABEL description="Base image for Nexus engine services"
+
+# System dependencies.
+#
+# `apt-get upgrade` IS deliberate here, and it is what closes the CVE gate.
+# The FROM line above is digest-pinned, which fixes the starting layer forever —
+# including whatever Debian security fixes have shipped since that digest was
+# cut. `apt-get install` only touches the three packages it names, so everything
+# inherited from the base stayed at its original version indefinitely.
+#
+# Trivy's first-ever run against this image (the scanner had never installed —
+# see ci.yml) reported 12 fixable HIGH findings, all of them the util-linux
+# family (bsdutils, libblkid1, libmount1, libsmartcols1, libuuid1, mount, …)
+# carrying CVE-2026-53615 and CVE-2026-45447, installed 1:2.41-5 against a
+# published fix in 2.41.5-0+deb13u1. Nothing in this repo pulls util-linux in;
+# it arrives with debian:trixie underneath python:3.11-slim, so no change to the
+# package list could ever have fixed it.
+#
+# Upgrading does not weaken the digest pin's purpose. The pin makes the build
+# start from a known layer; the upgrade brings that layer's packages to the
+# current security state at build time. Refreshing the digest periodically is
+# still the right hygiene — this makes the image patched in the meantime rather
+# than only after someone remembers.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+# Pin nexus to uid/gid 999 (not an auto-assigned system id): the Verdict Helm chart
+# runs pods as runAsUser/runAsGroup/fsGroup=999, and runAsNonRoot enforcement needs a
+# NUMERIC user it can verify — a named USER makes the kubelet refuse to start the pod.
+RUN groupadd -r -g 999 nexus && useradd -r -u 999 -g nexus -m nexus
+
+WORKDIR /app
+
+# The other half of the same Trivy report: 3 fixable HIGH findings in the Python
+# layer, all jaraco.context 5.3.0 (CVE-2026-23949, path traversal via a malicious
+# archive; fixed in 6.1.0). It is not a dependency of anything here — it ships as
+# part of the setuptools distribution baked into python:3.11-slim — so it is
+# upgraded at the toolchain level rather than added to any service's
+# requirements.txt, where it would be a phantom direct dependency. setuptools is
+# floored at the same version ci.yml's pip-audit gate requires (PYSEC-2026-3447).
+# wheel is the same story one layer along: 0.45.1 ships in the image and carries
+# CVE-2026-24049 (privilege escalation / arbitrary code execution, fixed 0.46.2).
+# It surfaced only after the three above were cleared — Trivy reports the whole
+# set each run, and this was the last remaining HIGH once util-linux and
+# jaraco.context were patched. Floored here with the rest of the build toolchain.
+RUN pip install --no-cache-dir --upgrade \
+    'setuptools>=83.0.0' \
+    'jaraco.context>=6.1.0' \
+    'wheel>=0.46.2'
+
+# Install shared SDK first (cache layer)
+COPY sdk/nexus-sdk/ /app/sdk/nexus-sdk/
+RUN pip install --no-cache-dir /app/sdk/nexus-sdk/
+
+# Default healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:${ENGINE_PORT:-8000}/health || exit 1
+
+USER nexus
+
+CMD ["python", "main.py"]

@@ -1,0 +1,7 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VKPower Verdict certified seal">
+  <rect width="64" height="64" rx="14" fill="#070d0f"/>
+  <path d="M32.00 5.00 L 37.82 10.27 L 45.50 8.62 L 47.91 16.09 L 55.38 18.50 L 53.73 26.18 L 59.00 32.00 L 53.73 37.82 L 55.38 45.50 L 47.91 47.91 L 45.50 55.38 L 37.82 53.73 L 32.00 59.00 L 26.18 53.73 L 18.50 55.38 L 16.09 47.91 L 8.62 45.50 L 10.27 37.82 L 5.00 32.00 L 10.27 26.18 L 8.62 18.50 L 16.09 16.09 L 18.50 8.62 L 26.18 10.27 Z"
+        fill="none" stroke="#1fc7b2" stroke-width="2.4" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="17.5" fill="none" stroke="#1fc7b2" stroke-width="1" stroke-opacity="0.45"/>
+  <path d="M22.5 33 L 29.2 40 L 43 24.5" fill="none" stroke="#e3b45c" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

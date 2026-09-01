@@ -1,0 +1,156 @@
+{
+  "purpose": "Prove a canvas-rendered surface becomes a NAMED opaque-ledger row when it is large enough to be a real UI, is ignored when it is decorative chrome, and never suppresses capture of the readable DOM controls sharing the page. Also proves DISPLAYED_VALUES_JS grounds rendered value nodes that no interactive-control walker sees.",
+  "targeted_defect": "None (regression guard). Pins the OPAQUE_JS canvas gate (40,000 px) and the separation of concerns between the three injected snippets: a canvas is not an interactive control, a premium figure is not an interactive control, and neither may be fabricated into one.",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 2,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "input#illustration-age"
+      },
+      "fields": {
+        "name": "Issue Age",
+        "name_source": "label-for",
+        "role": "spinbutton",
+        "min": "18",
+        "max": "85",
+        "value_committed": "35"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "button#recalculate"
+      },
+      "fields": {
+        "name": "Recalculate Illustration",
+        "role": "button"
+      }
+    }
+  ],
+  "forbid_controls": [
+    {
+      "where": {
+        "tag": "canvas"
+      }
+    },
+    {
+      "where": {
+        "name": "$1,284.00"
+      }
+    }
+  ],
+  "opaque": {
+    "lanes": [
+      "playwright"
+    ],
+    "lane_note": "OPAQUE_JS gates on getBoundingClientRect() area; jsdom has no layout engine so every rect is zero and no canvas would ever be detected. Asserting it in jsdom would be asserting a false negative.",
+    "expect": [
+      {
+        "kind": "canvas",
+        "label": "Premium projection chart"
+      },
+      {
+        "kind": "canvas",
+        "label": "canvas region"
+      }
+    ],
+    "forbid_labels": [
+      "sparkline"
+    ],
+    "expect_count": 2
+  },
+  "displayed_values": {
+    "lanes": [
+      "jsdom",
+      "playwright"
+    ],
+    "snippet": "DISPLAYED_VALUES_JS",
+    "expect": [
+      {
+        "selector": "#annual-premium",
+        "text": "$1,284.00",
+        "label": "Annual Premium",
+        "rung": "2 — <dd> paired with its preceding <dt>"
+      },
+      {
+        "selector": "#total-paid",
+        "text": "$38,520.00",
+        "label": "Total Paid at 65",
+        "rung": "2"
+      },
+      {
+        "selector": "p",
+        "text": "$107.00",
+        "label": "Monthly Premium",
+        "rung": "1 — aria-label"
+      },
+      {
+        "selector": "p",
+        "text": "$14,905.00",
+        "label": "Cash Value at 20 Years",
+        "rung": "3 — aria-labelledby"
+      },
+      {
+        "selector": "span.amount",
+        "text": "$500,000.00",
+        "label": "Death Benefit",
+        "rung": "4 — previous sibling"
+      },
+      {
+        "selector": "div.amount-only",
+        "text": "$1,250.00",
+        "label": "Surrender Charge",
+        "rung": "5 — parent's previous sibling"
+      },
+      {
+        "selector": "b",
+        "text": "$7.50",
+        "label": "Policy Fee",
+        "rung": "6 — labelled element found by class within the parent"
+      },
+      {
+        "selector": "b",
+        "text": "$12.00",
+        "label": "Rider Charge",
+        "rung": "6 PROPER — label found by class within the parent. The earlier '$7.50' case is actually resolved by rung 5; this one is the first to reach the querySelector fallback."
+      },
+      {
+        "selector": "div",
+        "text": "$3,000.00",
+        "label": "Policy Loan Balance",
+        "rung": "4 — previous sibling, reached past an intervening block"
+      },
+      {
+        "selector": "span",
+        "text": "$42.00",
+        "label": "",
+        "rung": "8 — genuinely bare. The ONLY correct answer is an empty label, and unlike the $99.99 case there is nothing within scan range to borrow."
+      },
+      {
+        "selector": "span.fee",
+        "text": "$0.99",
+        "label": "",
+        "rung": "inside the <summary> of a collapsed <details> — rendered, therefore captured"
+      }
+    ],
+    "describes_correct_behaviour": [
+      {
+        "selector": "p",
+        "text": "$99.99",
+        "label": "",
+        "rung": "7 — nothing to go on",
+        "why": "BUG-VALUE-LABEL-BLEED. This value has no label of any kind. labelOf() scans up to 3 previous siblings and 2 of the parent's previous siblings, skipping any whose text looks like a value - so it walks PAST two unrelated figures and adopts 'Surrender Charge', which belongs to $1,250.00. A value oracle grounded on that pairing asserts 'Surrender Charge == $99.99' about a page that says $1,250.00. An empty label is correct and safe; a borrowed one is a false assertion."
+      }
+    ],
+    "forbid": [
+      {
+        "text": "$777.00",
+        "why": "in the BODY of a collapsed <details>. The browser renders nothing there, so grounding a value oracle on it would assert against a number no user can see."
+      }
+    ]
+  }
+}

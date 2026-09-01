@@ -1,0 +1,18 @@
+# Let's Encrypt production — for production ingress hostnames. Strict
+# rate limits (50 certs/registered domain/week) apply; the ingress chart
+# template requests one cert per hostname so we stay well under the cap.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${CERT_MANAGER_EMAIL}
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - selector: {}
+        dns01:
+          route53:
+            region: ${PRIMARY_REGION}

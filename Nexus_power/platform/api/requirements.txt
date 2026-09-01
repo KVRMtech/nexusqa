@@ -1,0 +1,30 @@
+# Platform API — cross-cutting backend for all UI modules
+-e ../../sdk/nexus-sdk
+psutil>=5.9,<6.0
+structlog>=24.1,<25.0
+locust>=2.23,<3.0
+# Storyboard Phase 1 deps.  The services degrade gracefully when these
+# are missing (fall back to stdlib Levenshtein + last-two-labels TLD
+# extraction) but the production path expects both installed for speed
+# and accuracy.  tldextract uses the Public Suffix List for correct
+# eTLD+1 extraction including country-code TLDs (co.uk, com.au).
+# rapidfuzz is C++-backed and ~50x faster than the pure-Python fallback
+# for the pairwise domain comparison loop.
+tldextract>=5.1,<6.0
+rapidfuzz>=3.5,<4.0
+# Pillow drives the frame_annotator service (Step 5).  Standard CPython
+# wheels are available for Linux/x86_64 so the platform-api image pulls
+# a binary wheel — no compilation step at build time.
+Pillow>=10.0,<12.0
+# gcloud-aio-storage is the GCS backend driver loaded by
+# nexus_sdk.storage when NEXUS_STORAGE_BACKEND=gcs.  Required for
+# the frame annotator to upload annotated PNGs to the same bucket
+# the canonical pipeline reads from.  Without this dependency the
+# storage init silently degrades and uploads fail with
+# ModuleNotFoundError at write time.
+gcloud-aio-storage>=9.0,<10.0
+# google-cloud-kms backs nexus_sdk.security.envelope.GcpKmsProvider (the real
+# KEK provider for on-GCP deploys). Imported lazily — only loaded when
+# NEXUS_KEK_PROVIDER=gcp_kms — so it's inert unless envelope encryption is on.
+# Auth is Application Default Credentials (the VM service account); no keys on disk.
+google-cloud-kms>=2.21,<4

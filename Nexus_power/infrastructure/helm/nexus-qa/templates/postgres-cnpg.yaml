@@ -1,0 +1,155 @@
+{{/*
+=================================================================
+PostgreSQL HA via CloudNativePG (CNPG)
+=================================================================
+When `postgres.cnpg.enabled=true`, the chart emits a CNPG `Cluster`
+custom resource instead of the single-instance StatefulSet in
+postgres.yaml. The CNPG operator (installed cluster-wide by the
+platform team, NOT this chart) reconciles a 3-instance Postgres 16
+cluster with synchronous replication and automatic failover.
+
+Why CNPG vs Patroni/Stolon: it's the K8s-native option, requires no
+sidecar, and integrates with `Backup` + `ScheduledBackup` CRs for
+out-of-the-box PITR. Two requirements on the operator's side:
+  1. The CNPG operator must be installed (typically as a separate Helm
+     chart at the platform layer): `cnpg-system` namespace.
+  2. A `Secret` matching this cluster's `superuserSecret` reference
+     must exist and carry `username` + `password` keys.
+
+When `postgres.cnpg.enabled=false`, the StatefulSet from postgres.yaml
+is the source of truth — useful for dev / cost-constrained envs.
+
+NOTE: This template does NOT install the operator itself. It just
+emits the Cluster CR. Validate the operator is present with:
+  kubectl get crd clusters.postgresql.cnpg.io
+before flipping this on.
+*/}}
+
+{{- if and .Values.postgres.enabled .Values.postgres.cnpg .Values.postgres.cnpg.enabled }}
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+{{- $cnpg := .Values.postgres.cnpg }}
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "postgres") | nindent 4 }}
+spec:
+  instances: {{ $cnpg.instances | default 3 }}
+  imageName: {{ $cnpg.image | default "ghcr.io/cloudnative-pg/postgresql:16.4" | quote }}
+
+  # Synchronous replication: at least one replica must confirm a write
+  # before the primary acks. Trades a small write-latency increase for
+  # zero data loss on failover. For async, set BOTH
+  # .Values.postgres.cnpg.minSyncReplicas and .maxSyncReplicas to 0 — those are
+  # the keys this template actually reads. The line previously named a
+  # `synchronousReplicas` key that exists nowhere in values.yaml or in this
+  # chart, so an operator following it would have changed nothing and believed
+  # replication was async.
+  minSyncReplicas: {{ $cnpg.minSyncReplicas | default 1 }}
+  maxSyncReplicas: {{ $cnpg.maxSyncReplicas | default 1 }}
+
+  # CNPG owns the database creation; we reference the same credentials
+  # the engines expect. The secret name MUST match what platform-api
+  # and the engines read at startup.
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.database | default "nexusqa" | quote }}
+      owner: {{ .Values.postgres.user | default "nexus" | quote }}
+      secret:
+        name: {{ $cnpg.superuserSecret | default (printf "%s-postgres-superuser" $fullname) | quote }}
+      # postInitSQL runs once on cluster bootstrap. Use sparingly —
+      # alembic migrations are the canonical schema source.
+      postInitSQL:
+        - "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+        - "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
+  superuserSecret:
+    name: {{ $cnpg.superuserSecret | default (printf "%s-postgres-superuser" $fullname) | quote }}
+
+  storage:
+    size: {{ .Values.postgres.persistence.size | default "20Gi" | quote }}
+    {{- if .Values.global.storageClass }}
+    storageClass: {{ .Values.global.storageClass | quote }}
+    {{- end }}
+
+  {{- if $cnpg.walStorage }}
+  walStorage:
+    size: {{ $cnpg.walStorage.size | default "10Gi" | quote }}
+    {{- if .Values.global.storageClass }}
+    storageClass: {{ .Values.global.storageClass | quote }}
+    {{- end }}
+  {{- end }}
+
+  resources:
+    {{- toYaml (.Values.postgres.resources | default dict) | nindent 4 }}
+
+  # Tunables. CNPG accepts any Postgres GUC under postgresql.parameters.
+  # Defaults below are deliberately conservative — tune after measuring.
+  postgresql:
+    parameters:
+      max_connections: {{ $cnpg.maxConnections | default "200" | quote }}
+      shared_buffers: {{ $cnpg.sharedBuffers | default "512MB" | quote }}
+      effective_cache_size: {{ $cnpg.effectiveCacheSize | default "1536MB" | quote }}
+      work_mem: "32MB"
+      maintenance_work_mem: "128MB"
+      log_min_duration_statement: "1000"   # log queries > 1s
+      log_statement: "ddl"
+      pg_stat_statements.track: "all"
+    pg_hba:
+      - host all all 10.0.0.0/8 md5
+      - host all all 172.16.0.0/12 md5
+      - host all all 192.168.0.0/16 md5
+
+  # PDB ensures at most one replica is unavailable during voluntary
+  # disruptions (cordon/drain). Synchronous replication guarantees
+  # data-loss-free promotion.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+
+  {{- if $cnpg.backup }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ $cnpg.backup.destinationPath | quote }}
+      {{- if $cnpg.backup.endpointURL }}
+      endpointURL: {{ $cnpg.backup.endpointURL | quote }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ $cnpg.backup.credentialsSecret | quote }}
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ $cnpg.backup.credentialsSecret | quote }}
+          key: ACCESS_SECRET_KEY
+      wal:
+        compression: gzip
+      data:
+        immediateCheckpoint: true
+        jobs: 2
+    retentionPolicy: {{ $cnpg.backup.retentionDays | default 30 | quote }}
+  {{- end }}
+
+  monitoring:
+    enablePodMonitor: true
+
+{{- if $cnpg.scheduledBackup }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $fullname }}-postgres-backup
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" "postgres") | nindent 4 }}
+spec:
+  cluster:
+    name: {{ $fullname }}-postgres
+  schedule: {{ $cnpg.scheduledBackup.schedule | default "0 2 * * *" | quote }}
+  backupOwnerReference: self
+{{- end }}
+
+{{- end }}

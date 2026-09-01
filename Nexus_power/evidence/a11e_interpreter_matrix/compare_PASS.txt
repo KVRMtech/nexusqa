@@ -1,0 +1,4 @@
+interpreters compared: 3.10.11, 3.11.16
+vectors per interpreter: 24
+
+CONVERGENCE OK: 24 vectors x 2 copies x 2 interpreters — agree within each and across all.

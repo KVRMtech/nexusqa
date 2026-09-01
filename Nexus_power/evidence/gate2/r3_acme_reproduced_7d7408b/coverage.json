@@ -1,0 +1,1648 @@
+{
+  "advance_blocked": [],
+  "advance_oracle": {
+    "consults": 1,
+    "errors": 0,
+    "latency_ms_total": 0,
+    "picks": 1,
+    "state": "configured",
+    "unavailable": 0
+  },
+  "approvable_boundary": [
+    {
+      "boundary_key": "bnd_cc3dca185787d08b5478",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8113/"
+    },
+    {
+      "boundary_key": "bnd_db932fa32202590b2a8b",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8113/"
+    },
+    {
+      "boundary_key": "bnd_3b1538fa6f063446dc15",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8113/#/quote"
+    },
+    {
+      "boundary_key": "bnd_65209da7b56a105b9ce8",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8113/#/quote"
+    },
+    {
+      "boundary_key": "bnd_a942901f0b65e370b79c",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8113/#/apply"
+    },
+    {
+      "boundary_key": "bnd_4a46d01547d321701333",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8113/#/apply"
+    },
+    {
+      "boundary_key": "bnd_d566a2a1e89d7f13ace8",
+      "label": "Confirm \u2014 bind this policy?",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8113/#/quote"
+    },
+    {
+      "boundary_key": "bnd_f56573b91ec3a5566ae6",
+      "label": "Bind policy",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8113/#/quote"
+    },
+    {
+      "boundary_key": "bnd_4b83ddc5dd29190618fd",
+      "label": "Cancel",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8113/#/quote"
+    },
+    {
+      "boundary_key": "bnd_6669e46c46cd450c6a84",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8113/#/review"
+    },
+    {
+      "boundary_key": "bnd_ec664486d41636ced5ea",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8113/#/review"
+    }
+  ],
+  "auth_blocked": false,
+  "auth_blocked_reason": "",
+  "auth_incomplete": true,
+  "auth_reason": "not_persisted",
+  "boundaries_crossed": 2,
+  "boundary_crossings": [
+    {
+      "approval_id": "apr_2a29269c2c05102b",
+      "boundary_key": "bnd_ad02b7a2a5a5fc725b34",
+      "completed_at_ms": 50062,
+      "confirmed": true,
+      "control_name": "Bind policy",
+      "crossing_id": "cross_ad02b7a2a5a5_1",
+      "outcome": "confirmation",
+      "refusal_reason": "",
+      "reserved_at_ms": 48187,
+      "sequence_index": 3,
+      "state_fingerprint": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+      "status": "crossed",
+      "url": "http://127.0.0.1:8113/#/review"
+    },
+    {
+      "approval_id": "apr_2a29269c2c05102b",
+      "boundary_key": "bnd_f56573b91ec3a5566ae6",
+      "completed_at_ms": 161000,
+      "confirmed": false,
+      "control_name": "Bind policy",
+      "crossing_id": "cross_f56573b91ec3_1",
+      "outcome": "dom_changed",
+      "refusal_reason": "",
+      "reserved_at_ms": 153328,
+      "sequence_index": 5,
+      "state_fingerprint": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+      "status": "crossed",
+      "url": "http://127.0.0.1:8113/#/quote"
+    }
+  ],
+  "crawl_mode": "explore",
+  "discovered_rules": [],
+  "endpoint_inventory": [],
+  "endpoint_inventory_truncated": false,
+  "expansions_opened": 2,
+  "expansions_skipped": 0,
+  "field_ledger": [
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Age",
+      "provenance": "synthesized",
+      "semantic_type": "age",
+      "sensitive": false,
+      "signature": "a7b73ae66849e2b68bd4f40153a60cb1",
+      "url": "http://127.0.0.1:8113/#/quote",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Coverage amount ($)",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "d86bb15a50a8fb7d74f5e427153c659e",
+      "url": "http://127.0.0.1:8113/#/quote",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "20 years",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Term length",
+      "options": [
+        "10 years",
+        "20 years",
+        "30 years"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "03489eaa156d8ef29544a58413f47f25",
+      "url": "http://127.0.0.1:8113/#/quote",
+      "widget": "native_select"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "tx",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "State",
+      "options": [
+        "tx",
+        "fl",
+        "ca"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "097ae56e5321a87ccecb6f7fa930adbb",
+      "url": "http://127.0.0.1:8113/#/quote",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "group_id": "aa9515a598bce229af0dccec5f940657",
+      "name": "No",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "needs_input",
+      "question_label": "Do you use tobacco?",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+      "url": "http://127.0.0.1:8113/#/quote",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "group_id": "aa9515a598bce229af0dccec5f940657",
+      "name": "Yes",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "needs_input",
+      "question_label": "Do you use tobacco?",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+      "url": "http://127.0.0.1:8113/#/quote",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Full legal name",
+      "provenance": "synthesized",
+      "semantic_type": "full_name",
+      "sensitive": true,
+      "signature": "227db94b944ba0a7d9dc40ab5aeff5a3",
+      "url": "http://127.0.0.1:8113/#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Date of birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "662ff44f5bae70bf02b5e790553f82bf",
+      "url": "http://127.0.0.1:8113/#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "SSN (synthetic)",
+      "provenance": "synthesized",
+      "semantic_type": "national_id",
+      "sensitive": true,
+      "signature": "0bdbc40b8be9067114bf356d4ee6b819",
+      "url": "http://127.0.0.1:8113/#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Primary beneficiary",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "702715d410dc2d30c094e36daf526d62",
+      "url": "http://127.0.0.1:8113/#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Accidental death benefit amount ($)",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "0bb620e268785461a14b0b1db41b32e1",
+      "url": "http://127.0.0.1:8113/#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "no",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Waiver of premium rider",
+      "options": [
+        "yes",
+        "no"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "83b0f6cd28c06fcfd2f9b68707817068",
+      "url": "http://127.0.0.1:8113/#/apply",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "no",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Replacing an existing policy?",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "e1984a2b4bd1882f7934fee2c329392e",
+      "url": "http://127.0.0.1:8113/#/apply",
+      "widget": "native_select"
+    }
+  ],
+  "fields_inferred": [
+    "Age",
+    "Coverage amount ($)",
+    "Term length",
+    "State",
+    "Full legal name",
+    "Date of birth",
+    "SSN (synthetic)",
+    "Primary beneficiary",
+    "Accidental death benefit amount ($)",
+    "Waiver of premium rider",
+    "Replacing an existing policy?"
+  ],
+  "fields_needing_seed": [
+    "No",
+    "Yes"
+  ],
+  "fields_needing_seed_detail": [
+    {
+      "label": "No",
+      "url": "http://127.0.0.1:8113/#/quote"
+    },
+    {
+      "label": "Yes",
+      "url": "http://127.0.0.1:8113/#/quote"
+    }
+  ],
+  "filled_by_kind": {
+    "date": 3,
+    "select": 8,
+    "text": 16
+  },
+  "flow_summary": {
+    "advance_contradicts_fills": 0,
+    "advances_by_tier": {
+      "1": 3
+    },
+    "boundaries_crossed": 2,
+    "branch_coverage": false,
+    "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+    "deepest_flow_capped": false,
+    "deepest_flow_proven_steps": 3,
+    "deepest_flow_steps": 3,
+    "deepest_flow_terminal": "submit_crossed",
+    "flows_completed": 3,
+    "flows_found": 3,
+    "flows_fully_answered": 0,
+    "flows_truncated": 0,
+    "intent_unmet": 0,
+    "journeys_completed": 1,
+    "oracle_advances": 0,
+    "truncation_reasons": {}
+  },
+  "flows": [
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "33715e61731117640ccadaa5483332278c68456e4d22e986696043dc9d145dc0",
+      "entry_title": "Acme Life Insurance",
+      "entry_url": "http://127.0.0.1:8113/#/quote",
+      "fields_filled_total": 8,
+      "fields_unanswered": 4,
+      "flow_id": "5de2c5ce85341de4abed3d35",
+      "fully_answered": false,
+      "journey_completed": true,
+      "outcome_milestone": {
+        "approval_id": "apr_2a29269c2c05102b",
+        "attestation_attributed_to": "characterization",
+        "attestation_env_kind": "disposable",
+        "boundary_key": "bnd_ad02b7a2a5a5fc725b34",
+        "clicked_at_ms": 48422,
+        "confirmation_detail": "",
+        "confirmation_rung": "dialog",
+        "control_name": "Bind policy",
+        "crossing_id": "cross_ad02b7a2a5a5_1",
+        "dom_digest_after": "dom_e3804b3b456b9ec78736_8",
+        "dom_digest_before": "dom_b277a9de4261c1724f50_5",
+        "grant": {
+          "approval_id": "apr_2a29269c2c05102b",
+          "approved_at": "",
+          "approved_by": "gate2-operator",
+          "control": "Bind policy",
+          "max_crossings": 1,
+          "state_fingerprint": "",
+          "url": ""
+        },
+        "guard_rule_id": "guard.submit.mutation_ok",
+        "latency_ms": 1406,
+        "milestone_id": "mst_96720841b7b7732f",
+        "navigated": false,
+        "observed_at_ms": 49828,
+        "outcome": "confirmation",
+        "outcome_values": [
+          {
+            "label": "Coverage",
+            "selector": "div",
+            "text": "$900,000",
+            "value_candidate": "true",
+            "value_confidence": "0.90",
+            "value_reason": "currency value under an outcome label",
+            "value_type": "currency"
+          },
+          {
+            "label": "Monthly premium",
+            "selector": "div",
+            "text": "$177.12",
+            "value_candidate": "true",
+            "value_confidence": "0.90",
+            "value_reason": "currency value under an outcome label",
+            "value_type": "currency"
+          }
+        ],
+        "refuse_pack_version": "refuse-pack-v2",
+        "screenshot_after": "frame_00004.png",
+        "screenshot_before": "frame_00003.png",
+        "state_fingerprint_after": "submit_ecf2cac5c5e4f9fd",
+        "state_fingerprint_before": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+        "url_after": "http://127.0.0.1:8113/#/review",
+        "url_before": "http://127.0.0.1:8113/#/review",
+        "verified": true
+      },
+      "outcome_values": [
+        {
+          "label": "Coverage",
+          "value": "$900,000",
+          "value_type": "currency"
+        },
+        {
+          "label": "Monthly premium",
+          "value": "$177.12",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 3,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Continue to application",
+            "oracle": false,
+            "signature": "b78498ab792cc82fca14268cd7190d53691b1cd1ef631e01fab0c8f37ea5768b",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "20 years",
+              "control_label": "Term length",
+              "control_signature": "03489eaa156d8ef29544a58413f47f25",
+              "options": [
+                "10 years",
+                "20 years",
+                "30 years"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "tx",
+              "control_label": "State",
+              "control_signature": "097ae56e5321a87ccecb6f7fa930adbb",
+              "options": [
+                "tx",
+                "fl",
+                "ca"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "control_label": "Do you use tobacco?",
+              "control_signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+              "group_id": "aa9515a598bce229af0dccec5f940657",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Do you use tobacco?",
+              "control_signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+              "group_id": "aa9515a598bce229af0dccec5f940657",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:b0ca23a04841207670bfa4cd7a81af56",
+              "option_classes": {
+                "Apply": "forward",
+                "Continue to application": "navigational",
+                "Get a quote": "navigational",
+                "Get quote": "navigational",
+                "Review & bind": "destructive"
+              },
+              "options": [
+                "Get a quote",
+                "Apply",
+                "Review & bind",
+                "Get quote",
+                "Continue to application"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 2,
+          "fingerprint": "0a5004c7b5b80effecadbc68e65c931a188308530f95edff65165167210824dc",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:8113/#/quote"
+        },
+        {
+          "advance": {
+            "control_name": "Continue to review",
+            "oracle": false,
+            "signature": "3e94edd401de21a6d5aae9d174932859e87ccaf77bd9ac46bc95e90b747abe09",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "In the last 5 years, any major diagnosis?",
+              "control_signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+              "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "In the last 5 years, any major diagnosis?",
+              "control_signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+              "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:c4872c43456eac5065fb4d182acb4b04",
+              "option_classes": {
+                "Apply": "forward",
+                "Continue to review": "navigational",
+                "Get a quote": "navigational",
+                "Optional riders": "navigational",
+                "Policy replacement disclosures": "navigational",
+                "Review & bind": "destructive"
+              },
+              "options": [
+                "Get a quote",
+                "Apply",
+                "Review & bind",
+                "Optional riders",
+                "Policy replacement disclosures",
+                "Continue to review"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 2,
+          "fingerprint": "9ee84c857fe956b043561802ecf34107130bff899f253c09fdf1b2b75586999d",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:8113/#/apply"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:58842dd06824495d9af3235621925a5a",
+              "option_classes": {
+                "Apply": "forward",
+                "Bind policy": "destructive",
+                "Get a quote": "navigational",
+                "Review & bind": "destructive"
+              },
+              "options": [
+                "Get a quote",
+                "Apply",
+                "Review & bind",
+                "Bind policy"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:8113/#/review"
+        }
+      ],
+      "terminal": "submit_crossed",
+      "terminal_url": "http://127.0.0.1:8113/#/review"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+      "entry_title": "Acme Life Insurance",
+      "entry_url": "http://127.0.0.1:8113/#/quote",
+      "fields_filled_total": 4,
+      "fields_unanswered": 2,
+      "flow_id": "8f4963b3304b5c40008b262e",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": {
+        "approval_id": "apr_2a29269c2c05102b",
+        "attestation_attributed_to": "characterization",
+        "attestation_env_kind": "disposable",
+        "boundary_key": "bnd_f56573b91ec3a5566ae6",
+        "clicked_at_ms": 159406,
+        "confirmation_detail": "",
+        "confirmation_rung": "",
+        "control_name": "Bind policy",
+        "crossing_id": "cross_f56573b91ec3_1",
+        "dom_digest_after": "dom_3c67a93c42549485ba15_11",
+        "dom_digest_before": "dom_e9a6639f7c083594b601_14",
+        "grant": {
+          "approval_id": "apr_2a29269c2c05102b",
+          "approved_at": "",
+          "approved_by": "gate2-operator",
+          "control": "Bind policy",
+          "max_crossings": 1,
+          "state_fingerprint": "",
+          "url": ""
+        },
+        "guard_rule_id": "guard.submit.mutation_ok",
+        "latency_ms": 1375,
+        "milestone_id": "mst_4a977fb24c7f40ab",
+        "navigated": false,
+        "observed_at_ms": 160781,
+        "outcome": "dom_changed",
+        "outcome_values": [],
+        "refuse_pack_version": "refuse-pack-v2",
+        "screenshot_after": "frame_00007.png",
+        "screenshot_before": "frame_00006.png",
+        "state_fingerprint_after": "submit_96b9387c5d1ad5e6",
+        "state_fingerprint_before": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+        "url_after": "http://127.0.0.1:8113/#/quote",
+        "url_before": "http://127.0.0.1:8113/#/quote",
+        "verified": false
+      },
+      "outcome_values": [],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "choice": "20 years",
+              "control_label": "Term length",
+              "control_signature": "03489eaa156d8ef29544a58413f47f25",
+              "options": [
+                "10 years",
+                "20 years",
+                "30 years"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "tx",
+              "control_label": "State",
+              "control_signature": "097ae56e5321a87ccecb6f7fa930adbb",
+              "options": [
+                "tx",
+                "fl",
+                "ca"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "control_label": "Do you use tobacco?",
+              "control_signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+              "group_id": "aa9515a598bce229af0dccec5f940657",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Do you use tobacco?",
+              "control_signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+              "group_id": "aa9515a598bce229af0dccec5f940657",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 2,
+          "fingerprint": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:8113/#/quote"
+        }
+      ],
+      "terminal": "submit_crossed",
+      "terminal_url": "http://127.0.0.1:8113/#/quote"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "confirmation_detail": "Review & bind Confirm the details, then bind your policy. POLICY BOUND Confirmation #AL-1149472095 Insured Leonard Prescott Beneficiary autotest Coverage $900,000 Monthly premium $177.12 Applicant age 47",
+      "confirmation_rung": "aria_status",
+      "entry_fingerprint": "5f02853dd6116dca53d2b77d27b222ffe4809b05e3c47be24e94ad2486752401",
+      "entry_title": "Acme Life Insurance",
+      "entry_url": "http://127.0.0.1:8113/#/apply",
+      "fields_filled_total": 4,
+      "fields_unanswered": 2,
+      "flow_id": "f35f2d6191db92c2318f1aec",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Coverage",
+          "value": "$900,000",
+          "value_type": "currency"
+        },
+        {
+          "label": "Monthly premium",
+          "value": "$177.12",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 2,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Continue to review",
+            "oracle": false,
+            "signature": "3e94edd401de21a6d5aae9d174932859e87ccaf77bd9ac46bc95e90b747abe09",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "In the last 5 years, any major diagnosis?",
+              "control_signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+              "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "In the last 5 years, any major diagnosis?",
+              "control_signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+              "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:f9df2cfc9b7618a02bcc3a767af4154b",
+              "option_classes": {
+                "Apply": "forward",
+                "Continue to review": "navigational",
+                "Get a quote": "navigational",
+                "Optional riders": "navigational",
+                "Policy replacement disclosures": "navigational",
+                "Review & bind": "destructive"
+              },
+              "options": [
+                "Get a quote",
+                "Apply",
+                "Review & bind",
+                "Optional riders",
+                "Policy replacement disclosures",
+                "Continue to review"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 2,
+          "fingerprint": "5f02853dd6116dca53d2b77d27b222ffe4809b05e3c47be24e94ad2486752401",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:8113/#/apply"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:51692a346fff6173fdf0b032ecee2fc1",
+              "option_classes": {
+                "Apply": "forward",
+                "Get a quote": "navigational",
+                "Review & bind": "destructive"
+              },
+              "options": [
+                "Get a quote",
+                "Apply",
+                "Review & bind"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "a0e638afa44eb0d2677dbd1cdc5fde3f2410004f5cabf598259fcb594ef718e0",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:8113/#/review"
+        }
+      ],
+      "terminal": "confirmation",
+      "terminal_url": "http://127.0.0.1:8113/#/review"
+    }
+  ],
+  "forms_confirmed": 1,
+  "forms_found": 3,
+  "forms_submitted": 2,
+  "inventory_failure_detail": "",
+  "inventory_failures": 0,
+  "journeys_completed": 1,
+  "network_events_observed": 0,
+  "network_server_error_count": 0,
+  "network_server_errors": [],
+  "opaque_surfaces": [],
+  "open_choice_unverified": 0,
+  "outcome_milestones": [
+    {
+      "approval_id": "apr_2a29269c2c05102b",
+      "attestation_attributed_to": "characterization",
+      "attestation_env_kind": "disposable",
+      "boundary_key": "bnd_ad02b7a2a5a5fc725b34",
+      "clicked_at_ms": 48422,
+      "confirmation_detail": "",
+      "confirmation_rung": "dialog",
+      "control_name": "Bind policy",
+      "crossing_id": "cross_ad02b7a2a5a5_1",
+      "dom_digest_after": "dom_e3804b3b456b9ec78736_8",
+      "dom_digest_before": "dom_b277a9de4261c1724f50_5",
+      "grant": {
+        "approval_id": "apr_2a29269c2c05102b",
+        "approved_at": "",
+        "approved_by": "gate2-operator",
+        "control": "Bind policy",
+        "max_crossings": 1,
+        "state_fingerprint": "",
+        "url": ""
+      },
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "latency_ms": 1406,
+      "milestone_id": "mst_96720841b7b7732f",
+      "navigated": false,
+      "observed_at_ms": 49828,
+      "outcome": "confirmation",
+      "outcome_values": [
+        {
+          "label": "Coverage",
+          "selector": "div",
+          "text": "$900,000",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        },
+        {
+          "label": "Monthly premium",
+          "selector": "div",
+          "text": "$177.12",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        }
+      ],
+      "refuse_pack_version": "refuse-pack-v2",
+      "screenshot_after": "frame_00004.png",
+      "screenshot_before": "frame_00003.png",
+      "state_fingerprint_after": "submit_ecf2cac5c5e4f9fd",
+      "state_fingerprint_before": "259bdf67be966f8b478bccbdc77bdba85c3da47948d0ad2a8788aac42d7ca087",
+      "url_after": "http://127.0.0.1:8113/#/review",
+      "url_before": "http://127.0.0.1:8113/#/review",
+      "verified": true
+    },
+    {
+      "approval_id": "apr_2a29269c2c05102b",
+      "attestation_attributed_to": "characterization",
+      "attestation_env_kind": "disposable",
+      "boundary_key": "bnd_f56573b91ec3a5566ae6",
+      "clicked_at_ms": 159406,
+      "confirmation_detail": "",
+      "confirmation_rung": "",
+      "control_name": "Bind policy",
+      "crossing_id": "cross_f56573b91ec3_1",
+      "dom_digest_after": "dom_3c67a93c42549485ba15_11",
+      "dom_digest_before": "dom_e9a6639f7c083594b601_14",
+      "grant": {
+        "approval_id": "apr_2a29269c2c05102b",
+        "approved_at": "",
+        "approved_by": "gate2-operator",
+        "control": "Bind policy",
+        "max_crossings": 1,
+        "state_fingerprint": "",
+        "url": ""
+      },
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "latency_ms": 1375,
+      "milestone_id": "mst_4a977fb24c7f40ab",
+      "navigated": false,
+      "observed_at_ms": 160781,
+      "outcome": "dom_changed",
+      "outcome_values": [],
+      "refuse_pack_version": "refuse-pack-v2",
+      "screenshot_after": "frame_00007.png",
+      "screenshot_before": "frame_00006.png",
+      "state_fingerprint_after": "submit_96b9387c5d1ad5e6",
+      "state_fingerprint_before": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+      "url_after": "http://127.0.0.1:8113/#/quote",
+      "url_before": "http://127.0.0.1:8113/#/quote",
+      "verified": false
+    }
+  ],
+  "rule_reuse": {
+    "hits": 0,
+    "known": 0,
+    "lookups": 0,
+    "misses": 0,
+    "reuse_rate": 0.0
+  },
+  "states": [
+    {
+      "ax_fingerprint": "e1f3ab9dc7de0f9df32aa29e1020dfcbb6fb741ac48975e112658bd71c441c18",
+      "controls_total": 7,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "displayed_values": [],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Password": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "password",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "password"
+        },
+        "Username": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "username",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8113/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "0a5004c7b5b80effecadbc68e65c931a188308530f95edff65165167210824dc",
+      "controls_total": 12,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "displayed_values": [],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Age": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "age",
+            "verified": true
+          },
+          "max": "85",
+          "min": "18",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Coverage amount ($)": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "coverage",
+            "verified": true
+          },
+          "max": "2000000",
+          "min": "50000",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "step": "50000",
+          "type": "text"
+        },
+        "No": {
+          "locator": {
+            "bindable": true,
+            "group_id": "aa9515a598bce229af0dccec5f940657",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "No",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "State": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "state",
+            "verified": true
+          },
+          "options": [
+            "TX",
+            "FL",
+            "CA"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Term length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term",
+            "verified": true
+          },
+          "options": [
+            "10 years",
+            "20 years",
+            "30 years"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "locator": {
+            "bindable": true,
+            "group_id": "aa9515a598bce229af0dccec5f940657",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Yes",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:8113/#/quote",
+      "question_groups": [
+        {
+          "group_id": "aa9515a598bce229af0dccec5f940657",
+          "label": "Do you use tobacco?",
+          "label_source": "legend",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "No"
+            },
+            {
+              "kind": "radio",
+              "name": "Yes"
+            }
+          ],
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "9ee84c857fe956b043561802ecf34107130bff899f253c09fdf1b2b75586999d",
+      "controls_total": 13,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "displayed_values": [
+        {
+          "label": "Application",
+          "selector": "p.lede",
+          "text": "Coverage $900,000 \u00b7 $177.12/mo",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Date of birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "date"
+        },
+        "Full legal name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "fullName",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "No": {
+          "locator": {
+            "bindable": true,
+            "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "No",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Primary beneficiary": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "beneficiary",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "SSN (synthetic)": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "ssn",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "pattern": "900-\\d{2}-\\d{4}",
+          "required": true,
+          "type": "text"
+        },
+        "Yes": {
+          "locator": {
+            "bindable": true,
+            "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Yes",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:8113/#/apply",
+      "question_groups": [
+        {
+          "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+          "label": "In the last 5 years, any major diagnosis?",
+          "label_source": "legend",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "No"
+            },
+            {
+              "kind": "radio",
+              "name": "Yes"
+            }
+          ],
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "ddd50f14b290034356ab44de14a4d9c3f7a460198711de7e1c0548a9e2da4e4f",
+      "controls_total": 14,
+      "danger_controls": 3,
+      "danger_names": [
+        "Review & bind",
+        "Confirm \u2014 bind this policy?",
+        "Bind policy"
+      ],
+      "displayed_values": [],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Age": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "age",
+            "verified": true
+          },
+          "max": "85",
+          "min": "18",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Coverage amount ($)": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "coverage",
+            "verified": true
+          },
+          "max": "2000000",
+          "min": "50000",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "step": "50000",
+          "type": "text"
+        },
+        "No": {
+          "locator": {
+            "bindable": true,
+            "group_id": "aa9515a598bce229af0dccec5f940657",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "No",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "State": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "state",
+            "verified": true
+          },
+          "options": [
+            "TX",
+            "FL",
+            "CA"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Term length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term",
+            "verified": true
+          },
+          "options": [
+            "10 years",
+            "20 years",
+            "30 years"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "locator": {
+            "bindable": true,
+            "group_id": "aa9515a598bce229af0dccec5f940657",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Yes",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:8113/#/quote",
+      "question_groups": [
+        {
+          "group_id": "aa9515a598bce229af0dccec5f940657",
+          "label": "Do you use tobacco?",
+          "label_source": "legend",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "No"
+            },
+            {
+              "kind": "radio",
+              "name": "Yes"
+            }
+          ],
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "5f02853dd6116dca53d2b77d27b222ffe4809b05e3c47be24e94ad2486752401",
+      "controls_total": 16,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "displayed_values": [
+        {
+          "label": "Application",
+          "selector": "p.lede",
+          "text": "Coverage $900,000 \u00b7 $177.12/mo",
+          "value_candidate": "true",
+          "value_confidence": "0.75",
+          "value_reason": "currency value",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Accidental death benefit amount ($)": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "riderAdb",
+            "verified": true
+          },
+          "max": "500000",
+          "min": "0",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "step": "25000",
+          "type": "text"
+        },
+        "Date of birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "date"
+        },
+        "Full legal name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "fullName",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "No": {
+          "locator": {
+            "bindable": true,
+            "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "No",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Primary beneficiary": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "beneficiary",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Replacing an existing policy?": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "replacePolicy",
+            "verified": true
+          },
+          "options": [
+            "Select an option",
+            "No",
+            "Yes"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "SSN (synthetic)": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "ssn",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "pattern": "900-\\d{2}-\\d{4}",
+          "required": true,
+          "type": "text"
+        },
+        "Waiver of premium rider": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "riderWaiver",
+            "verified": true
+          },
+          "options": [
+            "Select an option",
+            "Yes",
+            "No"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "locator": {
+            "bindable": true,
+            "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Yes",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:8113/#/apply",
+      "question_groups": [
+        {
+          "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+          "label": "In the last 5 years, any major diagnosis?",
+          "label_source": "legend",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "No"
+            },
+            {
+              "kind": "radio",
+              "name": "Yes"
+            }
+          ],
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "a0e638afa44eb0d2677dbd1cdc5fde3f2410004f5cabf598259fcb594ef718e0",
+      "controls_total": 4,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "displayed_values": [
+        {
+          "label": "Coverage",
+          "selector": "div",
+          "text": "$900,000",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        },
+        {
+          "label": "Monthly premium",
+          "selector": "div",
+          "text": "$177.12",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        }
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8113/#/review",
+      "question_groups": []
+    }
+  ],
+  "submit_candidates": [
+    "Get quote",
+    "Continue to application",
+    "Continue to review",
+    "Optional riders",
+    "Policy replacement disclosures"
+  ],
+  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 3 form(s) found; 11 field(s) auto-filled with a default; 2 field(s) need a real seed; 2 submit(s) exercised (Phase-B), 10 irreversible boundary/ies awaiting approval; 1 journey(s) completed end-to-end through an approved crossing.",
+  "tab_views_recorded": 0,
+  "traversal": "full",
+  "unblock_irreversible": [],
+  "unhandled_controls": [],
+  "validation_rejections": [],
+  "vision_budget": {
+    "breaker_open": false,
+    "breaker_threshold": 3,
+    "calls": 0,
+    "consecutive_failures": 0,
+    "failures": 0,
+    "gate": {
+      "attestation_rung": "none",
+      "attested": false,
+      "enabled": false,
+      "reason": "no_oracle",
+      "tenant_enabled": false
+    },
+    "latency_ms": 0,
+    "max_calls": 0,
+    "refusals": {},
+    "timeout_s": 20.0
+  },
+  "vision_ledger": [],
+  "vision_refused": 0,
+  "vision_verified": 0
+}

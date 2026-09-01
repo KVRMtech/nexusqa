@@ -1,0 +1,201 @@
+{
+  "_README": [
+    "GATE 5 / A37.4 ARB CERTIFICATION CEREMONY RECORD.",
+    "This file is DELIBERATELY UNSIGNED and currently INVALID. Running",
+    "  python scripts/gate5_verify_ceremony.py QECentral/certification/gate5_ceremony_record.json",
+    "prints every condition still unmet and exits 1. That refusal is the honest",
+    "current state of the programme, not a bug in the record.",
+    "",
+    "Nothing here may be filled in speculatively. A name in this file is a person",
+    "asserting they personally checked the thing next to their seat. Do not add a",
+    "signatory who has not signed, and do not mark a gate PASS to make the",
+    "validator quiet -- the validator exists to stop exactly that.",
+    "",
+    "clean_clone_attestation is pasted verbatim from the artifact produced by",
+    ".github/workflows/gate5-clean-clone-attestation.yml. Do not hand-write it."
+  ],
+
+  "ceremony": "gate5-arb-certification",
+  "certified_repository": "KVRMtech/nexusqa",
+
+  "certified_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+  "_certified_sha_named": "Named by the architect, 2026-08-27, under delegation from the programme owner.",
+
+  "build_artifact": "",
+  "deployment": {
+    "environment": "verdict-box (GCP project-8d85a07a-396c-40aa-9b6, asia-southeast1-a)",
+    "version_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+    "_version_sha_verification": [
+      "Independently checked live over SSH, 2026-08-27, not taken from any",
+      "session's report: `gcloud compute ssh verdict-box -- git rev-parse HEAD`",
+      "returned 7d7408bf0ca359a1ccec9a093523dc74b9dc37a9 exactly, `git status",
+      "--short` empty (clean tree), branch feat/qec-dynamic-catalog-p0-p6.",
+      "`docker ps` shows nexus-qe-central/qe-explorer healthy, created",
+      "2026-08-27T02:46:52Z -- i.e. NOT rebuilt just now; the source was",
+      "fast-forwarded from be20767 to 7d7408b without a container rebuild.",
+      "That is only safe because `git diff --stat be20767..7d7408b`, run",
+      "independently in this pass, shows exactly one file changed",
+      "(tests/browser/test_gate2_three_applications.py) and zero service files",
+      "-- the running containers are therefore byte-identical to what 7d7408b",
+      "would build.",
+      "",
+      "Prior state (superseded, kept for the record): a peer session had",
+      "deployed at 3d7e0f5 before be20767/7d7408b landed, and separately, the",
+      "VM's git remote (Venkatareddy2012/nexus-power-snapshot, a downstream",
+      "mirror) was itself lagging origin at be20767 -- so the VM could not",
+      "reach 7d7408b until the mirror was updated. Both fixed by the peer",
+      "session that reported this; the fix is recorded here only after being",
+      "reproduced independently above, not on the report alone."
+    ],
+    "_deployed_service_provenance_note": "Nexus_power/evidence/r5_deployed_service/deployed_service.json was NOT regenerated after the fast-forward above and still describes the earlier 3d7e0f5 deploy (including its unexplained produced_by.dirty=true/dirty_paths=[] combination) -- it is stale and is not cited for version_sha; the live SSH check above is the evidence for that field instead."
+  },
+
+  "clean_clone_attestation": {
+    "attestation": "gate5-clean-clone",
+    "certified_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+    "verified_clone_sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+    "result": "pass",
+    "repository": "KVRMtech/nexusqa",
+    "runner_environment": "github-hosted",
+    "runner_os": "Linux",
+    "runner_arch": "X64",
+    "author_controlled_hardware": false,
+    "workflow_run_id": "33094648136",
+    "workflow_run_url": "https://github.com/KVRMtech/nexusqa/actions/runs/33094648136",
+    "completed_at": "2026-08-27T16:48:59Z"
+  },
+  "_clean_clone_attestation_note": [
+    "Pasted verbatim from the artifact, not hand-written. Triggered via the",
+    "push-based fallback (pushing branch gate5/certify-7d7408b), because",
+    "workflow_dispatch 422s on this branch -- same default-branch resolution",
+    "gap documented for ci.yml/browser-harness.yml. Verified before trusting",
+    "the result: the clone URL is github.server_url/github.repository (a",
+    "server-side Actions value fixed to KVRMtech/nexusqa, independent of any",
+    "local remote config), and for the push trigger SHA=github.sha, i.e.",
+    "exactly the commit the pushed branch points to. Both confirmed by reading",
+    "the workflow YAML, not assumed.",
+    "",
+    "KNOWN DORMANT GAP in this same workflow, filed and NOT fixed during this",
+    "ceremony: ceremony-validator-selftest's checkout has no ref:, so it reads",
+    "github.ref rather than a resolved SHA. Harmless on the push path used here",
+    "(ref tip == github.sha). Live the day workflow_dispatch's 422 is repaired:",
+    "on that path job 1 would validate a record read from the DISPATCH branch,",
+    "not from inputs.sha -- a different commit than clean-clone-on-unowned-",
+    "hardware is certifying, with no needs: binding the two jobs together.",
+    "Fix: add `ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha",
+    "|| github.sha }}` to that checkout step before the dispatch trigger is",
+    "next repaired."
+  ],
+  "_clean_clone_mechanism_proven": {
+    "why_this_is_here": "Evidence that gate5-clean-clone-attestation.yml actually works on hardware no author controls. First real run, 2026-08-22.",
+    "attestation": "gate5-clean-clone",
+    "certified_sha": "07270915168be6f66c524d565ab3258cd07f152a",
+    "verified_clone_sha": "07270915168be6f66c524d565ab3258cd07f152a",
+    "result": "pass",
+    "repository": "KVRMtech/nexusqa",
+    "runner_environment": "github-hosted",
+    "runner_os": "Linux",
+    "runner_arch": "X64",
+    "author_controlled_hardware": false,
+    "workflow_run_id": "32579514902",
+    "workflow_run_url": "https://github.com/KVRMtech/nexusqa/actions/runs/32579514902",
+    "completed_at": "2026-08-22T14:45:11Z",
+    "verifier_result": "2024 passed, 4 skipped, 2 xfailed in 48.87s; ruff clean; every .py compiles; characterization goldens deterministic across two passes; 0 dirty entries in the fresh clone; no golden or evidence mutated by the run"
+  },
+
+  "gates": {
+    "gate0": "PARTIAL",
+    "gate1": "PARTIAL",
+    "gate2": "MET_UNDER_RESCOPE",
+    "gate3": "IN_PROGRESS",
+    "gate4": "NO_ACCEPTANCE_EVIDENCE"
+  },
+  "_gate_status_note": "The validator (scripts/gate5_verify_ceremony.py) requires the LITERAL string \"PASS\" for every gate and fails any other value identically, quoting whatever string is here -- so this edit changes what the record SAYS about gate2, not whether Gate 5 can certify: gate2 still fails, and is meant to. gates.gate0/1/3/4 were checked against their own named docs (GATE_0_DURABILITY.md, GATE1_EXIT_STATUS.md, PHASE_4_ENTRY_GATE.md; gate3 has no such doc found) and none of them is about the three-crossings claim PHASE_1_EXIT_RESCOPE.md redefines -- they are left untouched, each still its owner's assessment.",
+  "_gate_notes": {
+    "gate0": "A5 not met; push cleared mid-audit, first CI run in three days returned four defects",
+    "gate1": "tagged gate-1 at 3420d88, but A11 attestation issuer and A12 walk persistence are untracked/unstaged - in no commit",
+    "gate2": "MET UNDER THE RESCOPED CRITERION, NOT the original one -- see PHASE_1_EXIT_RESCOPE.md. The original exit bar (three applications, each crossed with observed confirmation) is NOT met and this record must keep saying so; gate2 is not a bare PASS and the validator will not treat it as one. What changed: the architect's 2026-08-24 re-scope redefined Phase 1's exit as ONE admissible crossing plus two applications driven to their boundaries with capability gaps measured and named (B1-B4). That narrower claim is evidenced: acme-life crossed+confirmed and now non-author-reproduced AT THE CERTIFIED SHA itself (reproductions[0], 7d7408b); summit-life-carrier crossed:1 and REFUSED by the t3 gate for no observed confirmation (cited as evidence the gate has teeth, not apologised for); vkpower-life driven to /apply/beneficiary/ with its two remaining stalls named on the coverage ledger. Independently, this gate's own machine check (tests/browser/test_gate2_three_applications.py, which encodes vkpower's expected crossings:0 and acme/summit's floors) is green at 7d7408b -- verified live by this session, 9/9 passed, produced_by.head=7d7408b dirty=false.",
+    "gate2_ORIGINAL_2026-08-21": "14 commits as of 2026-08-21 (A14x8, A16x1, A17x3, A19x1); no commit labelled A15 or A18; live vkpowerlife journey does not complete -- preserved for history; superseded by the note above once the re-scope existed to compare it against.",
+    "gate3": "under active construction by a concurrent session",
+    "gate4": "implementation present (MinIO, KEDA, crossing journal, live Squid) but no gate executed and no acceptance recorded"
+  },
+
+  "a37": {
+    "a37_1": "PASS",
+    "a37_2": "PARTIAL",
+    "a37_3": "PASS"
+  },
+  "_a37_notes": {
+    "a37_1": "9/9 production credentials decrypt through Cloud KMS, re-proven byte-identical after a full service rebuild",
+    "a37_2": "exposure removed from disk on verdict-box, but the PAT is STILL VALID until revoked at GitHub (fine-grained, Venkatareddy2012, ends ...p0Ox, expires 2026-09-05)",
+    "a37_3": "live three-service rollback drill on verdict-box: 19 checks passed, 0 failed"
+  },
+
+  "reproductions": [
+    {
+      "proof": "R3 acme-life crossing",
+      "implementer": "nexusqa-1c (session identifier -- this programme's implementation session for R1-R9)",
+      "reproducer": "nexusqa-0b (session identifier -- verification/Proof-guild role this ceremony)",
+      "sha": "7d7408bf0ca359a1ccec9a093523dc74b9dc37a9",
+      "environment": "independent clone, own container, own port 8113, own --out directory -- not the shared checkout",
+      "artifact": "Nexus_power/evidence/gate2/r3_acme_reproduced_7d7408b/NON_AUTHOR_REPRODUCTION.md",
+      "result": "PASS",
+      "_result_detail": "crossed:2 ['Bind policy','Bind policy'], confirmation_observed:True['dialog'], journeys_completed:1, produced_by.head=7d7408b dirty=false -- re-run independently by this session against the reproducer's own copied journey.json: t3_verify_crossing_evidence.py --sha 7d7408b -> [ADMISSIBLE] admissible:1/1 exit 0",
+      "recorded_at": "2026-08-27, at the moment the reproduction happened, per this ceremony's own rule that authorship cannot be reconstructed from git after the fact"
+    }
+  ],
+  "_reproductions_note": "Session-level identifiers, not human names -- consistent with this programme's standing rule that evidence independence is session-level while signature accountability is human-level (see roles / arb_signatories below, which remain empty for exactly the opposite reason). This one reproduction does not by itself satisfy proof_guild's attestation, which requires EVERY critical acceptance proof reproduced -- summit and vkpower have no crossing to reproduce (both REFUSED / crossed:0), so R3 is the only crossing this programme currently has to reproduce.",
+  "_reproductions_prior": [
+    {
+      "proof": "R3 acme-life crossing -- superseded, kept for history",
+      "implementer": "nexusqa-1c",
+      "reproducer": "nexusqa-21",
+      "sha": "24da99f0459eb82f79ff7f77bb157487c84079da",
+      "note": "Reproduced one commit before certified_sha (7d7408b), so gate5_verify_ceremony.py correctly refused to count it toward this ceremony. Replaced above by a second reproduction at the exact certified SHA rather than argued past. Original artifact remains at Nexus_power/evidence/gate2/r3_acme_reproduced/.",
+      "artifact": "Nexus_power/evidence/gate2/r3_acme_reproduced/NON_AUTHOR_REPRODUCTION.md"
+    }
+  ],
+  "_reproduction_notes_ORIGINAL": [
+    "Preserved for history -- the state before the entry above was added.",
+    "",
+    "This cannot be reconstructed later from git. Every commit in this",
+    "repository carries an identical author, committer and Co-Authored-By",
+    "trailer, so the log cannot tell you who implemented anything. The",
+    "implementer and the reproducer must be recorded BY NAME at the time the",
+    "reproduction happens, or the claim is unfalsifiable forever.",
+    "",
+    "Two proofs are already packaged as one-command reruns for a non-author:",
+    "  A37.1  Nexus_power/scripts/a37_verify_kms_decrypt.py   (read-only, digests only)",
+    "  A37.3  Nexus_power/scripts/gate_rollback_drill.sh      (self-restoring)"
+  ],
+
+  "quorum_required": 3,
+
+  "roles": {
+    "release_director": {
+      "name": "",
+      "email": "",
+      "signed_at": "",
+      "attests": "I attest that the deployed artifact corresponds to the certified SHA, that the three-service rollback drill was executed against the real VM, and that no undocumented manual intervention was required."
+    },
+    "proof_guild": {
+      "name": "",
+      "email": "",
+      "signed_at": "",
+      "attests": "I attest that every critical acceptance proof has been reproduced by a named person who did not author the implementation, and that each reproduction is recorded with its SHA, environment and artifact."
+    }
+  },
+
+  "arb_signatories": [],
+  "_signatory_template": {
+    "name": "",
+    "email": "",
+    "signed_at": "",
+    "attests": "I have reviewed the complete Gate 0-5 evidence package against the certified SHA and find every exit criterion satisfied."
+  },
+
+  "certification_date": "",
+  "certification_outcome": "REFUSED",
+  "certification_record": "QECentral/docs/GATE_5_CERTIFICATION.md",
+  "ceremony_charter": "QECentral/docs/GATE_5_CEREMONY.md"
+}

@@ -1,0 +1,481 @@
+"""Unit tests for :mod:`app.inventory` — the control refiner.
+
+Fixtures model the Aegis proving-ground ``:8096 /apply`` wizard widgets
+(combobox, slider, accordion, modal, shadow, iframe) plus a repeated-control
+grid.  Everything is hand-authored raw-control dicts shaped exactly like
+:data:`app.inventory_js.INVENTORY_JS` output — no browser required.
+"""
+from __future__ import annotations
+
+from app.guard import RefusePack, RefuseRule
+from app.inventory import (
+    CONTROL_KINDS,
+    TARGET_KINDS,
+    build_inventory,
+    classify_control_danger,
+    form_signal_for,
+    refine_kind,
+    target_kind_for,
+)
+from app.inventory_js import INVENTORY_JS, INVENTORY_JS_VERSION
+
+
+# ─── Refuse pack fixture (the REAL guard model — danger is fail-closed) ────────
+
+REFUSE_PACK = RefusePack(
+    version="inventory-test-v1",
+    irreversible_verbs=(
+        RefuseRule(id="delete", match=r"\b(delete|remove|purge|cancel policy)\b",
+                   applies_to=["button_name", "url_path"]),
+        RefuseRule(id="pay", match=r"\b(pay|transfer|checkout|place order)\b",
+                   applies_to=["button_name"]),
+        RefuseRule(id="signout", match=r"\b(log ?out|sign ?out)\b",
+                   applies_to=["button_name"]),
+    ),
+)
+
+
+def _raw(**over):
+    base = {
+        "role": "", "name": "", "name_source": "content", "best_effort": False,
+        "kind": "", "tag": "", "input_type": "", "options": [],
+        "required": False, "disabled": False, "frame_selector": "",
+        "testid": "", "css_hint": "", "value_committed": "",
+        "landmark": {"role": "", "name": ""},
+    }
+    base.update(over)
+    return base
+
+
+# ─── refine_kind: the compiler observed.kind vocabulary ────────────────────────
+
+
+def test_refine_kind_covers_aegis_widgets():
+    # Native <select>.
+    assert refine_kind(role="combobox", tag="select", input_type="",
+                       options=["Term", "Whole"], value="") == "select"
+    # Custom ARIA combobox on a div (no native options captured).
+    assert refine_kind(role="combobox", tag="div", input_type="",
+                       options=[], value="") == "select"
+    # Native range slider ⇒ 'slider' (a distinct FILLABLE kind: the synthesizer
+    # sets a valid midpoint; a range must never be typed a text string).
+    assert refine_kind(role="slider", tag="input", input_type="range",
+                       options=[], value="250000") == "slider"
+    # Accordion header is a button.
+    assert refine_kind(role="button", tag="button", input_type="",
+                       options=[], value="") == "button"
+    # role=switch ⇒ toggle.
+    assert refine_kind(role="switch", tag="button", input_type="",
+                       options=[], value="") == "toggle"
+    # Checkbox / radio by input type.
+    assert refine_kind(role="", tag="input", input_type="checkbox",
+                       options=[], value="") == "checkbox"
+    assert refine_kind(role="", tag="input", input_type="radio",
+                       options=[], value="") == "radio"
+    # Native date input.
+    assert refine_kind(role="", tag="input", input_type="date",
+                       options=[], value="2026-01-01") == "date"
+    # Text field whose value looks like a date, no native date type ⇒ date.
+    assert refine_kind(role="textbox", tag="input", input_type="text",
+                       options=[], value="01/02/2026") == "date"
+    # Plain text field.
+    assert refine_kind(role="textbox", tag="input", input_type="text",
+                       options=[], value="Jane") == "text"
+    # Anchor link.
+    assert refine_kind(role="link", tag="a", input_type="",
+                       options=[], value="") == "link"
+
+
+def test_refine_kind_all_values_are_in_vocabulary():
+    for kind in (
+        refine_kind(role="combobox", tag="select", input_type="", options=[], value=""),
+        refine_kind(role="switch", tag="div", input_type="", options=[], value=""),
+        refine_kind(role="", tag="input", input_type="text", options=[], value=""),
+        refine_kind(role="", tag="div", input_type="", options=[], value=""),
+    ):
+        assert kind in CONTROL_KINDS
+
+
+# ─── build_inventory: names, kinds, qec bucket, form signals ───────────────────
+
+
+def test_build_inventory_preserves_name_and_kind_and_qec():
+    raw = [
+        _raw(role="combobox", tag="div", name="Coverage type", testid="cov-type",
+             css_hint="div.select#cov", input_type=""),
+        _raw(role="slider", tag="input", input_type="range", name="Coverage amount",
+             value_committed="250000"),
+        _raw(role="button", tag="button", name="Beneficiaries", testid="acc-benef"),
+    ]
+    recs = build_inventory(raw, REFUSE_PACK)
+    by_name = {r["name"]: r for r in recs}
+
+    cov = by_name["Coverage type"]
+    assert cov["kind"] == "select"
+    assert cov["role"] == "combobox"
+    # Diagnostics live ONLY in qec — no compiler rung binds them.
+    assert cov["qec"]["testid"] == "cov-type"
+    assert cov["qec"]["css_hint"] == "div.select#cov"
+    assert cov["qec"]["role"] == "combobox"
+    # target_kind + form-signal mappings hit the two distinct vocabularies.
+    assert target_kind_for(cov) == "dropdown"
+    assert target_kind_for(cov) in TARGET_KINDS
+    # EXACT equality, deliberately: this is the whole shape that crosses to
+    # qe-central, and a field added here without the consumer knowing is dead
+    # weight on every page state in the fleet. ``options_total`` and ``locator``
+    # joined it in M2.2 (T-BR-03/T-BR-05); the frozen agreement they answer to
+    # lives in contracts/m22_catalog_question_v1.json and is asserted by
+    # tests/test_m22_catalog_contract.py.
+    assert form_signal_for(cov) == {
+        "type": "select", "options": [], "options_total": 0, "required": False,
+        "locator": {"strategy": "testid", "value": "cov-type", "verified": True,
+                    "bindable": False, "role": "combobox"},
+    }
+
+    amount = by_name["Coverage amount"]
+    # native range ⇒ kind 'slider' — a first-class FILLABLE control (the
+    # synthesizer sets a valid midpoint from min/max; typing a string into a
+    # range is invalid, which is exactly why it is typed distinctly from text).
+    assert amount["kind"] == "slider"
+    assert amount["value_committed"] == "250000"
+
+    # A button is not a form field.
+    assert form_signal_for(by_name["Beneficiaries"]) is None
+    assert target_kind_for(by_name["Beneficiaries"]) == "button"
+
+
+def test_password_input_type_survives_into_qec_for_redaction():
+    # writer.action_is_secret reads qec.input_type == 'password' (writer.py:119).
+    recs = build_inventory(
+        [_raw(role="textbox", tag="input", input_type="password", name="Password")],
+        REFUSE_PACK,
+    )
+    assert recs[0]["qec"]["input_type"] == "password"
+
+
+# ─── Accessible-name best-effort flagging ──────────────────────────────────────
+
+
+def test_placeholder_name_flagged_best_effort():
+    recs = build_inventory([
+        _raw(role="textbox", tag="input", input_type="text", name="Enter your SSN",
+             name_source="placeholder", best_effort=True),
+        _raw(role="textbox", tag="input", input_type="text", name="First name",
+             name_source="label-for", best_effort=False),
+    ], REFUSE_PACK)
+    by_name = {r["name"]: r for r in recs}
+    assert by_name["Enter your SSN"]["best_effort_name"] is True
+    assert by_name["First name"]["best_effort_name"] is False
+
+
+def test_missing_name_is_best_effort_and_honest():
+    recs = build_inventory([_raw(role="button", tag="button", name="")], REFUSE_PACK)
+    assert recs[0]["name"] == ""
+    assert recs[0]["best_effort_name"] is True
+
+
+# ─── Danger classification ─────────────────────────────────────────────────────
+
+
+def test_danger_flag_on_irreversible_button():
+    recs = build_inventory([
+        _raw(role="button", tag="button", name="Delete policy"),
+        _raw(role="button", tag="button", name="Pay now"),
+        _raw(role="link", tag="a", name="Log out"),
+        _raw(role="button", tag="button", name="Save draft"),
+    ], REFUSE_PACK)
+    by_name = {r["name"]: r for r in recs}
+    assert by_name["Delete policy"]["danger"] is True
+    assert by_name["Delete policy"]["danger_rule_id"] == "delete"
+    assert by_name["Pay now"]["danger"] is True
+    assert by_name["Pay now"]["danger_rule_id"] == "pay"
+    assert by_name["Log out"]["danger"] is True
+    assert by_name["Save draft"]["danger"] is False
+
+
+def test_danger_only_applies_to_actionable_controls():
+    # A TEXT field named 'Delete reason' is not an actuator — never danger.
+    danger, rule, severity = classify_control_danger(
+        "Delete reason", "text", "textbox", REFUSE_PACK)
+    assert danger is False and rule == ""
+
+
+def test_danger_carries_guard_severity():
+    danger, rule, severity = classify_control_danger(
+        "Delete policy", "button", "button", REFUSE_PACK)
+    assert danger is True and rule == "delete" and severity == "critical"
+
+
+def test_danger_no_refuse_pack_is_fail_closed():
+    # Fail-CLOSED: with no vetted policy, an actionable control is a never-click.
+    danger, rule, severity = classify_control_danger(
+        "Delete policy", "button", "button", None)
+    assert danger is True and rule != ""
+
+
+def test_no_pack_still_ignores_non_actionable_controls():
+    # A text field is never an actuator, even with no pack — no false never-click.
+    danger, rule, severity = classify_control_danger(
+        "Notes", "text", "textbox", None)
+    assert danger is False
+
+
+# ─── Anchor disambiguation (only on (frame, role, name) collision) ─────────────
+
+
+def test_repeated_control_gets_row_anchor_unique_does_not():
+    raw = [
+        _raw(role="button", tag="button", name="Select",
+             landmark={"role": "row", "name": "Term Life 20yr"}),
+        _raw(role="button", tag="button", name="Select",
+             landmark={"role": "row", "name": "Whole Life"}),
+        _raw(role="button", tag="button", name="Find plans",
+             landmark={"role": "region", "name": "Quote"}),
+    ]
+    recs = build_inventory(raw, REFUSE_PACK)
+    selects = [r for r in recs if r["name"] == "Select"]
+    assert {r["anchor"]["label"] for r in selects} == {"Term Life 20yr", "Whole Life"}
+    assert all(r["anchor"]["kind"] == "row" for r in selects)
+    # A unique control carries NO anchor (compiler scope = page).
+    find = next(r for r in recs if r["name"] == "Find plans")
+    assert find["anchor"] is None
+
+
+def test_card_and_block_anchor_kinds():
+    # article landmark → 'article' anchor kind.
+    raw_card = [
+        _raw(role="button", tag="button", name="Choose",
+             landmark={"role": "article", "name": "Gold plan"}),
+        _raw(role="button", tag="button", name="Choose",
+             landmark={"role": "article", "name": "Silver plan"}),
+    ]
+    recs = build_inventory(raw_card, REFUSE_PACK)
+    assert all(r["anchor"]["kind"] == "article" for r in recs)
+
+    # A non-landmark ancestor (role=form) → text-based 'block' fallback.
+    raw_block = [
+        _raw(role="textbox", tag="input", input_type="text", name="Amount",
+             landmark={"role": "form", "name": "Beneficiary 1"}),
+        _raw(role="textbox", tag="input", input_type="text", name="Amount",
+             landmark={"role": "form", "name": "Beneficiary 2"}),
+    ]
+    recs = build_inventory(raw_block, REFUSE_PACK)
+    assert {r["anchor"]["label"] for r in recs} == {"Beneficiary 1", "Beneficiary 2"}
+    assert all(r["anchor"]["kind"] == "block" for r in recs)
+
+
+def test_collision_across_frames_is_not_ambiguous():
+    # Same name in the main frame and inside an iframe ⇒ frameLocator already
+    # disambiguates ⇒ NO anchor attached on either.
+    raw = [
+        _raw(role="button", tag="button", name="Submit", frame_selector="",
+             landmark={"role": "row", "name": "Main"}),
+        _raw(role="button", tag="button", name="Submit", frame_selector="iframe#pay",
+             landmark={"role": "row", "name": "Payment"}),
+    ]
+    recs = build_inventory(raw, REFUSE_PACK)
+    assert all(r["anchor"] is None for r in recs)
+
+
+def test_colliding_control_without_landmark_stays_unanchored():
+    raw = [
+        _raw(role="button", tag="button", name="Edit", landmark={"role": "", "name": ""}),
+        _raw(role="button", tag="button", name="Edit", landmark={"role": "", "name": ""}),
+    ]
+    recs = build_inventory(raw, REFUSE_PACK)
+    assert all(r["anchor"] is None for r in recs)   # honest: cannot invent a locator
+
+
+# ─── iframe + shadow transparency ──────────────────────────────────────────────
+
+
+def test_iframe_control_preserves_frame_selector():
+    recs = build_inventory([
+        _raw(role="textbox", tag="input", input_type="text", name="Card number",
+             frame_selector="iframe#stripe"),
+    ], REFUSE_PACK)
+    assert recs[0]["frame_selector"] == "iframe#stripe"
+    assert recs[0]["qec"]["frame_selector"] == "iframe#stripe"
+
+
+def test_shadow_control_is_plain_main_frame_control():
+    # Open shadow DOM does NOT change the frame — Playwright pierces it — so a
+    # shadow-hosted control carries an empty frame_selector, refined normally.
+    recs = build_inventory([
+        _raw(role="button", tag="button", name="Sign", frame_selector=""),
+    ], REFUSE_PACK)
+    assert recs[0]["frame_selector"] == ""
+    assert recs[0]["kind"] == "button"
+
+
+# ─── Determinism / order preservation ──────────────────────────────────────────
+
+
+def test_inventory_is_order_preserving_and_deterministic():
+    raw = [
+        _raw(role="textbox", tag="input", input_type="text", name="First name"),
+        _raw(role="textbox", tag="input", input_type="text", name="Last name"),
+        _raw(role="button", tag="button", name="Continue"),
+    ]
+    a = build_inventory(raw, REFUSE_PACK)
+    b = build_inventory(raw, REFUSE_PACK)
+    assert [r["name"] for r in a] == ["First name", "Last name", "Continue"]
+    assert a == b
+
+
+# ─── Injected-JS constant sanity (not executed locally) ────────────────────────
+
+
+def test_injected_js_is_a_self_invoking_expression():
+    js = INVENTORY_JS.strip()
+    assert js.startswith("(()") and js.endswith(")()")
+    # Balanced braces is a cheap syntactic guard for a non-executed string.
+    assert js.count("{") == js.count("}")
+    assert js.count("(") == js.count(")")
+    # v7: option capture sized for COMPLETENESS (MAX_OPTIONS 60 → 300) and
+    # ``options_total`` added, so a clipped enumeration is marked rather than
+    # silently shortened.
+    # v8: a custom choice TRIGGER reports its rendered text as value_committed
+    # (it is a <button>, so every prior branch returned "") — a filled shadcn/
+    # Radix select used to read back as empty, which both lied in the
+    # form_snapshot and made an automated fill impossible to verify.
+    # The version is stamped into every manifest, so a deliberate bump here is
+    # what lets a manifest be traced to the JS that produced its controls.
+    # v9: a CUSTOM toggle (<button role="radio"|"checkbox"|"switch">) reports its
+    # aria-checked/aria-pressed state as value_committed — the same hole v8 closed
+    # for choice triggers, one widget class on, and answered from the W3C ARIA
+    # specification rather than from any one library's markup.
+    # v10 (M0.x capture completeness) — four capture defects, each proven by a
+    # previously-failing browser test in tests/browser:
+    #   * autocomplete/inputmode/placeholder/id are now EMITTED. The classifier
+    #     ranks autocomplete first at confidence 0.98 and read all four; capture
+    #     emitted none, so its strongest rung was unreachable code on every
+    #     crawled control.
+    #   * shadow-root names resolve against the root that OWNS the element. The
+    #     walker forwarded the outer document, so label[for]/aria-labelledby
+    #     inside a shadow root resolved against the wrong root — a control came
+    #     back either unnamed or, worse, named by a same-id element outside it.
+    #   * idText() computes RENDERED text via accText(), like every sibling name
+    #     rung already did; textContent concatenated block children into a name
+    #     no locator can bind.
+    #   * frame selectors are escaped (CSS.escape for the id, CSS string escaping
+    #     for attribute values), so an emitted selector resolves the same way
+    #     page.frameLocator() resolves it.
+    # MAX_OPTIONS also moved to a Python constant interpolated into the JS, so
+    # the walker, the refiner and the catalogue cannot drift to three ceilings
+    # again.
+    # v12 (M2.6 / T-CAP-03) — `disclosure` is emitted: the DOM's own declaration
+    # that a control is a shut door ("collapsed" | "expanded" | ""), normalised
+    # across a closed <details>, aria-expanded, and an unselected role=tab.
+    # Two of those three were already emitted raw; `<details>` was not emittable
+    # at all, because `open` is a live PROPERTY and getAttribute() does not track
+    # it. Without the field the crawler's only way to find a field behind a
+    # collapsed section is to click things and hope — and clicking a <summary>
+    # to find out CLOSES every <details> that was already open.
+    #
+    # NOTE ON THE NUMBER: v11 was taken by the M3.2 capture-init work in flight
+    # alongside this, so this generation is v12. The stamp's contract is that a
+    # manifest can be traced to the JS that produced its controls, which needs
+    # the number to MOVE on a capture change, not to be consecutive per author.
+    assert INVENTORY_JS_VERSION == "inv-js-v12"
+
+
+# ─── GROUP_ASSEMBLE — a radio group is ONE question, not N toggles ────────────
+
+
+def _radio(name: str, group_key: str, frame: str = "") -> dict:
+    return {"role": "radio", "tag": "input", "input_type": "radio",
+            "name": name, "name_source": "wrapping-label", "options": [],
+            "group_key": group_key, "frame_selector": frame}
+
+
+def test_group_assemble_groups_by_declared_name_not_by_frame():
+    """Two unrelated radio groups on ONE page stay two questions.
+
+    Grouping merely by "same frame" would fuse a product picker with a gender
+    picker and offer each the other's answers — a planned walk would then force
+    an option the control cannot take."""
+    records = build_inventory([
+        _radio("Term Life", "name:f:product"),
+        _radio("Whole Life", "name:f:product"),
+        _radio("Male", "name:f:gender"),
+        _radio("Female", "name:f:gender"),
+    ], url="https://a.example/quote", refuse_pack=REFUSE_PACK)
+
+    groups = {}
+    for r in records:
+        groups.setdefault(r.get("group_id"), []).append(r["name"])
+    assert None not in groups, "every declared radio should be grouped"
+    assert len(groups) == 2, f"expected 2 questions, got {len(groups)}"
+    by_opts = {tuple(sorted(v)) for v in groups.values()}
+    assert by_opts == {("Term Life", "Whole Life"), ("Female", "Male")}
+
+
+def test_group_assemble_does_not_churn_the_field_signature():
+    """``options`` must stay empty: it feeds the field signature's option-shape
+    bucket, so writing group answers there would change a radio's identity the
+    moment a sibling appeared — silently invalidating every value, mechanic and
+    prior ever learned for it."""
+    records = build_inventory([
+        _radio("Term Life", "name:f:product"),
+        _radio("Whole Life", "name:f:product"),
+    ], url="https://a.example/quote", refuse_pack=REFUSE_PACK)
+    for r in records:
+        assert r["options"] == [], "group answers must NOT land in `options`"
+        assert r["group_options"] == ["Term Life", "Whole Life"]
+        assert r["group_size"] == 2
+
+
+def test_group_assemble_members_share_one_stable_group_id():
+    a = build_inventory([_radio("Term Life", "name:f:product"),
+                         _radio("Whole Life", "name:f:product")],
+                        url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    b = build_inventory([_radio("Term Life", "name:f:product"),
+                         _radio("Whole Life", "name:f:product")],
+                        url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    assert a[0]["group_id"] == a[1]["group_id"], "one question, one id"
+    assert a[0]["group_id"] == b[0]["group_id"], "id must be stable across crawls"
+
+
+def test_lone_radio_and_undeclared_grouping_are_left_alone():
+    """A single radio is a toggle, and a radio whose grouping the DOM never
+    declared must degrade to exactly the pre-GROUP_ASSEMBLE behaviour rather
+    than be guessed into a group."""
+    records = build_inventory([
+        _radio("Solo", "name:f:only"),
+        _radio("Undeclared A", ""),
+        _radio("Undeclared B", ""),
+    ], url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    for r in records:
+        assert not r.get("group_id")
+        assert r["options"] == []
+
+
+def test_group_assemble_never_merges_across_frames():
+    records = build_inventory([
+        _radio("Term Life", "name:f:product", frame=""),
+        _radio("Whole Life", "name:f:product", frame="iframe#quote"),
+    ], url="https://a.example/q", refuse_pack=REFUSE_PACK)
+    assert all(not r.get("group_id") for r in records), (
+        "same name in two frames is two questions, and neither has a sibling")
+
+
+def test_identical_controls_get_a_dom_ordinal_for_positional_targeting():
+    """17 identical bare "Yes" buttons (a questionnaire) carry no landmark, so no
+    anchor — but each gets a match_index (its DOM order) so the locator can target
+    get_by_role('button', name='Yes').nth(k). A control unique on the page gets no
+    ordinal (None)."""
+    raw = [
+        _raw(role="button", name="Yes", kind="button"),
+        _raw(role="button", name="No", kind="button"),
+        _raw(role="button", name="Yes", kind="button"),
+        _raw(role="button", name="No", kind="button"),
+        _raw(role="button", name="Continue", kind="button"),   # unique
+    ]
+    recs = build_inventory(raw, REFUSE_PACK)
+    yes = [r for r in recs if r["name"] == "Yes"]
+    no = [r for r in recs if r["name"] == "No"]
+    assert [r["match_index"] for r in yes] == [0, 1]      # DOM order
+    assert [r["match_index"] for r in no] == [0, 1]
+    cont = next(r for r in recs if r["name"] == "Continue")
+    assert cont["match_index"] is None                    # unique -> no ordinal, no anchor

@@ -1,0 +1,90 @@
+# =============================================================================
+# VKPower Verdict — AIR-GAPPED overlay (no internet egress at all).
+#
+#   helm install verdict infrastructure/helm/verdict \
+#     -n verdict --create-namespace \
+#     -f infrastructure/helm/verdict/values.yaml \
+#     -f infrastructure/helm/verdict/values-onprem.yaml \
+#     -f infrastructure/helm/verdict/values-airgapped.yaml
+#
+# Layer this ON TOP of values-onprem.yaml. It assumes:
+#   * every image was pulled + `docker load`ed into the client's PRIVATE
+#     registry (see ONPREM_INSTALL.md §"Load images") — nothing is fetched
+#     from the internet at deploy or run time;
+#   * the KEK is the client's OWN key, reached through an in-cluster KMS-API-
+#     compatible endpoint (e.g. HashiCorp Vault's AWS-KMS engine, or a KMS
+#     proxy in front of an on-prem HSM) — `local` is dev-only and is refused
+#     in production by both the boot gate and the SDK;
+#   * the target app under test is INSIDE the cluster/DMZ (no public egress),
+#     so egressProxy.allowedDomains names the internal host and repo-intel's
+#     internet git egress is OFF.
+# =============================================================================
+
+global:
+  image:
+    # The client's private registry the images were loaded into.
+    registry: "registry.airgap.internal"
+    repository: "vkpower"
+    tag: "2.0.0"
+    # Images MUST already be present locally — never reach out to pull.
+    pullPolicy: IfNotPresent
+  imagePullSecrets:
+    - name: verdict-registry
+
+env:
+  nexusEnv: production
+  requireAud: true
+  # In-cluster S3 (MinIO) is the usual air-gapped object store; keep it matched
+  # to the factory. `local` works for a single-node evidence store.
+  storageBackend: local
+
+# The KEK reached via a KMS-API-compatible endpoint the client runs in-cluster.
+# aws_kms points at that endpoint (AWS_REGION set); Vault's AWS-KMS secrets
+# engine and several HSM proxies speak this API. Never `local` in production.
+kek:
+  provider: aws_kms
+  awsArn: ""             # the client's key id/arn on their KMS endpoint
+  awsRegion: "onprem"    # any non-empty region label the endpoint accepts
+
+# No internet: repo-intel's git-clone egress would fail, so keep it OFF (or
+# point it at an in-cluster git mirror and set egressAllowExternal=false).
+repoIntel:
+  enabled: false
+  egressAllowExternal: false
+
+egressProxy:
+  enabled: true
+  # The internal target app the explorer crawls (registrable domain / host).
+  allowedDomains: []
+  # The cluster CIDRs the proxy must never reach (defense-in-depth).
+  excludeCidrs: []
+  # In a fully internal deployment the "internet" ports are the internal app's.
+  externalPorts:
+    - port: 80
+      protocol: TCP
+    - port: 443
+      protocol: TCP
+
+# Secrets from the client's in-cluster Vault (no cloud secret manager).
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    name: ""             # the client's Vault-backed SecretStore
+    kind: ClusterSecretStore
+  remoteKeyPrefix: "verdict"
+
+networkPolicies:
+  enabled: true
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+
+# The portal is reached over the client's internal ingress / a LoadBalancer.
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "verdict.airgap.internal"
+  tls:
+    enabled: true
+    secretName: "verdict-tls"

@@ -1,0 +1,152 @@
+name: integration
+
+# Phase 11 — catches the class of bug that surfaced during the
+# clean-state reset (Migration 004/020 duplicate, alembic_version
+# VARCHAR(32) overflow, legs/mouth/spine Dockerfile chown gaps).
+#
+# Three jobs:
+#   1. static   — fast lint-style checks. Runs on every PR.
+#   2. alembic  — boots a throwaway Postgres, runs upgrade head. ~3 min.
+#   3. bringup  — full stack up on fresh volumes, smoke 1 workflow. ~15 min.
+#               Runs on PRs touching engines/, sdk/, alembic/, or compose.
+#
+# The split lets fast feedback land in ~5 min for typical PRs, while
+# the expensive bringup job only runs when it can actually catch
+# something.
+
+on:
+  pull_request:
+    paths:
+      - 'alembic/**'
+      - 'docker-compose.yml'
+      - 'engines/**'
+      - 'sdk/**'
+      - 'platform/**'
+      - 'products/**'
+      - 'scripts/ci_smoke.sh'
+      - 'tests/integration/**'
+      - '.github/workflows/integration.yml'
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same PR.
+concurrency:
+  group: integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ────────────────────────────────────────────────────────────────
+  # Static checks — run on every PR, no Docker required
+  # ────────────────────────────────────────────────────────────────
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: install test deps
+        run: |
+          pip install pytest pytest-asyncio pydantic pydantic-settings
+
+      - name: static migration checks
+        env:
+          PYTHONPATH: ${{ github.workspace }}/sdk/nexus-sdk
+        run: |
+          pytest tests/integration/test_fresh_alembic.py \
+            -k "test_no_duplicate_create_table or test_revision_ids_fit" \
+            -v
+
+      - name: unit tests (workflow plane + SDK)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/sdk/nexus-sdk
+        run: |
+          pytest tests/workflows/ -v --maxfail=3
+
+  # ────────────────────────────────────────────────────────────────
+  # Alembic on fresh DB — verifies the migration chain end-to-end
+  # ────────────────────────────────────────────────────────────────
+  alembic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: install test deps
+        run: |
+          pip install pytest pytest-asyncio
+
+      - name: build nexus-base:dev (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.base
+          tags: nexus-base:dev
+          load: true
+          cache-from: type=gha,scope=nexus-base
+          cache-to: type=gha,scope=nexus-base,mode=max
+
+      - name: alembic upgrade head on fresh Postgres
+        env:
+          PYTHONPATH: ${{ github.workspace }}/sdk/nexus-sdk
+          NEXUS_BASE_IMAGE: nexus-base:dev
+        run: |
+          pytest tests/integration/test_fresh_alembic.py::test_alembic_upgrade_head_on_fresh_db -v
+
+  # ────────────────────────────────────────────────────────────────
+  # Full bring-up — wipes volumes, brings stack up, smokes 1 workflow.
+  # Expensive (~15 min) so gated behind path filter + needs alembic green.
+  # ────────────────────────────────────────────────────────────────
+  bringup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [static, alembic]
+    if: |
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files, 'engines/') ||
+      contains(github.event.pull_request.changed_files, 'docker-compose.yml')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: free disk space
+        # The full stack pulls ~10 GB of images. The hosted runner
+        # default of ~14 GB free isn't enough.
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/share/dotnet /usr/local/lib/android
+          df -h
+
+      - name: build images (cached)
+        run: |
+          docker compose --profile full build --pull
+
+      - name: run smoke
+        env:
+          NEXUS_RUN_BRINGUP_TEST: '1'
+        run: |
+          bash scripts/ci_smoke.sh
+
+      - name: collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/logs
+          for svc in shield ears eyes spine backbone orchestrator \
+                    auth-service gateway platform-api milvus postgres redis; do
+            docker compose --profile full logs --tail=200 "$svc" > /tmp/logs/${svc}.log 2>&1 || true
+          done
+
+      - name: upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bringup-logs
+          path: /tmp/logs/
+          retention-days: 14

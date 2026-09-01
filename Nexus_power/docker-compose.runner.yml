@@ -1,0 +1,21 @@
+# Standalone deploy for the Nexus server-side Playwright runner.
+# Joins the EXISTING stack network as external — brings up only nexus-runner
+# without touching the running stack. Tear down with:
+#   docker compose -f docker-compose.runner.yml down
+services:
+  nexus-runner:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.runner
+    image: nexus_power-nexus-runner
+    container_name: nexus-runner
+    restart: unless-stopped
+    environment:
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+    networks:
+    - nexus
+    mem_limit: 2g
+networks:
+  nexus:
+    external: true
+    name: nexus_power_nexus

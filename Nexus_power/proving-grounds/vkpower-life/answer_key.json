@@ -1,0 +1,133 @@
+{
+  "app": "VKPower Life Insurance",
+  "kind": "life-insurance (member portal + quote-to-application flow, VKPower-branded)",
+  "base_url": "http://vkpower-life:80",
+  "ui_stack": "next.js-14 static-export (app router, tailwind, typescript)",
+  "provenance": "hand-authored VKPower Life proving ground for VKPower Verdict",
+  "auth_recipe": {
+    "strategy": "recipe",
+    "login_path": "/login/",
+    "note": "Multi-step ladder: member number + password, then optional 6-digit MFA PIN.",
+    "slots": [
+      {"name": "member_number", "type": "plain"},
+      {"name": "password", "type": "secret"},
+      {"name": "pin", "type": "fixed_code"}
+    ],
+    "steps": [
+      {"action": "goto", "path": "/login/"},
+      {"action": "fill", "slot": "member_number", "label": "Member Number"},
+      {"action": "fill", "slot": "password", "label": "Password"},
+      {"action": "click", "name": "Sign In"},
+      {"action": "fill", "slot": "pin", "label": "Security PIN"},
+      {"action": "click", "name": "Verify"},
+      {"action": "wait", "state": "networkidle"}
+    ]
+  },
+  "members": {
+    "25000001": {
+      "name": "Maria Young", "age": 25, "behavior_class": "young-officer",
+      "military_status": "Active Duty Officer", "branch": "Army",
+      "policy": "VKPL-25000001", "coverage": 250000, "beneficiaries": 2,
+      "password": "Member#2026", "pin": "246810"
+    },
+    "25000002": {
+      "name": "James Torres", "age": 29, "behavior_class": "enlisted-military",
+      "military_status": "Active Duty Enlisted", "branch": "Navy",
+      "policy": "VKPL-25000002", "coverage": 400000, "beneficiaries": 1,
+      "password": "Member#2026", "pin": "246810"
+    },
+    "50000001": {
+      "name": "Robert Mitchell", "age": 48, "behavior_class": "veteran",
+      "military_status": "Veteran", "branch": "Marine Corps",
+      "policy": "VKPL-50000001", "coverage": 750000, "beneficiaries": 3,
+      "password": "Member#2026", "pin": "246810"
+    },
+    "50000005": {
+      "name": "John Senior", "age": 55, "behavior_class": "civilian-member",
+      "military_status": "Civilian", "branch": "",
+      "policy": "VKPL-50000005", "coverage": 500000, "beneficiaries": 5,
+      "password": "Member#2026", "pin": "246810"
+    },
+    "75000001": {
+      "name": "Patricia Warren", "age": 61, "behavior_class": "retired-military",
+      "military_status": "Retired", "branch": "Air Force",
+      "policy": "VKPL-75000001", "coverage": 300000, "beneficiaries": 2,
+      "password": "Member#2026", "pin": "246810"
+    }
+  },
+  "routes": {
+    "public": [
+      "/",
+      "/login/"
+    ],
+    "authenticated": [
+      "/portal/dashboard/",
+      "/portal/beneficiaries/"
+    ],
+    "quote_flow": [
+      "/life-insurance/quote/start/",
+      "/life-insurance/quote/coverage/",
+      "/life-insurance/quote/personal/",
+      "/life-insurance/quote/health-check/",
+      "/life-insurance/quote/review/"
+    ],
+    "application_flow": [
+      "/life-insurance/apply/member-lookup/",
+      "/life-insurance/apply/personal-info/",
+      "/life-insurance/apply/replacement/",
+      "/life-insurance/apply/health/",
+      "/life-insurance/apply/lifestyle/",
+      "/life-insurance/apply/decision/",
+      "/life-insurance/apply/payment/",
+      "/life-insurance/apply/beneficiary/",
+      "/life-insurance/apply/signature/",
+      "/life-insurance/apply/confirmation/"
+    ]
+  },
+  "total_routed_pages": 19,
+  "e2e_flow_depth": "19 steps (login → quote → apply → confirm) — within E2E mode's 20-step budget",
+  "critical_scenarios": [
+    "member logs in via member-number + password + PIN and reaches the dashboard",
+    "dashboard shows the member's own name, policy number and coverage (member-derived)",
+    "beneficiaries page lists the member's beneficiaries (count varies by member)",
+    "quote flow: select product → coverage → personal info → health screen → review with estimated premium",
+    "application flow: member lookup auto-populates profile → personal info → replacement policies",
+    "health questionnaire: ~150 questions across 14 categories with conditional follow-ups (Yes reveals sub-questions)",
+    "lifestyle questions: tobacco, alcohol, drugs, DUI, aviation, skydiving, scuba, combat deployment with conditional drill-downs",
+    "underwriting decision engine: evaluates health+lifestyle→approved/referred/declined with risk classification and reasons",
+    "payment: ACH bank transfer or credit/debit card with conditional form fields",
+    "beneficiary designation: primary + contingent with percentage allocation (must total 100%)",
+    "electronic signature: 6 consent checkboxes + typed name must match legal name",
+    "confirmation: application number + confirmation number generated, policy summary, next steps"
+  ],
+  "conditional_ui_patterns": [
+    "health questionnaire: Yes answer reveals 3 follow-up questions (date, treatment, status); No clears them",
+    "cancer section: Yes reveals staging, treatment type, remission status sub-questions",
+    "diabetes section: Yes reveals HbA1c level, complications sub-questions",
+    "lifestyle tobacco: Yes reveals product type + frequency selects",
+    "lifestyle alcohol: Yes reveals drinks-per-week + treatment history",
+    "lifestyle DUI: Yes reveals conviction count + most recent date",
+    "lifestyle aviation: Yes reveals pilot type + annual flight hours",
+    "lifestyle scuba: Yes reveals deep/cave diving follow-up",
+    "payment method: ACH shows bank fields; Card shows cardholder/number/expiry/CVV",
+    "personal info insured: No (different person) reveals insured person fields",
+    "replacement: Yes reveals add-policy form with company, number, face amount, reason"
+  ],
+  "underwriting_paths": {
+    "maria_young_25": "Preferred Plus (healthy young officer, no conditions) → approved",
+    "james_torres_29": "Preferred/Standard (enlisted, depends on health/lifestyle answers) → approved",
+    "robert_mitchell_48": "Standard/RTU (veteran, age factor, depends on health) → approved or referred",
+    "john_senior_55": "Standard/RTU (civilian, age 55+, higher risk) → approved or referred",
+    "patricia_warren_61": "RTU/Declined (age 61, retired military, highest risk factors) → referred or declined"
+  },
+  "certified_invariants": [
+    "the dashboard heading echoes the logged-in member's name (identity_echo)",
+    "the beneficiary COUNT is member-derived (cardinality varies by behavior class)",
+    "policy number and coverage are member-derived; the page chrome/labels are app-constant",
+    "member lookup auto-populates personal information from the profile (pre-populated fields)",
+    "underwriting decision is computed from actual health+lifestyle answers (not random/hardcoded)",
+    "primary beneficiary percentages must sum to exactly 100%",
+    "electronic signature requires typed name to match the applicant's legal name"
+  ],
+  "grading": "a correct E2E crawl captures all 19 pages, identifies conditional UI branches (health follow-ups, payment method toggle, replacement policy conditional), records underwriting decision path, and distinguishes member-derived values from app-constant chrome across the full quote-to-application journey."
+}

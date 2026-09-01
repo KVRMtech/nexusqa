@@ -1,0 +1,115 @@
+# Generates one Application per (cluster, controller) pair. The cluster
+# generator selects every cluster registered with Argo CD whose labels
+# match `env in (dev, staging, production)`. The matrix generator combines
+# those clusters with the controller list defined inline.
+#
+# Adding a new controller is a list entry below; adding a new cluster is
+# a label on the Argo CD cluster secret. Neither requires a new file.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: infra-controllers
+  namespace: argocd
+spec:
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels:
+                  argocd.argoproj.io/secret-type: cluster
+                matchExpressions:
+                  - key: env
+                    operator: In
+                    values: [dev, staging, production]
+          - list:
+              elements:
+                - controller: cert-manager
+                  chartRepo: https://charts.jetstack.io
+                  chartName: cert-manager
+                  chartVersion: v1.15.3
+                  targetNamespace: cert-manager
+                  syncWave: "-3"
+                - controller: external-secrets
+                  chartRepo: https://charts.external-secrets.io
+                  chartName: external-secrets
+                  chartVersion: 0.10.4
+                  targetNamespace: external-secrets
+                  syncWave: "-3"
+                - controller: linkerd-crds
+                  chartRepo: https://helm.linkerd.io/stable
+                  chartName: linkerd-crds
+                  chartVersion: 1.8.0
+                  targetNamespace: linkerd
+                  syncWave: "-2"
+                - controller: linkerd-control-plane
+                  chartRepo: https://helm.linkerd.io/stable
+                  chartName: linkerd-control-plane
+                  chartVersion: 1.16.11
+                  targetNamespace: linkerd
+                  syncWave: "-1"
+                - controller: argo-rollouts
+                  chartRepo: https://argoproj.github.io/argo-helm
+                  chartName: argo-rollouts
+                  chartVersion: 2.37.7
+                  targetNamespace: argo-rollouts
+                  syncWave: "0"
+                - controller: kyverno
+                  chartRepo: https://kyverno.github.io/kyverno
+                  chartName: kyverno
+                  chartVersion: 3.3.4
+                  targetNamespace: kyverno
+                  syncWave: "0"
+                # KEDA — event-driven autoscaling. Phase 1 wires KEDA
+                # ScaledObjects on Redis Streams XLEN so each engine pool
+                # scales out under queue pressure without HPA needing a
+                # custom-metrics adapter.
+                - controller: keda
+                  chartRepo: https://kedacore.github.io/charts
+                  chartName: keda
+                  chartVersion: 2.15.1
+                  targetNamespace: keda
+                  syncWave: "0"
+  template:
+    metadata:
+      name: '{{controller}}-{{name}}'
+      annotations:
+        argocd.argoproj.io/sync-wave: '{{syncWave}}'
+    spec:
+      project: infra
+      # Multi-source: the chart from upstream + values files from this
+      # repo. The values layer order is: chart's own defaults <
+      # shared baseline (envs/_shared/values/<controller>.yaml) <
+      # per-env override (envs/<env>/values/<controller>.yaml).
+      # ignoreMissingValueFiles lets the per-env override be optional
+      # when the shared baseline already captures everything.
+      sources:
+        - repoURL: '{{chartRepo}}'
+          chart: '{{chartName}}'
+          targetRevision: '{{chartVersion}}'
+          helm:
+            releaseName: '{{controller}}'
+            ignoreMissingValueFiles: true
+            valueFiles:
+              - $values/infrastructure/gitops/envs/_shared/values/{{controller}}.yaml
+              - $values/infrastructure/gitops/envs/{{metadata.labels.env}}/values/{{controller}}.yaml
+        - repoURL: ${PLATFORM_REPO_URL}
+          targetRevision: '{{metadata.annotations.platform-target-revision}}'
+          ref: values
+      destination:
+        server: '{{server}}'
+        namespace: '{{targetNamespace}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=false
+          - ServerSideApply=true
+          - RespectIgnoreDifferences=true
+        retry:
+          limit: 10
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 10m

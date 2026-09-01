@@ -1,0 +1,37 @@
+{
+  "purpose": "Prove aria-labelledby computes the RENDERED accessible name - block children contribute separated text - the same way W3C accname, every assistive technology, and Playwright's getByRole(name=...) compute it.",
+  "targeted_defect": "BUG-ARIA-LABELLEDBY-TEXTCONTENT: idText() (inventory_js.py:158-164) reads norm(t.textContent) instead of the module's own accText() helper. The file documents at length (lines 166-184) why textContent is wrong for accessible names and fixes it for label[for] and wrapping-label - but the aria-labelledby rung still concatenates block children with no separator, producing a name no locator can match.",
+  "lanes": ["playwright"],
+  "lane_note": "Playwright only for the block-separation assertions: jsdom does not implement HTMLElement.innerText, so accText() degrades to textContent there and both the correct and the defective implementation would return the same string. The jsdom lane still executes this fixture for structure (see expect_controls), it just cannot adjudicate rendered text.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#income"},
+      "fields": {"name": "Annual Income", "name_source": "aria-labelledby"}
+    }
+  ],
+  "describes_correct_behaviour": [
+    {
+      "where": {"css_hint": "input#tobacco"},
+      "fields": {
+        "name": "Question 7 Have you used tobacco in the last 12 months?",
+        "name_source": "aria-labelledby"
+      }
+    },
+    {
+      "where": {"css_hint": "input#beneficiary"},
+      "fields": {
+        "name": "Beneficiary Full legal name as printed on the policy",
+        "name_source": "aria-labelledby"
+      }
+    }
+  ],
+  "already_correct": [
+    {
+      "where": {"css_hint": "input#height"},
+      "fields": {"name": "Height feet and inches", "name_source": "label-for"},
+      "why": "The label[for] rung goes through accText()/innerText and already separates block children. This is the in-fixture proof that the defect is localised to idText()."
+    }
+  ]
+}

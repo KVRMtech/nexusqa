@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 02 — closed shadow root</title>
+<style>
+  closed-quote-widget { display: block; width: 640px; height: 260px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Quote widget</h1>
+
+    <!-- Control group: a readable light-DOM control on the same page. -->
+    <label for="zip">ZIP Code</label>
+    <input id="zip" name="zip" type="text">
+
+    <!-- The subject: a custom element rendering entirely inside a CLOSED shadow
+         root. Nothing in the DOM can pierce it - not the walker, not Playwright,
+         not an assistive technology. The correct behaviour is therefore to
+         capture ZERO controls from it and to NAME the blind spot (OPAQUE_JS),
+         never to fabricate a capture. -->
+    <closed-quote-widget id="widget"></closed-quote-widget>
+  </main>
+
+  <script>
+    class ClosedQuoteWidget extends HTMLElement {
+      connectedCallback() {
+        // mode:"closed" - `this.shadowRoot` stays null for every outside caller.
+        const root = this.attachShadow({ mode: "closed" });
+        root.innerHTML = [
+          '<label for="coverage">Coverage Amount</label>',
+          '<input id="coverage" name="coverage" type="number" min="10000" max="1000000">',
+          '<button type="button">Get Quote</button>'
+        ].join("");
+      }
+    }
+    customElements.define("closed-quote-widget", ClosedQuoteWidget);
+  </script>
+</body>
+</html>

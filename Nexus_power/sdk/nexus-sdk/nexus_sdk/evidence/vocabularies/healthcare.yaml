@@ -1,0 +1,92 @@
+# Healthcare / clinical vocabulary.
+#
+# Tuned for Epic Hyperspace, Cerner PowerChart, Allscripts, athenahealth,
+# eClinicalWorks, and provider-portal screens.  All patterns assume HIPAA
+# applies; severity high = direct PHI.
+vertical: healthcare
+display_name: Healthcare & Clinical
+description: >
+  HIPAA-relevant identifiers — MRN, NPI, DEA, claim numbers — plus
+  clinical codes (ICD-10, CPT, HCPCS).  Pairs with the default
+  baseline for SSN / DOB / address coverage.
+
+synonyms:
+  - canonical: patient_id
+    aliases:
+      - MRN
+      - Medical Record Number
+      - "Patient ID"
+      - "Chart #"
+      - Chart Number
+      - "Patient #"
+  - canonical: npi
+    aliases:
+      - NPI
+      - "Provider NPI"
+      - "NPI Number"
+      - "National Provider ID"
+  - canonical: encounter_id
+    aliases:
+      - Encounter
+      - "Encounter #"
+      - "Visit ID"
+      - "FIN"
+      - "FIN Number"
+  - canonical: diagnosis_code
+    aliases:
+      - "ICD-10"
+      - "ICD"
+      - "Dx Code"
+      - "Diagnosis Code"
+      - "Primary Dx"
+  - canonical: procedure_code
+    aliases:
+      - "CPT"
+      - "CPT Code"
+      - "HCPCS"
+      - "Procedure Code"
+
+pii_patterns:
+  # MRN — labelled context only, MRNs vary 6-10 digits across vendors.
+  - name: mrn_labelled
+    regex: "(?i)\\b(?:MRN|Medical\\s+Record\\s+(?:#|Number)|Chart\\s*#)[:\\s]{0,4}([A-Z]?\\d{6,10})\\b"
+    severity: high
+    description: Medical Record Number (with explicit label)
+    redaction: "[REDACTED_MRN]"
+
+  # NPI — 10 digits, always labelled in any UI we've seen.  The bare
+  # 10-digit form is too aggressive; we require an NPI label nearby.
+  - name: npi
+    regex: "(?i)\\bNPI[:\\s#]{0,4}(\\d{10})\\b"
+    severity: medium
+    description: National Provider Identifier
+    redaction: "[REDACTED_NPI]"
+
+  # DEA registration — 2 letters + 7 digits where letter 1 is fixed
+  # (A, B, F, M, P, R) and letter 2 is the provider's last-name initial.
+  - name: dea_number
+    regex: "(?i)\\bDEA[:\\s#]{0,4}([A-Z]{2}\\d{7})\\b"
+    severity: high
+    description: DEA registration (controlled-substance prescriber)
+    redaction: "[REDACTED_DEA]"
+
+  # ICD-10 diagnosis code — letter, two digits, optional .nnn detail.
+  - name: icd_10
+    regex: "(?<![A-Z0-9])[A-TV-Z]\\d{2}(?:\\.\\d{1,4})?(?![A-Z0-9])"
+    severity: low
+    description: ICD-10 diagnosis code (clinical metadata)
+    redaction: "[ICD-10]"
+
+  # CPT procedure code — 5 digits when explicitly labelled.
+  - name: cpt_labelled
+    regex: "(?i)\\bCPT[:\\s#]{0,4}(\\d{5})\\b"
+    severity: low
+    description: CPT procedure code
+    redaction: "[CPT]"
+
+  # Encounter / FIN number — common 8-12 digit alphanumeric labelled by FIN.
+  - name: fin_encounter
+    regex: "(?i)\\bFIN[:\\s#]{0,4}([A-Z0-9]{8,14})\\b"
+    severity: high
+    description: Financial / Encounter identifier (Cerner)
+    redaction: "[REDACTED_FIN]"

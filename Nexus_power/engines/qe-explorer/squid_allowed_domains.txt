@@ -1,0 +1,12 @@
+# QE-Central egress allowlist — one destination domain per line.
+#
+# RUNTIME-POPULATED per crawl: qe-central writes the target app's registrable
+# domain(s) here (e.g. `.acmelife.example`) before dispatch, then reloads squid
+# (`squid -k reconfigure`). See engines/qe-explorer/squid.conf for the ACL wiring
+# and docker-compose.qec.yml for how this file is mounted on the shared
+# `qec-egress-allowlist` volume.
+#
+# This shipped copy is the FAIL-CLOSED default: the sentinel below matches no
+# real host, so with only this line present ALL real egress is DENIED. Do not
+# remove the sentinel — an empty ACL file makes squid refuse to start.
+.qec-egress-denied.invalid

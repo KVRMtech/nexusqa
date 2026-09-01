@@ -1,0 +1,83 @@
+# Banking + financial-services vocabulary.
+#
+# Targets demos that span retail banking, commercial banking, and
+# wealth-management workflows.  Patterns are tuned for screens like
+# core-banking T24, FIS Profile, Fiserv DNA, Salesforce Financial
+# Services Cloud, and on-prem account-management consoles.
+vertical: banking
+display_name: Banking & Financial Services
+description: >
+  Account numbers, routing identifiers, and financial-instrument
+  references.  Pairs with the default baseline for full coverage.
+
+synonyms:
+  - canonical: account_number
+    aliases:
+      - "Account #"
+      - Acct No
+      - Acct.
+      - Account Number
+      - Account No.
+      - Customer Account
+  - canonical: routing_number
+    aliases:
+      - ABA
+      - ABA Routing
+      - Routing Number
+      - Routing #
+      - Transit Number
+  - canonical: swift_code
+    aliases:
+      - SWIFT
+      - SWIFT Code
+      - BIC
+      - BIC Code
+  - canonical: iban
+    aliases:
+      - IBAN
+      - International Bank Account Number
+  - canonical: customer_id
+    aliases:
+      - Customer ID
+      - CIF
+      - CIF Number
+      - Client ID
+
+pii_patterns:
+  # ABA / routing number — exactly 9 digits.  Word-boundary on both
+  # sides; we accept a leading "Routing" label proximity check
+  # downstream rather than overconstraining here.
+  - name: aba_routing
+    regex: "(?i)\\b(?:ABA|Routing(?:\\s+(?:#|Number))?)[:\\s]{0,4}(\\d{9})\\b"
+    severity: high
+    description: ABA / US routing number (9 digits, labelled)
+    redaction: "[REDACTED_ABA]"
+
+  # IBAN — 15-34 chars, country prefix + check digits + BBAN.
+  - name: iban
+    regex: "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b"
+    severity: high
+    description: International Bank Account Number
+    redaction: "[REDACTED_IBAN]"
+
+  # SWIFT / BIC — 8 or 11 alphanumerics, all upper-case.
+  - name: swift_bic
+    regex: "\\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\\b"
+    severity: medium
+    description: SWIFT / BIC code (8 or 11 chars)
+    redaction: "[REDACTED_BIC]"
+
+  # Account number near a label — generic 8-17 digit run prefixed by
+  # an account-style word.  Avoids matching every long number on screen.
+  - name: bank_account_labelled
+    regex: "(?i)\\b(?:Account\\s*(?:#|No\\.?|Number)|Acct\\s*(?:#|No\\.?))[:\\s]{0,4}(\\d{8,17})\\b"
+    severity: high
+    description: Account number when prefixed by an account label
+    redaction: "[REDACTED_ACCOUNT]"
+
+  # Customer Information File (CIF) — 6-12 digit core-banking customer id.
+  - name: cif_id
+    regex: "(?i)\\bCIF[:\\s#]{0,4}(\\d{6,12})\\b"
+    severity: medium
+    description: Customer Information File identifier
+    redaction: "[REDACTED_CIF]"

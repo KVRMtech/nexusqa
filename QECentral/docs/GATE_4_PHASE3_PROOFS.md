@@ -1,0 +1,660 @@
+# Gate 4 — Phase 3 proofs on real infrastructure
+
+**Scope executed: A28–A35.** A26/A27 belong to another squad and were already
+implemented when this gate opened; A36 is closed and was not touched.
+
+| # | Milestone | Verdict |
+|---|---|---|
+| A28 | vision-operate caller | **CODE COMPLETE, live proof blocked by A29** |
+| A29 | real multimodal prediction | **BLOCKED — provider returns HTTP 401** |
+| A30 | signed vision attestation rung | **NOT STARTED — blocked by A29, plus a design conflict (§A30)** |
+| A31 | KEDA on a real cluster | **PASS** — reproduced twice |
+| A32 | T-FL-08 vs real Chromium | **PASS** — 36 cross-fence attempts, 0 violations |
+| A33 | live Squid fence reload | **PASS** — flipped live, no restart |
+| A34 | `_scan_fleet` scalability | **DECIDED** — bound measured and formally accepted |
+| A35 | crossing journal recovery | **PASS** — both crash shapes, 0 double-submits |
+
+Evidence: `Nexus_power/evidence/gate4/*.json`. Branch `gate4/phase3-proofs`
+on `origin`, `1e7c5fd` onward.
+
+**Attribution, because git cannot supply it here.** Every commit in this
+repository carries the same identity (`srika`), so commit → author does not
+exist as a queryable fact — a live routing problem this week, when an
+overwritten evidence bundle could not be returned to whoever produced it. Until
+the fleet's `Session:` commit-trailer convention is in place, the anchor for this
+work is the **branch**: every Gate 4 commit is on `gate4/phase3-proofs` and
+nowhere else, and every artefact is under `Nexus_power/evidence/gate4/`, which
+`git log --all -- Nexus_power/evidence/gate4/` confirms has a single writer.
+Anything found in either place belongs to this gate and can be addressed here.
+
+(The stale commit range this line used to carry is gone on purpose: a hand-
+maintained range in a document the range itself keeps changing is a fact with a
+short half-life, and it was already three commits out of date.)
+
+---
+
+## §0 · The three results that were green and wrong
+
+All three were caught, all three are kept in the record, and each one is the
+reason a guard now exists. The third was found *after* the gate had been signed
+off by an independent verifier — which is the honest reason it is listed here
+rather than quietly repaired.
+
+**A35 reported PASS with a ledger of zero binds in both runs.** The verdict said
+"zero double-submits". True, and worthless: the crawl had never submitted at
+all, so "at most one" was satisfied by nothing ever happening. A fault-injection
+test whose subject never performs the action cannot fail. A mandatory control
+phase now runs an *unkilled* crawl first and the run is INVALID unless it binds.
+
+**A34's first sweep produced a per-tenant cost falling from 32,175 ms to
+13.6 ms.** A plausible amortisation curve, entirely artefact: an earlier run
+killed by a Docker outage never ran its cleanup, so 1 024 tenants stayed in the
+registry and every step secretly measured 1 024 while being labelled 1, 8, 32…
+The guard asserted only `apps_returned >= n` — it caught under-reaching and was
+blind to over-reaching. It now purges first and asserts the enumerated fleet is
+exactly `baseline + n`.
+
+**A32/A33 passed against config bytes production never loads** — a Windows
+checkout's CRLF `squid.conf`, not the LF blob in git. Detail in §A32; the file
+is now pinned to `eol=lf` and the harness refuses to run on a CR byte.
+
+There was also a **near-miss in the other direction**: A35's control crawl bound
+two policies against a `max_crossings: 1` grant, which looked exactly like a
+serious product defect. It was my fixture — it re-served the application form
+for `GET /bind`, inventing a second boundary. Fixed to post-redirect-get; the
+control now binds exactly once. **No defect was reported, because there was
+none.**
+
+### The class these all belong to
+
+Three squads hit the same shape today from unrelated directions, which is what
+turns it from an anecdote into a rule:
+
+> **A check can be structurally incapable of failing on its own subject, and
+> when it is, it reports success.**
+
+Not "the check was wrong" — the check was *well-formed and passed for a reason
+unrelated to the property it names*. Every green-and-wrong result in this gate
+is an instance, and so were two found elsewhere:
+
+| check | what it asserted | what it was blind to |
+|---|---|---|
+| A34 fleet guard | `apps_returned >= n` | over-reaching — 1 024 leftover tenants satisfied it at every step |
+| A35 double-submit | `binds <= 1` | zero — satisfied by a crawl that never submitted |
+| A32 fence denial | cross-fence `== REFUSED` | broken egress — a dead proxy denies everything |
+| A32 config integrity | `git hash-object` | CRLF — the clean filter normalises the byte under test |
+| T-FL-08 explorer (M3.3) | a fence is not violated | a coroutine has no network stack |
+| T-FL-03 manifest (A26) | "arrived CORRUPTED" | `read_text()` on both sides normalises the newline that IS the delimiter |
+| A27 canary — AST guard | no skip-reason offenders | a wrong root or broken glob ⇒ empty ⇒ green having parsed nothing |
+| A27 canary — dbgate drift | no missing DSN vars | an empty `DB_ENV_VARS` ⇒ green having compared nothing |
+| A27 canary — categories | every category well-formed | every assertion is a loop; an empty registry satisfies all of them |
+| A27 scanner — module scope | `scanned >= 50` | *which* 50 — a module that fails to parse is skipped silently |
+| A27 manifest byte-compare | `read_bytes() == read_bytes()` | two EMPTY files compare equal |
+
+Nine, and the last three are the sharpest of the set: they are inside the
+**canary** — the file whose entire purpose is proving a gate is not decorative.
+A canary that is itself vacuous is this class at its purest: the check that
+exists specifically to prevent "green having proven nothing", going green having
+proven nothing. Found by its author applying the question above to their own
+work the same afternoon they were pointing the class out in other people's. They
+now assert subject presence (≥50 modules parsed, ≥20 reasons extracted, a real
+`DB_ENV_VARS` containing a known DSN) and both mutations that previously passed
+now fail loudly.
+
+### The count stopped being the point
+
+Every squad that applied the question to their own work found instances. Gate 3
+fed each of its evidence modules a structurally valid recording of a crawl that
+observed **nothing**: A23 passed 9 of 10 claims, A24 passed 6 of 9. Their suites
+failed overall — one test in each asserts non-empty — while every individual
+claim went green on an empty population.
+
+Their own example is the one to remember:
+
+> A23's "unrelated requests are not attached to actions" — 61 navigation events,
+> zero borrowed labels — "is the assertion I was most pleased with. On an empty
+> recording it passed just as confidently, because zero of zero is zero."
+
+**The assertion you are proudest of is the likeliest to be vacuous**, because
+specificity is what makes it depend on two populations both being present, and
+nothing makes it say so.
+
+The fix that squad landed converges with A26/A27's: assert the population **at
+the scale the claim needs**, not merely non-empty. A two-event recording
+satisfies "non-empty" while proving nothing about a join, exactly as a scan that
+finds three modules satisfies it while proving nothing about a codebase.
+
+**But scale is the weaker half, and A26/A27 were right to push back on my
+crediting it as the fix.** Fifty modules is a *number*; the file that must be in
+scope is an *identity*. A count catches a half-broken glob. Only an **anchor** —
+naming a specific artefact the scan is required to have seen — catches a scan
+pointed somewhere entirely plausible. **If a guard carries one of the two, carry
+the anchor.**
+
+Their anchor earned that within seconds of landing, and what it caught is the
+sharpest instance in this whole document. Their scanner held:
+
+```python
+except SyntaxError:
+    continue          # "a broken file fails elsewhere"
+```
+
+The comment was wrong. A module that will not parse was dropped from the scan and
+the guard went green having never looked at it — **a silent skip, inside the
+guard whose entire job is detecting silent skips.** It surfaced only because a
+fumbled heredoc put a syntax error into the T-FL-03 module: the scan then
+reported 158 modules examined *without the one file the milestone is about*, and
+nothing but the identity anchor noticed the absence.
+
+Note which question found it. "Would this pass if the subject were absent?" does
+**not** — the subject was present, 158 modules were genuinely parsed, the count
+was real. Only *is it the right 158?* catches it.
+
+So the useful statement is not a total. It is that **the question has a hit rate
+close to one on any suite nobody has asked it of yet** — including, in every
+case so far, the suites written by the people who were pointing the class out in
+someone else's work.
+
+### Two further shapes
+
+**Resemblance accepted in place of the thing.** Gate 2 nearly recorded a
+boundary crossing on `summit-life-carrier` that never happened: the grant was
+spent on a navigation LINK that shared the commit button's label. The check
+fired, on the wrong object. "Would this pass if the subject were absent?" does
+not catch that; the companion question does — **could this pass on something
+that merely resembles the subject?** Fixed by URL-scoping the grant.
+
+That question cuts in **both directions**, which is the part worth keeping. The
+same squad's other near-miss was its mirror image: a `verified` flag that would
+have gone green on a URL change *merely resembling* a confirmation. One accepts
+a resembling **subject**, the other a resembling **outcome**, and a check that
+only asks "was the subject absent?" misses both. So the pair is:
+
+* would this still pass if the subject were **absent**?
+* could this pass on something that merely **resembles** the subject — or the
+  result?
+
+The first catches vacuity. The second catches a check that fired confidently on
+the wrong thing, which is the harder one to see afterwards, because it leaves a
+green result with a plausible-looking cause attached.
+
+**And it applies to reading evidence, not only to writing checks.** A CI log was
+read as proving a proving-ground app never served:
+
+```
+::error::summit-life-carrier never served on :8099
+```
+
+That line is GitHub Actions **echoing the step's script**, not the error firing —
+every line of a `run:` block is echoed before execution, so *both* branches of a
+wait loop appear whichever one runs. Four lines later the same log says
+`summit-life-carrier is serving after 2s`. Verified here directly: the echoed
+lines carry the `ESC[36;1m` command-echo escape and the real output does not.
+
+The mistaken reading survived one relay (mine — I passed it on labelled as
+unverified) and was caught by the person it was about, who checked the run. A
+false conclusion drawn from evidence that *resembles* evidence is the same defect
+as a check that fires on a subject that resembles the subject.
+
+**The author's own diagnosis is sharper than "a line was misread", and it is the
+part to keep.** They had *both* pieces of evidence in front of them — the echoed
+error and the crawl's assertion failure — and combined them into a causal story:
+*the app never started, therefore the crawl only saw the login page.* Tidy, uses
+all the evidence, wrong.
+
+> "It survived because I never checked it against the one line that
+> distinguishes it."
+
+That is the failure mode, and it is not carelessness — **a story that explains
+every piece of evidence you hold is not thereby true**, and the tidier it is, the
+less likely you are to go looking for the observation that separates it from a
+rival explanation. Two explanations fit that log equally well; exactly one line
+told them apart, and coherence is precisely what stopped anyone reading it.
+
+So the reading question has a third form: not only *is this evidence, or
+something resembling it?* but **what would this log look like if my explanation
+were wrong — and have I looked at that?**
+
+**A muted check and a blind check are indistinguishable in a log.** A CR
+verification heuristic phrased as "delta equals line count" fires on healthy
+files — an already-LF file, or a mixed-ending one — and a check that cries wolf
+gets switched off. The correct invariant is `delta == CR bytes on disk`. This
+matters here because muting returns a check to exactly the state this section is
+about: present, green, and incapable of telling you anything.
+
+The tell is always the same: **the check would still pass if the subject were
+absent.** No tenants, no submission, no egress, no bytes, no browser, no
+newline. That question — *what would make this pass for the wrong reason?* — is
+cheaper to ask than any of these were to find, and it is the question each of
+the guards in this branch now encodes.
+
+Two corollaries worth keeping:
+
+* **A negative control is not optional padding.** A32 must reach its own origin
+  before a denial means anything; A35 must bind once before "no double-submit"
+  means anything. Both were retrofitted after the fact, and both would have
+  caught their own defect on the first run.
+* **A mutation that turns several tests red has not yet told you which one is
+  load-bearing** (A26's method, and their own correction — their first mutation
+  reddened three tests, none of which was the new assertion).
+* **When a new check fails immediately on code you believe is fine, trust the
+  check before the belief.** A26/A27 assumed their fresh anchor was wrong rather
+  than their scanner, and it was the scanner. Recorded because that first
+  reaction is the one that discards a true finding.
+
+### Why none of these were found by reading
+
+A26/A27's closing observation, and the most transferable thing in this document:
+
+> "I re-read that `except SyntaxError: continue` several times while writing the
+> guard around it, and its comment — *a broken file fails elsewhere* — read as a
+> reasonable engineering decision every time. It was wrong, but not obviously
+> wrong; it was wrong in a way that requires executing it against a broken file
+> to see."
+
+That is the practical case for **mutation over review** on anything load-bearing:
+review asks whether the code says what you meant, and every defect in this
+section is one where the code said exactly what was meant **and the meaning was
+blind**.
+
+Checked against my own five rather than accepted: four were found by execution or
+measurement — an absurd result (32,175 ms → 13.6 ms), reading an output (ledger 0
+in both runs), running a control at all, and measuring bytes after a peer's
+prompt. Exactly one was found by reasoning — `--no-filters` — and only while
+implementing a check, days-fresh from being burned by the same class. **4 of 5,
+and the reasoning case needed a recent burn to fire.**
+
+---
+
+## §A31 · KEDA on a real cluster — PASS
+
+Reproducer: `bash scripts/gate4_a31_keda_cluster_proof.sh --recreate`
+
+Real kind cluster (kubelet v1.32.2, containerd 2.0.3), real KEDA operator
+`ghcr.io/kedacore/keda:2.20.2`. **The repository's own ScaledObject is applied
+UNEDITED** — the scaffolding is built to satisfy the names the production
+manifest already assumes (`nexus/qe-explorer`,
+`monitoring/prometheus-operated:9090`, secret `qec-prometheus`), so a wrong name
+fails the proof rather than being papered over.
+
+```
+queue depth 0  ->  1 replica   (negative control: the fleet is at the floor)
+queue depth 8  ->  4 replicas in 30s
+4 pods Running on gate4-keda-control-plane
+HPA reason: "New size: 4; reason: external metric s0-prometheus ... above target"
+queue back to 0 -> still 4 after 60s (scaleDown stabilisation is 300s)
+```
+
+Run twice, identical both times.
+
+**Finding — two documented fields are inert.** KEDA's admission webhook warns:
+
+> PollingInterval is configured but is not relevant … only relevant when
+> minReplicaCount = 0 · CooldownPeriod is configured but is not relevant …
+
+`minReplicaCount` is 1, so `pollingInterval: 15` and `cooldownPeriod: 300` do
+nothing. The manifest's most carefully-argued comment — that a 300 s cooldown
+protects a pod holding a live crawl — describes behaviour the cluster does not
+implement. The protection is real but comes from
+`behavior.scaleDown.stabilizationWindowSeconds: 300`, which IS honoured (the
+fleet stayed at 4 after the queue emptied).
+
+**Actioned:** the manifest's comments are corrected in this branch to say the
+two fields are inert and to attribute the protection to the HPA `behavior`
+block. The **configuration is deliberately unchanged** — removing the fields, or
+setting `minReplicaCount: 0` to make them take effect, is a scale-to-zero
+behaviour decision belonging to the fleet owner, and the manifest's cold-start
+argument against scale-to-zero still stands. What was wrong was the
+explanation, not the configuration.
+
+**Boundaries.** The queue gauge is published by a stand-in exporter, not by
+`queue_drainer._publish_fleet_metrics`. The scaled container is a sleeping
+busybox, not the 3 GB Playwright image — the loop from *queue depth* to
+*scheduled pods* is fully real; the metric's publisher and the container's
+payload sit outside it. Single-node cluster: placement is observed, multi-node
+spreading is not.
+
+---
+
+## §A32 · The egress red team against real Chromium — PASS
+
+Reproducer:
+`python platform/qe-central/tests/fleet/gate4_a32_a33_chromium_egress.py --workers 4 --rounds 3`
+
+`test_t_fl_08_concurrency_redteam.py` states plainly that its explorer is "a
+coroutine that … reads the fence it was given". A coroutine has no network
+stack, no DNS, no TLS and no proxy setting, so **the security property was
+asserted about an object structurally incapable of violating it.**
+
+Now real: the production `ubuntu/squid:latest` running this repository's own
+`engines/qe-explorer/squid.conf` bytes, started by the same entrypoint and
+mtime→`kill -HUP` watcher `docker-compose.qec.yml` uses; Playwright Chromium,
+one context per worker, each proxied through its own worker's Squid; separate
+origin containers with distinct DNS names and distinct response bodies.
+
+```
+negative control : all 4 workers REACHED their OWN origin (http_200)
+48 attempts, 36 of them cross-fence
+VIOLATIONS: 0
+```
+
+The negative control is load-bearing. A harness that only ever observes
+"denied" passes just as well when egress is broken everywhere — a wrong proxy
+port, a dead origin, or a Chromium that never left the machine all produce a
+perfect score. Each worker must first reach its own origin and read back that
+origin's unique marker; only then does a denial mean the fence caused it. The
+readiness probe additionally requires a *fresh* Squid to answer 403 to a real
+internet host, so fail-closed is verified before the first measurement.
+
+Also reproduced at 3 workers × 2 rounds (18 attempts, 12 cross-fence, 0
+violations).
+
+### A third false pass, found after the gate was signed off
+
+The first green A32/A33 runs shipped **the wrong config bytes into the
+container**, and passed anyway.
+
+`squid.conf` carried no `eol` attribute, so with `core.autocrlf=true` the
+working copy held **71 CR bytes** while the committed blob is LF. The harness
+`docker cp`s the *working copy*, so Squid was loading CRLF config that no Linux
+deployment has ever seen — while this document claimed the run used "the
+repository's own `squid.conf` bytes".
+
+It passed, and that is precisely the problem: a security proof executed against
+different bytes than production runs is not a proof about production, and
+nothing anywhere said so. Found by applying to my own work a defect class the
+Gate 1 squad hit independently (`sha256sum -c` treats a trailing CR as part of
+the filename, so a CRLF checkout of a digest manifest reports "sources have
+drifted" when nothing has).
+
+Closed two ways:
+
+* `.gitattributes` now pins `squid.conf` and `squid_allowed_domains.txt` to
+  `text eol=lf` — config consumed *inside a Linux container* must not depend on
+  the developer's platform.
+* `assert_config_is_production_bytes()` refuses to start the run if the file
+  contains a single CR, and records the file's sha256 in the evidence. An
+  attribute can be missed again; a silently-passing proof is the failure mode.
+
+Re-run against the corrected bytes: **4 workers × 3 rounds, 36 cross-fence
+attempts, 0 violations**, and the evidence's recorded digest
+`6b5bcc7505e82ed321ca167b5a0e60e631e581e5b3ce0fbb65ceec373cd77805` **equals the
+committed blob's digest** — so the proof now demonstrably ran the bytes in git.
+
+---
+
+## §A33 · Squid re-reads a rewritten fence, live — PASS
+
+Same harness. Not a timestamp, not a config parse, not a restart:
+
+```
+before rewrite : own=REACHED   other=REFUSED
+   << fence file rewritten inside the running container >>
+after  rewrite : own=REFUSED   other=REACHED
+squid restarted: False
+```
+
+The *same already-open* Chromium context performs all four navigations. Squid's
+container `StartedAt` and PID-1 start time are captured before and after and
+asserted **unchanged**, so "it reloaded" cannot be satisfied by a restart.
+
+---
+
+## §A34 · `_scan_fleet` — DECIDED (Option B)
+
+Full record: **`QECentral/docs/A34_SCAN_FLEET_DECISION.md`**.
+
+Measured under the production RLS posture (`qec`, NOSUPERUSER, NOBYPASSRLS,
+FORCE RLS — the harness refuses to record a timing otherwise): **linear at
+≈ 11.7 ms per tenant**, 11.98 s at 1 032 tenants.
+
+**Decision: accept the bound**, because the consumer is switched off
+(`QEC_CYCLE_TICK_SECONDS` is set in no compose file, env template or deployment
+in this repository), the current registry holds 8 tenants, and the named fix is
+a `SECURITY DEFINER` function that reads across tenants — the exact shape whose
+absence caused T-FL-05. Triggers that make batching mandatory: **250 tenants**,
+or a scan exceeding **25 % of the tick**, or the daemon being enabled in
+production with >100 tenants.
+
+**Finding — the documented bound understates the risk.** §6.5 describes round
+trips. The sharper problem is materialisation: the `LIMIT` is applied *per
+tenant* (`limit*4` apps, `limit*20` change events) while the fleet-wide cap is
+applied only afterwards in `_discover_due_work` as `out[:limit]`. At 1 000
+tenants that is up to ~1.2 M rows accumulated to emit 50 work items. Memory
+fails before round trips do, and whoever implements batching must push the
+fleet-wide cap into the query.
+
+**Finding — a fail-soft that is silent to its caller.** `fleet_tenant_ids()`
+returns `[PLATFORM_SCOPE]` when the registry is unreadable. `_scan_fleet` then
+completes normally, scans one scope and reports success. This happened during
+this milestone and produced plausible timings for a "fleet" of one; it was
+caught only because the harness cross-checks the count. Recommend a metric on
+enumerated tenant count.
+
+---
+
+## §A35 · Exactly-once across a real SIGKILL — PASS
+
+Reproducer:
+`python engines/qe-explorer/tests/browser/gate4_a35_crossing_recovery.py`
+
+The existing M3.4 test simulates the crash by truncating the manifest,
+in-process, against a fixture whose submit button does nothing. Three things
+were therefore unproven: nothing was killed, the "application" could not count
+submissions, and the crash shape was the one the author expected.
+
+New ground: `proving-grounds/crossing-ledger` — a real HTTP server that records
+every bind and **deliberately does not deduplicate**, so the count measures the
+crawler and not the application's own idempotency. A real Chromium crawl runs in
+a child process and is SIGKILLed.
+
+```
+control (no kill)  : binds = 1        <- the boundary is reachable and countable
+                                         (without this the run is vacuous)
+
+scenario A — killed before the request left the browser
+  reserved record durable after SIGKILL : True
+  binds after kill  = 0     binds after resume = 0     delta = 0
+
+scenario B — killed once the SERVER had recorded the bind, response in flight
+  binds after kill  = 1     binds after resume = 1     delta = 0
+```
+
+Scenario B is the one that matters. The irreversible effect had already landed
+and the crawler never learned that it did — the exact ambiguity a naive "retry
+what did not complete" resolves by binding a second policy. It did not.
+
+### What the resume actually did — and the half this does NOT prove
+
+The mechanism is directly observable in the resumed run's log, and it is worth
+stating precisely because it is easy to describe more flatteringly than the
+evidence supports:
+
+```
+qec.crawler.crossings_restored crawl_id=gate4-a35-crossing journalled=1 flows=1
+  - this run INHERITS the irreversible actions the killed run took;
+    it will not repeat them
+qec.inventory.built controls=4 ... dangerous=1
+qec.crawler.completed stop_reason=completed states=0 actions=0
+```
+
+So: the write-ahead record was **read back off disk and restored into the
+ledger** (`journalled=1 flows=1`), and the resumed crawl **did load the page and
+inventory the boundary control** (`controls=4 dangerous=1`). It then completed
+with **0 new states**, because the entry state was already in the restored
+visited set.
+
+In both scenarios the manifest ends holding exactly one crossing record, status
+`reserved` — it never becomes `crossed` or `refused`, and `refusals` is `[]`.
+
+**Therefore, stated exactly:**
+
+* **PROVEN** — the reservation survives a real `SIGKILL`; a resumed process
+  inherits it; and the application's non-deduplicating ledger shows no second
+  bind (delta 0 in both scenarios; total 1 in scenario B).
+* **NOT PROVEN HERE** — the explicit `CROSSING_REFUSED` path. The resumed crawl
+  never re-attempted the boundary, so nothing refused it. That path is covered
+  by `tests/test_resume_crossing_journal_m34.py`, where a scripted browser does
+  re-reach the boundary and is refused — but A35 did **not** reproduce that
+  live.
+
+A reviewer described this as "the crossing is refused on resume". It is not:
+**it is inherited as already-spent and never re-attempted.** The exactly-once
+outcome is the same and the durability claim stands, but the two are different
+mechanisms and only the first is evidenced here.
+
+**Operator-visible consequence.** In scenario A the boundary is spent in the
+journal but was never actuated at the application (`binds = 0`). The resumed
+crawl does not retry it, so the funnel stays honestly *uncrossed* and the
+journey is not completed. That is the correct trade — a missing outcome
+milestone is recoverable, a duplicate irreversible action is not — but it means
+a killed crawl can leave a boundary permanently unspendable for that crawl id,
+and an operator seeing "reserved, never crossed" should read it as *deliberate
+refusal to guess*, not as a stuck crawl.
+
+---
+
+## §A28 · The orphaned endpoint now has a caller — code complete
+
+`/internal/vision-operate` was live, HMAC-authenticated, server-side flag-gated,
+tested on the server side — and **no code in the engine called it.**
+`OracleGateway.operate` raises `NotImplementedError`; the ladder's medic rung
+calls `/internal/operate-control` (the *text* medic) and stops. The only vision
+the crawler ever performed went through `/internal/perceive-controls`, which
+answers a different question. Per the decision taken at the start of this gate,
+the endpoint was **wired, not deleted**.
+
+* `app/main.py::_make_vision_medic_oracle` — same HMAC + fleet token as its
+  siblings, same `VisionBudget` double gate, never raises.
+* `app/playwright_port.py::_vision_medic_rung` — runs after the text medic is
+  exhausted; refuses a point outside the element's box; refuses to send an image
+  whose redaction cannot be proven.
+* `app/metrics.py` — `vision_medic` added to `ORACLE_KINDS`, or `_enum` folds
+  the new rung's spend into `other`.
+
+12 new tests, weighted towards the ways it fails *quietly*. The headline one
+pins the M3.1 defect class: `bounding_box()` is viewport-relative, `click_at`
+takes page coordinates, and the endpoint returns bbox-relative offsets — three
+spaces, and conflating two of them silently mis-aims every vision click.
+
+**Full explorer suite: 2016 passed, 0 failed.**
+
+The live half of A28's acceptance ("a live Explorer vision path calls the
+endpoint") is **not claimed** — it requires A29's provider.
+
+---
+
+## §A29 · Real multimodal prediction — BLOCKED
+
+Everything is built and proven working up to the provider:
+
+```
+real canvas page   fixture 23, 0 DOM controls collected
+real screenshot    1280x900, 15,067 bytes
+real redaction     production T-VIS-05 path, 1 region masked,
+                   receipt sha256 b14c93a4…bfb76d
+real prompt        qe-central vision_medic.SYSTEM (authoritative table)
+real router        platform-api build_router() + openai_compat provider
+real request       dispatched to api.openai.com
+PROVIDER           HTTP 401 "Incorrect API key provided"
+```
+
+`OPENAI_API_KEY` in this environment is rejected. Verified **independently of
+our code**: a plain `curl https://api.openai.com/v1/models` with the same key
+also returns 401. The key is 164 chars with a well-formed `sk-proj-` prefix, so
+it is invalid or revoked, not mangled in transit.
+
+I did not route around it. A stubbed prediction is exactly what A29 exists to
+abolish, so the milestone is reported as **not proven**. Supply a working
+credential and the committed harness produces the evidence or fails honestly.
+
+---
+
+## §A30 · Signed vision rung — NOT STARTED, and a design conflict to resolve first
+
+A11 **was** independently certified during this gate (by the Gate 1 squad, not
+its author), so the stated dependency cleared. A30 is nonetheless not started,
+for two reasons — the second matters more than the first:
+
+1. **It depends on A29**, which is blocked. There is no successful vision
+   operation to promote onto a trusted rung.
+
+2. **The obvious implementation would invalidate A11's certification — and
+   that certification is now real.** When this gate opened, A11 existed in no
+   commit and its certification pinned digests of working-tree files, so the
+   constraint was theoretical. It is not any more: A11 was committed, the six
+   CRLF-mismatched sources were normalised, the manifest regenerated, and the
+   result verified **from a clean detached checkout** — 9/9 digests OK, 131
+   independent checks, 143 tests passing. Breaking it now breaks something that
+   actually holds.
+   `app/attest.py::ProofClaims` is `extra="forbid"`, so a vision rung cannot
+   simply be added to the signed claims — it is a two-sided change to a
+   red-teamed verifier plus a `CLAIMS_VERSION` bump. And A11's certification
+   record binds **nine files pinned by SHA-256**; the record lapses and its
+   reproducer refuses to run if any of them change. Adding a claims field would
+   therefore de-certify the very attestation A30 is trying to build on.
+
+   The shape that avoids this already exists in the codebase: `walk_attested` is
+   **derived on the Explorer from its own verification verdict**, and qe-central
+   has no way to set it (there is a test that tokenises every qe-central source
+   file and fails if the name appears). A30's vision rung should be built the
+   same way — attach bytes, let the verifier decide — rather than by widening
+   the signed claims.
+
+**The authoritative statement of this constraint now lives in
+`QECentral/docs/A11_INDEPENDENT_CERTIFICATION.md` §4.1, "Implication for
+downstream work — do not extend the signed claims."** It belongs there rather
+than here: it is a property of `attest.py`, which that squad certified, and a
+single authority beats two copies that can drift. A30's implementer should read
+§4.1 first; this section only says why Gate 4 asked the question.
+
+Their record names two independent mechanisms, which is stronger than the one I
+found: `extra="forbid"` refuses an unknown field at schema validation, **and**
+integrity is checked over the **raw** claims *before* the typed parse, so the
+signature covers the bytes that arrived. `attest.py` is one of the nine pinned
+files, so touching it fails the drift gate, de-certifies A11, and re-blocks A12
+— which is now unblocked. The same applies to the open IPv6 finding
+(CERT-FINDING-2): its fix touches `attest.py` and `walk_attestation.py`, both
+pinned, so it needs a re-certified follow-up rather than a quiet patch.
+
+Recorded here so whoever picks A30 up starts from the constraint rather than
+discovering it after de-certifying A11.
+
+---
+
+## §1 · What could not be proven, and why
+
+* **A29 / A30** — above.
+* **CI execution of this branch.** `ci.yml` triggers on `push` only for `main`,
+  `develop` and `feat/qec-dynamic-catalog-p0-p6`, its `pull_request` trigger
+  targets only `main`/`develop`, and it has no `workflow_dispatch`. A
+  `gate4/*` branch therefore cannot run it. Widening the trigger is a cost
+  decision the workflow's own comment says should be taken deliberately, and
+  merging into the shared integration branch is a bigger step than this gate was
+  authorised to take — so I did neither, and validated locally instead (2016
+  explorer tests green). **This is a decision for the branch owner.**
+* **Multi-node scheduling** (A31) and **the production database's per-round-trip
+  constant** (A34) — both need infrastructure this machine does not have. A34's
+  numbers are laptop-Docker numbers; the *shape* transfers, the milliseconds do
+  not.
+
+## §2 · An incident I caused
+
+Creating the kind cluster on this 8 GB machine crashed Docker Desktop (WSL VHDX
+unmount timeout), killing **every** container on the box — including other
+squads' MinIO and Postgres. I recovered Docker, restarted what could be
+restarted, and told the affected sessions immediately; `pg-acme` and `pg-vk` had
+been created with `--rm` and were **destroyed, not stopped**. One squad
+confirmed the outage had inflated a timing measurement they were about to write
+up as a code defect. Heavy infrastructure was serialised afterwards. Recorded
+because a shared-machine outage that silently corrupts someone else's evidence
+is exactly the failure Gate 0 §0 exists to name.
+
+## §3 · Independent reproduction
+
+Every proof is one command and leaves a JSON artefact under
+`Nexus_power/evidence/gate4/`. Each harness refuses to produce numbers when its
+preconditions are unmet — wrong DB role, unmasked screenshot, fleet size that
+does not match its label, a control that never reached its own origin, a crawl
+that never submitted. Every one of those refusals exists because the
+corresponding mistake was actually made while producing this document.

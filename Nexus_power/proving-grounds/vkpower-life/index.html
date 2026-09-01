@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VKPower Life Insurance</title>
+<!--
+  VKPower Life Insurance — a self-contained accessible SPA proving ground for
+  VKPower Verdict. Flow: login (member no. -> password -> PIN) -> dashboard ->
+  beneficiaries (per-member cardinality) -> quote -> apply -> review -> bind.
+  Vanilla JS, hash routing, no build step, no external assets. Served by
+  nginx:alpine. Two seeded members drive behavior-class + cardinality demos:
+    25000001  young-small-family  (Maria Young, 25, 2 beneficiaries)
+    50000005  senior-large-family (John Senior, 55, 5 beneficiaries)
+  Any other member number logs in as a generic member. Any password/PIN is
+  accepted (demo) — the LOGIN SHAPE is what the recipe automates.
+-->
+<style>
+  :root{
+    --navy:#0b1f3a; --navy-2:#12305a; --gold:#c8a24a; --gold-2:#e6c877;
+    --ink:#0b1f3a; --muted:#5b6b82; --line:#dfe5ee; --bg:#f4f6fb; --panel:#ffffff;
+    --ok:#1a7f5a; --err:#b23b3b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       color:var(--ink);background:var(--bg);line-height:1.5}
+  a{color:var(--navy-2)}
+  header.top{background:var(--navy);color:#fff;display:flex;align-items:center;gap:12px;
+       padding:12px 20px;border-bottom:3px solid var(--gold)}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.3px}
+  .brand .mark{width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,var(--gold),var(--gold-2));
+       display:inline-flex;align-items:center;justify-content:center;color:var(--navy);font-weight:900}
+  nav.top{margin-left:auto;display:flex;gap:16px;align-items:center;font-size:14px}
+  nav.top a{color:#dbe6f7;text-decoration:none}
+  nav.top a:hover{color:#fff}
+  .wrap{max-width:900px;margin:26px auto;padding:0 16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 22px;
+       box-shadow:0 1px 2px rgba(11,31,58,.05)}
+  h1{font-size:22px;margin:.1em 0 .4em}
+  h2{font-size:16px;margin:1.2em 0 .5em;color:var(--navy)}
+  p.sub{color:var(--muted);margin-top:0}
+  label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px}
+  input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:15px}
+  input:focus,select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(200,162,74,.2)}
+  .btn{appearance:none;border:0;border-radius:10px;padding:11px 18px;font-size:15px;font-weight:700;cursor:pointer}
+  .btn.primary{background:var(--navy);color:#fff}
+  .btn.primary:hover{background:var(--navy-2)}
+  .btn.gold{background:linear-gradient(135deg,var(--gold),var(--gold-2));color:var(--navy)}
+  .btn.ghost{background:#fff;border:1px solid var(--line);color:var(--navy)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+  .pill{display:inline-block;font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;
+       background:#eef2f9;color:var(--navy-2)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:8px}
+  .kv{background:#f8fafd;border:1px solid var(--line);border-radius:10px;padding:12px}
+  .kv .k{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .kv .v{font-size:18px;font-weight:800;color:var(--navy)}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted)}
+  .note{font-size:13px;color:var(--muted);margin-top:10px}
+  .err{color:var(--err);font-size:13px;margin-top:8px}
+  .ok{color:var(--ok);font-weight:700}
+  .steps{display:flex;gap:6px;margin:0 0 14px;font-size:12px;color:var(--muted)}
+  .steps b{color:var(--navy)}
+  footer{max-width:900px;margin:20px auto 40px;padding:0 16px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand"><span class="mark">V</span> VKPower Life Insurance</span>
+  <nav class="top" id="topnav" aria-label="Primary">
+    <a href="#/dashboard" id="nav-dash">Dashboard</a>
+    <a href="#/beneficiaries" id="nav-ben">Beneficiaries</a>
+    <a href="#/quote" id="nav-quote">Get a quote</a>
+    <a href="#" id="nav-signout">Sign out</a>
+  </nav>
+</header>
+<main class="wrap" id="view" role="main" aria-live="polite"></main>
+<footer>VKPower Life Insurance — demonstration environment. No real policies are issued. © VKPower.</footer>
+
+<script>
+// ── seeded members: behavior classes + per-member beneficiary cardinality ──
+var MEMBERS = {
+  "25000001": {name:"Maria Young",   age:25, behavior_class:"young-small-family",  policy:"VKPL-25000001",
+               coverage:250000, premium:18.40,
+               beneficiaries:[{name:"Liam Young",rel:"Child",pct:50},{name:"Ava Young",rel:"Child",pct:50}]},
+  "50000005": {name:"John Senior",   age:55, behavior_class:"senior-large-family", policy:"VKPL-50000005",
+               coverage:500000, premium:96.70,
+               beneficiaries:[{name:"Emma Senior",rel:"Child",pct:20},{name:"Noah Senior",rel:"Child",pct:20},
+                              {name:"Olivia Senior",rel:"Child",pct:20},{name:"Mia Senior",rel:"Child",pct:20},
+                              {name:"Lucas Senior",rel:"Child",pct:20}]}
+};
+function memberProfile(no){
+  return MEMBERS[no] || {name:"VKPower Member", age:40, behavior_class:"", policy:"VKPL-"+(no||"000000"),
+    coverage:200000, premium:32.00, beneficiaries:[{name:"Primary Beneficiary",rel:"Spouse",pct:100}]};
+}
+function sess(){ try{return JSON.parse(sessionStorage.getItem("vkpl_session")||"null")}catch(e){return null} }
+function setSess(s){ sessionStorage.setItem("vkpl_session", JSON.stringify(s)); }
+function clearSess(){ sessionStorage.removeItem("vkpl_session"); }
+function requireAuth(){ if(!sess()){ location.hash="#/login"; return false;} return true; }
+function money(n){ return "$"+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function showNav(on){ document.getElementById("topnav").style.visibility = on?"visible":"hidden"; }
+var el = function(id){ return document.getElementById(id); };
+var view = function(){ return document.getElementById("view"); };
+
+// ── routes ──────────────────────────────────────────────────────────────────
+var routes = {
+  "/login": function(){
+    showNav(false);
+    view().innerHTML =
+      '<div class="card" style="max-width:420px;margin:6vh auto">'+
+      '<h1>Sign in</h1><p class="sub">Access your VKPower Life account.</p>'+
+      '<form id="loginForm" novalidate>'+
+      '<label for="member_number">Member number</label>'+
+      '<input id="member_number" name="member_number" inputmode="numeric" autocomplete="username" placeholder="e.g. 25000001">'+
+      '<label for="password">Password</label>'+
+      '<input id="password" name="password" type="password" autocomplete="current-password">'+
+      '<div class="row"><button class="btn primary" type="submit">Sign in</button></div>'+
+      '<p class="err" id="loginErr" role="alert"></p>'+
+      '</form>'+
+      '<p class="note">Demo members: <b>25000001</b> (young family) or <b>50000005</b> (senior family). Any password works. '+
+      '<a href="#/login-mfa">Sign in with a security PIN →</a></p>'+
+      '</div>';
+    el("loginForm").addEventListener("submit", function(e){
+      e.preventDefault();
+      var mno=el("member_number").value.trim() || "25000001";
+      var p = memberProfile(mno);
+      setSess({member_number:mno, name:p.name, behavior_class:p.behavior_class});
+      location.hash="#/dashboard";
+    });
+  },
+  "/login-mfa": function(){
+    showNav(false);
+    view().innerHTML =
+      '<div class="card" style="max-width:420px;margin:6vh auto">'+
+      '<h1>Secure sign in</h1><p class="sub">Member number + password, then a one-time PIN.</p>'+
+      '<form id="mfaForm" novalidate>'+
+      '<label for="m_member">Member number</label>'+
+      '<input id="m_member" name="member_number" inputmode="numeric" autocomplete="username" placeholder="e.g. 50000005">'+
+      '<label for="m_pw">Password</label>'+
+      '<input id="m_pw" name="password" type="password" autocomplete="current-password">'+
+      '<div class="row"><button class="btn primary" type="submit">Continue</button>'+
+      '<a class="btn ghost" href="#/login">Back</a></div>'+
+      '</form></div>';
+    el("mfaForm").addEventListener("submit", function(e){
+      e.preventDefault();
+      sessionStorage.setItem("vkpl_pending", el("m_member").value.trim() || "50000005");
+      location.hash="#/login-pin";
+    });
+  },
+  "/login-pin": function(){
+    showNav(false);
+    var mno = sessionStorage.getItem("vkpl_pending");
+    if(!mno){ location.hash="#/login-mfa"; return; }
+    view().innerHTML =
+      '<div class="card" style="max-width:420px;margin:6vh auto">'+
+      '<h1>Security check</h1><p class="sub">Enter the 6-digit PIN for member '+mno+'.</p>'+
+      '<form id="pinForm" novalidate>'+
+      '<label for="pin">Security PIN</label>'+
+      '<input id="pin" name="pin" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required>'+
+      '<div class="row"><button class="btn primary" type="submit">Verify &amp; sign in</button>'+
+      '<a class="btn ghost" href="#/login">Back</a></div>'+
+      '<p class="err" id="pinErr" role="alert"></p>'+
+      '</form>'+
+      '<p class="note">Any 6-digit PIN is accepted in this demo.</p>'+
+      '</div>';
+    el("pinForm").addEventListener("submit", function(e){
+      e.preventDefault();
+      var pin=el("pin").value.trim();
+      if(pin.length<4){ el("pinErr").textContent="Enter your 6-digit PIN."; return; }
+      var p = memberProfile(mno);
+      setSess({member_number:mno, name:p.name, behavior_class:p.behavior_class});
+      sessionStorage.removeItem("vkpl_pending");
+      location.hash="#/dashboard";
+    });
+  },
+  "/dashboard": function(){
+    if(!requireAuth()) return; showNav(true);
+    var s=sess(), p=memberProfile(s.member_number);
+    view().innerHTML =
+      '<div class="card">'+
+      '<span class="pill">Member '+s.member_number+'</span>'+
+      '<h1 id="welcome">Welcome, '+p.name+'</h1>'+
+      '<p class="sub">Here is your VKPower Life policy summary.</p>'+
+      '<div class="grid">'+
+      '<div class="kv"><div class="k">Policy</div><div class="v" id="pol">'+p.policy+'</div></div>'+
+      '<div class="kv"><div class="k">Coverage</div><div class="v" id="cov">'+money(p.coverage)+'</div></div>'+
+      '<div class="kv"><div class="k">Monthly premium</div><div class="v" id="prem">'+money(p.premium)+'</div></div>'+
+      '<div class="kv"><div class="k">Beneficiaries</div><div class="v" id="bencount">'+p.beneficiaries.length+'</div></div>'+
+      '</div>'+
+      '<div class="row"><a class="btn gold" href="#/beneficiaries">Manage beneficiaries</a>'+
+      '<a class="btn primary" href="#/quote">Increase coverage</a></div>'+
+      '</div>';
+  },
+  "/beneficiaries": function(){
+    if(!requireAuth()) return; showNav(true);
+    var s=sess(), p=memberProfile(s.member_number);
+    var rows = p.beneficiaries.map(function(b,i){
+      return '<tr><td>'+(i+1)+'</td><td>'+b.name+'</td><td>'+b.rel+'</td><td>'+b.pct+'%</td></tr>';
+    }).join("");
+    view().innerHTML =
+      '<div class="card">'+
+      '<h1>Beneficiaries</h1>'+
+      '<p class="sub">'+p.name+' — '+p.beneficiaries.length+' beneficiary(ies) on file.</p>'+
+      '<table><thead><tr><th>#</th><th>Name</th><th>Relationship</th><th>Share</th></tr></thead>'+
+      '<tbody id="benbody">'+rows+'</tbody></table>'+
+      '<h2>Add a beneficiary</h2>'+
+      '<form id="benForm"><div class="grid">'+
+      '<div><label for="bname">Full name</label><input id="bname" required></div>'+
+      '<div><label for="brel">Relationship</label>'+
+      '<select id="brel"><option>Spouse</option><option>Child</option><option>Parent</option><option>Trust</option></select></div>'+
+      '<div><label for="bpct">Share %</label><input id="bpct" inputmode="numeric" value="10"></div>'+
+      '</div><div class="row"><button class="btn primary" type="submit">Add beneficiary</button></div></form>'+
+      '</div>';
+    el("benForm").addEventListener("submit",function(e){
+      e.preventDefault();
+      var b={name:el("bname").value||"New Beneficiary",rel:el("brel").value,pct:parseInt(el("bpct").value||"0",10)};
+      p.beneficiaries.push(b); MEMBERS[s.member_number]=p;
+      routes["/beneficiaries"]();
+    });
+  },
+  "/quote": function(){
+    if(!requireAuth()) return; showNav(true);
+    view().innerHTML =
+      '<div class="card">'+
+      '<div class="steps"><b>1. Quote</b> › 2. Apply › 3. Review › 4. Bind</div>'+
+      '<h1>Get a coverage quote</h1>'+
+      '<form id="quoteForm"><div class="grid">'+
+      '<div><label for="q_coverage">Coverage amount</label>'+
+      '<select id="q_coverage"><option value="100000">$100,000</option><option value="250000" selected>$250,000</option>'+
+      '<option value="500000">$500,000</option><option value="1000000">$1,000,000</option></select></div>'+
+      '<div><label for="q_term">Term</label>'+
+      '<select id="q_term"><option>10 years</option><option selected>20 years</option><option>30 years</option></select></div>'+
+      '<div><label for="q_tobacco">Tobacco use</label>'+
+      '<select id="q_tobacco"><option>No</option><option>Yes</option></select></div>'+
+      '</div><div class="row"><button class="btn gold" type="submit">See my quote</button></div></form>'+
+      '<div id="quoteOut"></div>'+
+      '</div>';
+    el("quoteForm").addEventListener("submit",function(e){
+      e.preventDefault();
+      var cov=parseInt(el("q_coverage").value,10);
+      var est=(cov/250000*18.40*(el("q_tobacco").value==="Yes"?1.8:1)).toFixed(2);
+      sessionStorage.setItem("vkpl_quote", JSON.stringify({coverage:cov,term:el("q_term").value,premium:est}));
+      el("quoteOut").innerHTML='<h2>Your estimated premium</h2>'+
+        '<div class="kv" style="max-width:260px"><div class="k">Monthly</div><div class="v" id="q_premium">'+money(est)+'</div></div>'+
+        '<div class="row"><a class="btn primary" href="#/apply">Apply now</a></div>';
+    });
+  },
+  "/apply": function(){
+    if(!requireAuth()) return; showNav(true);
+    view().innerHTML =
+      '<div class="card">'+
+      '<div class="steps">1. Quote › <b>2. Apply</b> › 3. Review › 4. Bind</div>'+
+      '<h1>Application</h1>'+
+      '<form id="applyForm"><div class="grid">'+
+      '<div><label for="a_first">First name</label><input id="a_first" required></div>'+
+      '<div><label for="a_last">Last name</label><input id="a_last" required></div>'+
+      '<div><label for="a_dob">Date of birth</label><input id="a_dob" type="date" required></div>'+
+      '<div><label for="a_state">State</label>'+
+      '<select id="a_state"><option>TX</option><option>CA</option><option>NY</option><option>FL</option></select></div>'+
+      '</div>'+
+      '<label for="a_health">Any pre-existing conditions?</label>'+
+      '<select id="a_health"><option>No</option><option>Yes</option></select>'+
+      '<div class="row"><button class="btn primary" type="submit">Continue to review</button></div></form>'+
+      '</div>';
+    el("applyForm").addEventListener("submit",function(e){
+      e.preventDefault();
+      sessionStorage.setItem("vkpl_apply", JSON.stringify({
+        first:el("a_first").value,last:el("a_last").value,dob:el("a_dob").value,
+        state:el("a_state").value,health:el("a_health").value}));
+      location.hash="#/review";
+    });
+  },
+  "/review": function(){
+    if(!requireAuth()) return; showNav(true);
+    var q=JSON.parse(sessionStorage.getItem("vkpl_quote")||"{}");
+    var a=JSON.parse(sessionStorage.getItem("vkpl_apply")||"{}");
+    view().innerHTML =
+      '<div class="card">'+
+      '<div class="steps">1. Quote › 2. Apply › <b>3. Review</b> › 4. Bind</div>'+
+      '<h1>Review your application</h1>'+
+      '<div class="grid">'+
+      '<div class="kv"><div class="k">Applicant</div><div class="v">'+((a.first||"")+" "+(a.last||"")).trim()+'</div></div>'+
+      '<div class="kv"><div class="k">Coverage</div><div class="v">'+money(q.coverage||0)+'</div></div>'+
+      '<div class="kv"><div class="k">Term</div><div class="v">'+(q.term||"—")+'</div></div>'+
+      '<div class="kv"><div class="k">Monthly premium</div><div class="v">'+money(q.premium||0)+'</div></div>'+
+      '</div>'+
+      '<div class="row"><button class="btn gold" id="bindBtn">Bind policy</button>'+
+      '<a class="btn ghost" href="#/apply">Edit</a></div>'+
+      '</div>';
+    el("bindBtn").addEventListener("click",function(){ location.hash="#/confirm"; });
+  },
+  "/confirm": function(){
+    if(!requireAuth()) return; showNav(true);
+    var conf="VKPL-"+Math.floor(100000+Math.random()*899999);
+    view().innerHTML =
+      '<div class="card">'+
+      '<div class="steps">1. Quote › 2. Apply › 3. Review › <b>4. Bind</b></div>'+
+      '<h1 class="ok">Policy bound ✓</h1>'+
+      '<p class="sub">Your VKPower Life policy is active.</p>'+
+      '<div class="kv" style="max-width:280px"><div class="k">Confirmation number</div><div class="v" id="confno">'+conf+'</div></div>'+
+      '<div class="row"><a class="btn primary" href="#/dashboard">Back to dashboard</a></div>'+
+      '</div>';
+  }
+};
+
+function render(){
+  var path=(location.hash||"#/login").replace(/^#/,"");
+  var fn = routes[path] || routes["/login"];
+  fn();
+}
+document.getElementById("nav-signout").addEventListener("click",function(e){e.preventDefault();clearSess();location.hash="#/login";});
+window.addEventListener("hashchange",render);
+render();
+</script>
+</body>
+</html>

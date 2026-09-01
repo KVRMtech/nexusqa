@@ -1,0 +1,47 @@
+{{/*
+=================================================================
+Ingress — optional external exposure of the Verdict portal.
+
+Disabled by default. When enabled, routes the client's chosen host to the
+portal Service (which in turn proxies the qe-central API). TLS is
+terminated at the ingress; on-prem, point ingress.tls.secretName at a
+cert the client controls (or wire cert-manager via annotations).
+=================================================================
+*/}}
+{{- if .Values.ingress.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+{{- $svc := printf "%s-verdict-portal" $fullname }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "verdict.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ .Values.portal.port }}
+{{- end }}

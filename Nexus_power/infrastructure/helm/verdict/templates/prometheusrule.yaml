@@ -1,0 +1,214 @@
+{{/*
+=================================================================
+PrometheusRule — SLO recording rules + alerts over the qe-central control-plane
+metrics (the qec_* families exported on /metrics; see servicemonitor.yaml). These
+turn the raw counters into on-call signal: a stuck pipeline, a failing factory
+dependency, tenant-quota pressure. Every expression references a metric the code
+actually emits (app/observability/metrics.py) — no invented series.
+
+Enable with monitoring.prometheusRule.enabled=true (requires the Prometheus
+Operator CRDs — kube-prometheus-stack).
+=================================================================
+*/}}
+{{- if and .Values.monitoring.prometheusRule .Values.monitoring.prometheusRule.enabled }}
+{{- $pr := .Values.monitoring.prometheusRule }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "verdict.fullname" . }}-verdict
+  namespace: {{ $pr.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "verdict.labels" . | nindent 4 }}
+    {{- with $pr.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: verdict.slo.rules
+      rules:
+        # SLO signal: fraction of cycles that reached a CLEAN terminal state (30m).
+        - record: verdict:cycle_success_ratio:30m
+          expr: >-
+            sum(rate(qec_cycles_completed_total{terminal_state=~"done|passed|clean_run_v1"}[30m]))
+            /
+            clamp_min(sum(rate(qec_cycles_completed_total[30m])), 1e-9)
+        # SLO signal: fraction of factory calls returning 5xx (10m).
+        - record: verdict:factory_error_ratio:10m
+          expr: >-
+            sum(rate(qec_factory_calls_total{status=~"5.."}[10m]))
+            /
+            clamp_min(sum(rate(qec_factory_calls_total[10m])), 1e-9)
+    - name: verdict.alerts
+      rules:
+        - alert: VerdictControlPlaneMetricsAbsent
+          expr: absent(qec_cycles_started_total)
+          for: 10m
+          labels:
+            severity: critical
+            service: verdict
+          annotations:
+            summary: "Verdict control-plane metrics absent"
+            description: "No qec_cycles_started_total series for 10m — qe-central /metrics is down or the ServiceMonitor is misconfigured."
+        - alert: VerdictCyclePipelineStalled
+          expr: >-
+            sum(rate(qec_cycles_started_total[30m])) > 0
+            and
+            sum(rate(qec_cycles_completed_total[30m])) == 0
+          for: 15m
+          labels:
+            severity: critical
+            service: verdict
+          annotations:
+            summary: "Verdict cycles start but none complete"
+            description: "Cycles are admitted but none reached a terminal state in 30m — the pipeline is stuck."
+        - alert: VerdictCycleFailureRateHigh
+          expr: >-
+            (1 - verdict:cycle_success_ratio:30m) > {{ $pr.cycleFailureRatio | default 0.25 }}
+          for: 15m
+          labels:
+            severity: warning
+            service: verdict
+          annotations:
+            summary: "Verdict cycle failure rate high"
+            description: "More than {{ $pr.cycleFailureRatio | default 0.25 }} of cycles ended failed/error over 30m."
+        - alert: VerdictFactoryCallErrors
+          expr: sum(rate(qec_factory_calls_total{status=~"5.."}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            service: verdict
+          annotations:
+            summary: "Verdict to factory calls erroring (5xx)"
+            description: "qe-central is seeing 5xx from the VKPower factory over 10m."
+        - alert: VerdictFactoryCallLatencyHigh
+          expr: >-
+            histogram_quantile(0.99, sum(rate(qec_factory_call_duration_seconds_bucket[10m])) by (le))
+            > {{ $pr.factoryP99Seconds | default 90 }}
+          for: 10m
+          labels:
+            severity: warning
+            service: verdict
+          annotations:
+            summary: "Verdict factory call p99 latency high"
+            description: "99th-percentile factory call latency exceeded {{ $pr.factoryP99Seconds | default 90 }}s over 10m."
+        # ── M0.6 CRAWL OBSERVABILITY (qe-explorer: nexus_crawl* families) ──
+        #
+        # THE DEATH ALERT. `up` is synthesised by Prometheus per scrape TARGET,
+        # so this fires when the explorer stops ANSWERING — which is the only
+        # honest liveness signal. Deliberately NOT written against a crawl
+        # metric: a counter that stops advancing means "no crawls right now",
+        # which is a normal idle explorer, and alerting on it would page the
+        # on-call every quiet night. `for: 3m` rides out a rolling restart
+        # (3 consecutive 15s-interval scrapes must fail) without masking a real
+        # outage for long.
+        - alert: VerdictExplorerDown
+          expr: >-
+            up{job=~".*qe-explorer.*"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            service: verdict
+            component: qe-explorer
+          annotations:
+            summary: "Verdict qe-explorer is DOWN"
+            description: "The qe-explorer target {{`{{ $labels.instance }}`}} has failed every scrape for 3m — the crawl engine is unreachable. NO crawl can run while this is firing."
+            likely_cause: "Container crashed/OOMKilled (Chromium is memory-hungry), the pod was evicted, or the refuse-pack fail-closed boot gate refused to start it."
+            runbook: "kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/component=qe-explorer; kubectl logs --previous for the boot error; check for OOMKilled in the last state. Restore before dispatching further crawls — qe-central dispatches will fail 502."
+        # The explorer target has VANISHED from service discovery entirely — a
+        # deleted Service/ServiceMonitor or a selector typo. Distinct from Down:
+        # `up == 0` cannot fire for a target Prometheus no longer knows about,
+        # so without this a mis-labeled Service would silently disarm the death
+        # alert itself.
+        - alert: VerdictExplorerTargetAbsent
+          expr: absent(up{job=~".*qe-explorer.*"})
+          for: 10m
+          labels:
+            severity: critical
+            service: verdict
+            component: qe-explorer
+          annotations:
+            summary: "Verdict qe-explorer scrape target absent"
+            description: "Prometheus has no qe-explorer target at all for 10m — the ServiceMonitor selector, the port name, or the Service itself is wrong."
+            likely_cause: "ServiceMonitor selector does not match the explorer Service labels, the endpoint port is not named `http`, or monitoring.serviceMonitor.enabled=false."
+            runbook: "Check Prometheus /targets for a qe-explorer entry. Verify the ServiceMonitor matchLabels equal the Service labels (app.kubernetes.io/component=qe-explorer) and that the endpoint port name is `http`."
+        # THE MILESTONE ALERT: crawls reaching a terminal state without ever
+        # consulting the oracle. expected="no" ONLY — an oracle that was never
+        # wired (probe/observe posture) legitimately makes zero calls and must
+        # not page anyone. Rate-based with a threshold, not a single occurrence:
+        # one deterministic-advance crawl is normal, a sustained stream of them
+        # means tier-3 is dead and journeys are being catalogued as samples.
+        - alert: VerdictCrawlsCompletingWithoutOracle
+          expr: >-
+            sum(rate(nexus_crawls_no_oracle_total{expected="no"}[30m]))
+            > {{ $pr.noOracleRate | default 0.002 }}
+          for: 15m
+          labels:
+            severity: warning
+            service: verdict
+            component: qe-explorer
+          annotations:
+            summary: "Crawls are completing with ZERO oracle calls"
+            description: "Crawls that WIRED an oracle are reaching a terminal state having never consulted it. These crawls look healthy but catalogue journeys as samples rather than walking them."
+            likely_cause: "qe-central /internal/pick-advance unreachable or 5xx, the per-crawl circuit breaker opening on every consultation, the LLM router unconfigured (503), or the oracle call cap set to 0."
+            runbook: "Check nexus_crawl_oracle_calls_total{outcome=~\"unavailable|circuit_open|cap_reached\"} and nexus_crawl_oracle_failures_total{reason} to separate transport failure from breaker trip. Then check qec_llm_calls_total{outcome!=\"success\"} on qe-central for an LLM-side cause."
+        - alert: VerdictCrawlFailureRateHigh
+          expr: >-
+            sum(rate(nexus_crawls_failed_total[30m]))
+            /
+            clamp_min(sum(rate(nexus_crawls_completed_total[30m])), 1e-9)
+            > {{ $pr.crawlFailureRatio | default 0.25 }}
+          for: 15m
+          labels:
+            severity: warning
+            service: verdict
+            component: qe-explorer
+          annotations:
+            summary: "Verdict crawl failure rate high"
+            description: "More than {{ $pr.crawlFailureRatio | default 0.25 }} of crawls ended in failure over 30m."
+            likely_cause: "Browser launch failures (check failure_kind=browser_launch), the target app unreachable through the egress proxy, or an app change breaking navigation."
+            runbook: "Break down by sum by (failure_kind) (rate(nexus_crawls_failed_total[30m])). browser_launch ⇒ container/shm/memory; crawl_exception ⇒ read the correlated crawl_id from the qec.crawl.event log lines."
+        # Worker contention: qe-central dispatching into a single-flight explorer
+        # that is already busy. A little is normal queueing; a sustained rate
+        # means the fleet is undersized or a crawl is wedged holding the slot.
+        - alert: VerdictExplorerDispatch409Spike
+          expr: >-
+            sum(rate(nexus_crawl_dispatch_409_total[15m]))
+            > {{ $pr.dispatch409Rate | default 0.05 }}
+          for: 15m
+          labels:
+            severity: warning
+            service: verdict
+            component: qe-explorer
+          annotations:
+            summary: "Explorer dispatch 409s elevated (worker contention)"
+            description: "qe-central dispatches are being refused because the explorer's single-flight slot is held. Crawls are being delayed or dropped."
+            likely_cause: "Too few explorer replicas for the crawl rate, or one crawl wedged holding the slot past its wall budget."
+            runbook: "Check nexus_crawl_in_flight and the age of the running crawl via GET /api/v1/explore/{crawl_id}. Scale qeExplorer.replicas, or cancel the wedged crawl."
+        # Token ANOMALY, expressed as a hard ceiling rather than a delta: a
+        # runaway prompt loop shows up as sustained token burn well above any
+        # normal crawl. Left generous by default so it flags a runaway, not a
+        # busy afternoon.
+        - alert: VerdictCrawlTokenBurnAnomalous
+          expr: >-
+            sum(rate(nexus_crawl_llm_tokens_total{kind=~"prompt|completion"}[15m]))
+            > {{ $pr.tokenRatePerSecond | default 500 }}
+          for: 20m
+          labels:
+            severity: warning
+            service: verdict
+            component: qe-explorer
+          annotations:
+            summary: "Anomalous LLM token consumption by crawls"
+            description: "Crawl-driven token consumption has exceeded {{ $pr.tokenRatePerSecond | default 500 }} tokens/sec for 20m."
+            likely_cause: "A pathological app looping the oracle on the same decision point, or an oracle call cap raised too far."
+            runbook: "Break down by sum by (model) (rate(nexus_crawl_llm_tokens_total[15m])). Find the spending crawl from the qec.crawl.event crawl_tokens log lines (Prometheus holds no crawl_id by design)."
+        - alert: VerdictTenantQuotaDenialsElevated
+          expr: sum by (resource) (rate(qec_quota_decisions_total{decision="denied"}[15m])) > {{ $pr.quotaDenyRate | default 0.1 }}
+          for: 15m
+          labels:
+            severity: warning
+            service: verdict
+          annotations:
+            summary: "Verdict tenant quota denials elevated"
+            description: "Tenants are hitting quota on {{`{{ $labels.resource }}`}} — capacity pressure or a runaway tenant."
+{{- end }}

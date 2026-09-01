@@ -1,0 +1,37 @@
+# Verdict box edge (verdict-caddy, host network, /home/srika/Caddyfile on the box).
+#
+# PRODUCTION ACCESS. The sslip.io names depend on a third-party wildcard-DNS
+# service that corporate/ISP resolvers commonly block — presenting to the user as
+# "refused to connect" while the box is healthy. The bare-IP HTTPS site removes
+# that dependency entirely: a PUBLICLY TRUSTED Let's Encrypt IP-address
+# certificate via the short-lived ACME profile (~6-day certs, renewed by Caddy
+# automatically). No DNS involved at all.
+#
+# default_sni: a client connecting to a bare IP sends NO SNI, so Caddy must be
+# told which site/cert answers those handshakes — without it the handshake is
+# simply dropped (curl exit 000) even though the cert was issued.
+#
+# When a real customer domain exists, add its vhost here; Caddy fetches its cert
+# on first reload. The sslip.io vhosts stay for networks that CAN resolve them.
+{
+    default_sni 136.85.106.73
+}
+
+136-85-106-73.sslip.io {
+    reverse_proxy localhost:5273
+}
+vkpowerlife.136-85-106-73.sslip.io {
+    reverse_proxy localhost:8098
+}
+summitlife-admin.136-85-106-73.sslip.io {
+    reverse_proxy localhost:3002
+}
+
+https://136.85.106.73 {
+    tls {
+        issuer acme {
+            profile shortlived
+        }
+    }
+    reverse_proxy localhost:5273
+}

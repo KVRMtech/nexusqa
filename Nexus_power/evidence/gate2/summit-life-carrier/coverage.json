@@ -1,0 +1,2997 @@
+{
+  "advance_blocked": [],
+  "advance_oracle": {
+    "consults": 5,
+    "errors": 0,
+    "latency_ms_total": 0,
+    "picks": 0,
+    "state": "configured",
+    "unavailable": 0
+  },
+  "approvable_boundary": [
+    {
+      "boundary_key": "bnd_e5ba456a0914789c7233",
+      "label": "New Business Queue",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_e928e33131c653b86897",
+      "label": "Submit Application",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_2c3279d397e8a18628f7",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_7ff8db3cd56ba49e4efb",
+      "label": "View all",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_385d9322a45fc83c2c64",
+      "label": "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_b3ac7cd7117356d8b0fb",
+      "label": "Sarah Jennings UW-2026-00143 $5,000,000.00 requirements pending",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_1a6c08247a415647c399",
+      "label": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_991929565bc2e48754e4",
+      "label": "Jennifer Walsh UW-2026-00145 $3,000,000.00 submitted",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/dashboard/overview"
+    },
+    {
+      "boundary_key": "bnd_c876ac525186041d1c89",
+      "label": "Create Customer Profile",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8103/customers/profile"
+    },
+    {
+      "boundary_key": "bnd_fc14b75e4737631bb176",
+      "label": "New Business Queue",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/customers/profile"
+    },
+    {
+      "boundary_key": "bnd_4a302f756d005b973420",
+      "label": "Submit Application",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/customers/profile"
+    },
+    {
+      "boundary_key": "bnd_2fe8af53415ad0c546ec",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/customers/profile"
+    },
+    {
+      "boundary_key": "bnd_06fb3c0378945db6d94a",
+      "label": "New Business Queue",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/policy-admin/in-force"
+    },
+    {
+      "boundary_key": "bnd_e1d0d2c8411c29ca9400",
+      "label": "Submit Application",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/policy-admin/in-force"
+    },
+    {
+      "boundary_key": "bnd_e0b40ddce49d5086d3c8",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/policy-admin/in-force"
+    },
+    {
+      "boundary_key": "bnd_efdb567f4ad309d4cbf5",
+      "label": "New Business Queue",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/claims/reported"
+    },
+    {
+      "boundary_key": "bnd_0fead35e6d018a1a1600",
+      "label": "Submit Application",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/claims/reported"
+    },
+    {
+      "boundary_key": "bnd_cfc07f25b43e075bcf55",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/claims/reported"
+    },
+    {
+      "boundary_key": "bnd_cca931e2164f4ec2b992",
+      "label": "New Business Queue",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "boundary_key": "bnd_ad8d146add2d72e4ab0f",
+      "label": "Submit Application",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "boundary_key": "bnd_7b28c844473d987e842e",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "boundary_key": "bnd_4eba2486414474fa8089",
+      "label": "Cancel",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol"
+    },
+    {
+      "boundary_key": "bnd_f22ad9cc94b7554dd652",
+      "label": "New Business Queue",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol"
+    },
+    {
+      "boundary_key": "bnd_47408c8426146b4c659b",
+      "label": "Submit Application",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.underwrite",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol"
+    },
+    {
+      "boundary_key": "bnd_2611a1b95a256c92f4a7",
+      "label": "Process Payment",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.pay",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol"
+    }
+  ],
+  "auth_blocked": false,
+  "auth_blocked_reason": "",
+  "auth_incomplete": true,
+  "auth_reason": "not_persisted",
+  "boundaries_crossed": 0,
+  "boundary_crossings": [],
+  "crawl_mode": "explore",
+  "discovered_rules": [],
+  "endpoint_inventory": [
+    {
+      "actions": [
+        {
+          "action_token": "a1",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a39",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 1,
+      "first_timestamp_ms": 1202,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 584,
+      "last_timestamp_ms": 562891,
+      "method": "GET",
+      "observed_count": 34,
+      "path_template": "/portal/sign-in",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 34
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a39",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a45",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a64",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 2,
+      "first_timestamp_ms": 7593,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 586,
+      "last_timestamp_ms": 562922,
+      "method": "GET",
+      "observed_count": 32,
+      "path_template": "/dashboard/overview",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 32
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a39",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 3,
+      "first_timestamp_ms": 7766,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 589,
+      "last_timestamp_ms": 562938,
+      "method": "GET",
+      "observed_count": 34,
+      "path_template": "/payments/process",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 34
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a39",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 4,
+      "first_timestamp_ms": 7766,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 590,
+      "last_timestamp_ms": 562952,
+      "method": "GET",
+      "observed_count": 30,
+      "path_template": "/policy-admin/in-force",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 30
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a39",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 5,
+      "first_timestamp_ms": 7782,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 585,
+      "last_timestamp_ms": 562907,
+      "method": "GET",
+      "observed_count": 34,
+      "path_template": "/underwriting/new-business/new-application",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 34
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a39",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 6,
+      "first_timestamp_ms": 7797,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 587,
+      "last_timestamp_ms": 562922,
+      "method": "GET",
+      "observed_count": 32,
+      "path_template": "/underwriting/new-business",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 32
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a80",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 7,
+      "first_timestamp_ms": 7813,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 588,
+      "last_timestamp_ms": 562938,
+      "method": "GET",
+      "observed_count": 30,
+      "path_template": "/customers/profile",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 30
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a44",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 8,
+      "first_timestamp_ms": 7938,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 600,
+      "last_timestamp_ms": 574984,
+      "method": "GET",
+      "observed_count": 270,
+      "path_template": "/underwriting/new-business/{token}/review",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx",
+        "failed"
+      ],
+      "statuses": {
+        "200": 136,
+        "failed": 134
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a22",
+          "label": "Settings",
+          "verb": "click"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 10,
+      "first_timestamp_ms": 7968,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 592,
+      "last_timestamp_ms": 562952,
+      "method": "GET",
+      "observed_count": 67,
+      "path_template": "/settings/preferences",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "4xx",
+        "failed"
+      ],
+      "statuses": {
+        "404": 34,
+        "failed": 33
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a6",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a7",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a11",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a13",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a15",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a17",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a21",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a23",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a26",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a32",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a39",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 11,
+      "first_timestamp_ms": 7984,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 591,
+      "last_timestamp_ms": 562952,
+      "method": "GET",
+      "observed_count": 29,
+      "path_template": "/claims/reported",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 29
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a18",
+          "label": "Reported Claims",
+          "verb": "click"
+        },
+        {
+          "action_token": "a110",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a116",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a124",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a133",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a141",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 126,
+      "first_timestamp_ms": 42484,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 433,
+      "last_timestamp_ms": 354266,
+      "method": "GET",
+      "observed_count": 6,
+      "path_template": "/claims/reported/new-fnol",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 6
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a20",
+          "label": "Product Pricing",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 145,
+      "first_timestamp_ms": 47718,
+      "has_server_error": false,
+      "host": "127.0.0.1:8103",
+      "last_sequence": 146,
+      "last_timestamp_ms": 47734,
+      "method": "GET",
+      "observed_count": 2,
+      "path_template": "/actuarial/product-pricing",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 2
+      }
+    }
+  ],
+  "endpoint_inventory_truncated": false,
+  "expansions_opened": 0,
+  "expansions_skipped": 0,
+  "field_ledger": [
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "First Name",
+      "provenance": "synthesized",
+      "semantic_type": "given_name",
+      "sensitive": true,
+      "signature": "f1f681ea2d53613c865959331447d2e2",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "Last Name",
+      "provenance": "synthesized",
+      "semantic_type": "family_name",
+      "sensitive": true,
+      "signature": "5770580e2130a2a007f2cb31e0db1257",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Date of Birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "7f510ea7baa3531d4a26a05a7b87103b",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "SSN",
+      "provenance": "synthesized",
+      "semantic_type": "national_id",
+      "sensitive": true,
+      "signature": "3a282fe30784621c168ee46e23b390ad",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.9,
+      "filled": true,
+      "name": "Phone",
+      "provenance": "synthesized",
+      "semantic_type": "phone",
+      "sensitive": true,
+      "signature": "1dee6c8e54171ebd908742778a249ed7",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.9,
+      "filled": true,
+      "name": "Email Address",
+      "provenance": "synthesized",
+      "semantic_type": "email",
+      "sensitive": true,
+      "signature": "1183e3dbb35de8ea904fca4de9bd75b7",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Street Address",
+      "provenance": "synthesized",
+      "semantic_type": "street_address",
+      "sensitive": true,
+      "signature": "d24af1eeea6a2082183179cfeb917869",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "City",
+      "provenance": "synthesized",
+      "semantic_type": "city",
+      "sensitive": false,
+      "signature": "8fcad6901839f6523f4c100401305842",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": false,
+      "name": "State",
+      "options": [],
+      "provenance": "needs_input",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "f34b0680da37f161cac95f1b5727be37",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "ZIP Code",
+      "provenance": "synthesized",
+      "semantic_type": "postal_code",
+      "sensitive": false,
+      "signature": "79ee2994b7260f7cc20c387b2c78a16b",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Occupation",
+      "provenance": "synthesized",
+      "semantic_type": "job_title",
+      "sensitive": false,
+      "signature": "aa88240768fc4c53bc650275163c0b50",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Employer",
+      "provenance": "synthesized",
+      "semantic_type": "company",
+      "sensitive": false,
+      "signature": "b29f80fb1f63f1021c7a3be321e29bdd",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Annual Income",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "352599e3ecdf232392b736321ada4726",
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Search policies...",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "d38ec571e95c9ba090e568210e387657",
+      "url": "http://127.0.0.1:8103/policy-admin/in-force",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Search claims...",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "5efe3f97563bb0bd1c927a8ad28db83e",
+      "url": "http://127.0.0.1:8103/claims/reported",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Age",
+      "provenance": "synthesized",
+      "semantic_type": "age",
+      "sensitive": false,
+      "signature": "8968b80f2764c01b7b7dbd62f0d3a13c",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "name": "Gender",
+      "options": [],
+      "provenance": "needs_input",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "ec243d3f3ae1f79b25433fb8078cc486",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "name": "Product",
+      "options": [],
+      "provenance": "needs_input",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "7433c2321ab15b5040af4e7191f1e6c5",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Face Amount",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "83b289bc654fe6a5616b7cbb573cc274",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "name": "Risk Classification",
+      "options": [],
+      "provenance": "needs_input",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "5de2bccae98398043f5768f7374c4f62",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.45,
+      "filled": false,
+      "name": "Tobacco Use",
+      "options": [
+        "checked",
+        "unchecked"
+      ],
+      "provenance": "needs_input",
+      "semantic_type": "consent",
+      "sensitive": false,
+      "signature": "2ba866071974ebb19a79808c8d057097",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "widget": "toggle"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Policy Number",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "88c1f8da7185c23cf3d8a10de1624055",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "name": "Claim Type",
+      "options": [],
+      "provenance": "needs_input",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "64d0d4ceb2b1f1735eec4988cc1958b2",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "widget": "aria_combobox"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Date of Loss",
+      "provenance": "synthesized",
+      "semantic_type": "date",
+      "sensitive": false,
+      "signature": "cfe3d9f6c160bebf18b9c74a498bd03c",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Relationship to Insured",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "cd4c4a91168d126235549f6c24a7f916",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "widget": "text"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.9,
+      "filled": true,
+      "name": "Phone Number",
+      "provenance": "synthesized",
+      "semantic_type": "phone",
+      "sensitive": true,
+      "signature": "84725fd1ebf7dbc2d05fc6e2e56a015d",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Cause of Death (if applicable)",
+      "provenance": "synthesized",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "8071e1e41239e23e890f237ff7a81e5e",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Circumstances Description",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "a14826db55ee8fe9942c76c135cb6797",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "widget": "text"
+    }
+  ],
+  "fields_inferred": [
+    "First Name",
+    "Last Name",
+    "Date of Birth",
+    "SSN",
+    "Phone",
+    "Email Address",
+    "Street Address",
+    "City",
+    "ZIP Code",
+    "Occupation",
+    "Employer",
+    "Annual Income",
+    "Search policies...",
+    "Search claims...",
+    "Age",
+    "Face Amount",
+    "Policy Number",
+    "Date of Loss",
+    "Relationship to Insured",
+    "Phone Number",
+    "Cause of Death (if applicable)",
+    "Circumstances Description"
+  ],
+  "fields_needing_seed": [
+    "State",
+    "Gender",
+    "Product",
+    "Risk Classification",
+    "Tobacco Use",
+    "Claim Type"
+  ],
+  "fields_needing_seed_detail": [
+    {
+      "label": "State",
+      "url": "http://127.0.0.1:8103/customers/profile"
+    },
+    {
+      "label": "Gender",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "label": "Product",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "label": "Risk Classification",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "label": "Tobacco Use",
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "label": "Claim Type",
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol"
+    }
+  ],
+  "filled_by_kind": {
+    "date": 2,
+    "text": 23
+  },
+  "flow_summary": {
+    "advance_contradicts_fills": 0,
+    "advances_by_tier": {},
+    "boundaries_crossed": 0,
+    "branch_coverage": false,
+    "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+    "deepest_flow_capped": false,
+    "deepest_flow_proven_steps": 1,
+    "deepest_flow_steps": 1,
+    "deepest_flow_terminal": "submit_boundary",
+    "flows_completed": 5,
+    "flows_found": 5,
+    "flows_fully_answered": 2,
+    "flows_truncated": 0,
+    "intent_unmet": 0,
+    "journeys_completed": 0,
+    "oracle_advances": 0,
+    "truncation_reasons": {}
+  },
+  "flows": [
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "68ed6bb6bb946c2a854ab5d6b3f51315ffcfd75f097058204d7eed41a67f117c",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8103/customers/profile",
+      "fields_filled_total": 12,
+      "fields_unanswered": 1,
+      "flow_id": "b894ed0e33b6c67f4e25306b",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "control_label": "State",
+              "control_signature": "f34b0680da37f161cac95f1b5727be37",
+              "options": [],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 12,
+          "fields_unfilled": 1,
+          "fingerprint": "68ed6bb6bb946c2a854ab5d6b3f51315ffcfd75f097058204d7eed41a67f117c",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8103/customers/profile"
+        }
+      ],
+      "terminal": "submit_boundary",
+      "terminal_url": "http://127.0.0.1:8103/customers/profile"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "44c4db8272738b765b0fc5ce08278d99efa4f2b4f9509cc1d46efaac1b969301",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8103/policy-admin/in-force",
+      "fields_filled_total": 1,
+      "fields_unanswered": 0,
+      "flow_id": "2994d2f88bdf9b5327c3ee86",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Indexed Universal",
+          "value": "$2,500,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Indexed Universal",
+          "value": "$4,875.00/annual",
+          "value_type": "currency"
+        },
+        {
+          "label": "",
+          "value": "$0.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Whole Life",
+          "value": "$500,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Whole Life",
+          "value": "$8,420.00/annual",
+          "value_type": "currency"
+        },
+        {
+          "label": "",
+          "value": "$14,250.80",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "fields_filled": 1,
+          "fields_unfilled": 0,
+          "fingerprint": "44c4db8272738b765b0fc5ce08278d99efa4f2b4f9509cc1d46efaac1b969301",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8103/policy-admin/in-force"
+        }
+      ],
+      "terminal": "no_advance",
+      "terminal_url": "http://127.0.0.1:8103/policy-admin/in-force"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "a5a0beb2589058f637c6e1e2b8d11189e9df5471141d7921abc2e13b71fefa7a",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8103/claims/reported",
+      "fields_filled_total": 1,
+      "fields_unanswered": 0,
+      "flow_id": "cd965efaf8d7025aa21cfc0d",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "death",
+          "value": "$1,500,000.00",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "fields_filled": 1,
+          "fields_unfilled": 0,
+          "fingerprint": "a5a0beb2589058f637c6e1e2b8d11189e9df5471141d7921abc2e13b71fefa7a",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8103/claims/reported"
+        }
+      ],
+      "terminal": "no_advance",
+      "terminal_url": "http://127.0.0.1:8103/claims/reported"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "65179b6f71845c10ec0f01df31c6b148f83e927d2807fd66a0cb29617e9cef69",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "fields_filled_total": 2,
+      "fields_unanswered": 4,
+      "flow_id": "a3533672591ee1d053ebbcec",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Product",
+          "value": "Rate/$1K",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$0.52",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$0.38",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$0.08",
+          "value_type": "currency"
+        },
+        {
+          "label": "",
+          "value": "$0.06",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$0.41",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$0.30",
+          "value_type": "currency"
+        },
+        {
+          "label": "",
+          "value": "$0.05",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$1.28",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$0.98",
+          "value_type": "currency"
+        },
+        {
+          "label": "term life 20",
+          "value": "$0.18",
+          "value_type": "currency"
+        },
+        {
+          "label": "",
+          "value": "$0.12",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "control_label": "Gender",
+              "control_signature": "ec243d3f3ae1f79b25433fb8078cc486",
+              "options": [],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Product",
+              "control_signature": "7433c2321ab15b5040af4e7191f1e6c5",
+              "options": [],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Risk Classification",
+              "control_signature": "5de2bccae98398043f5768f7374c4f62",
+              "options": [],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Tobacco Use",
+              "control_signature": "2ba866071974ebb19a79808c8d057097",
+              "options": [
+                "checked",
+                "unchecked"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 2,
+          "fields_unfilled": 4,
+          "fingerprint": "65179b6f71845c10ec0f01df31c6b148f83e927d2807fd66a0cb29617e9cef69",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8103/actuarial/product-pricing"
+        }
+      ],
+      "terminal": "no_advance",
+      "terminal_url": "http://127.0.0.1:8103/actuarial/product-pricing"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "5d9ace490db0f91380baf868a884a0183fdc5cfd0529594ddc02a48510cecaa4",
+      "entry_title": "Summit Life Carrier Administration",
+      "entry_url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "fields_filled_total": 9,
+      "fields_unanswered": 1,
+      "flow_id": "84369f10371d8670cb3382b6",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "2",
+          "value": "$3,000,000.00 total face",
+          "value_type": "currency"
+        },
+        {
+          "label": "1",
+          "value": "$1,500,000.00 exposure",
+          "value_type": "currency"
+        },
+        {
+          "label": "Portfolio Performance",
+          "value": "98.2%",
+          "value_type": "percent"
+        },
+        {
+          "label": "UW-2026-00142",
+          "value": "$2,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "UW-2026-00143",
+          "value": "$5,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "UW-2026-00144",
+          "value": "$1,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "UW-2026-00145",
+          "value": "$3,000,000.00",
+          "value_type": "currency"
+        },
+        {
+          "label": "Application submitted",
+          "value": "Jennifer Walsh \u2014 $3,000,000.00 term life 30",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "control_label": "Claim Type",
+              "control_signature": "64d0d4ceb2b1f1735eec4988cc1958b2",
+              "options": [],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 9,
+          "fields_unfilled": 1,
+          "fingerprint": "5d9ace490db0f91380baf868a884a0183fdc5cfd0529594ddc02a48510cecaa4",
+          "title": "Summit Life Carrier Administration",
+          "url": "http://127.0.0.1:8103/claims/reported/new-fnol"
+        }
+      ],
+      "terminal": "submit_boundary",
+      "terminal_url": "http://127.0.0.1:8103/claims/reported/new-fnol"
+    }
+  ],
+  "forms_confirmed": 0,
+  "forms_found": 5,
+  "forms_submitted": 0,
+  "inventory_failure_detail": "",
+  "inventory_failures": 0,
+  "journeys_completed": 0,
+  "network_events_observed": 600,
+  "network_server_error_count": 0,
+  "network_server_errors": [],
+  "opaque_surfaces": [],
+  "open_choice_unverified": 0,
+  "outcome_milestones": [],
+  "rule_reuse": {
+    "hits": 0,
+    "known": 0,
+    "lookups": 0,
+    "misses": 0,
+    "reuse_rate": 0.0
+  },
+  "states": [
+    {
+      "ax_fingerprint": "f48d963a38df401958976e719e949d7d3dabf6fb533d3643357d54e0b8d15a93",
+      "controls_total": 7,
+      "danger_controls": 0,
+      "danger_names": [],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Corporate Email": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_0_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Password": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "password"
+        }
+      },
+      "location": "http://127.0.0.1:8103/portal/sign-in",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "8f6dd585062d80a98f0ab9da4335d4360dc55b2b6440e80eabce8b076c3881b7",
+      "controls_total": 20,
+      "danger_controls": 8,
+      "danger_names": [
+        "New Business Queue",
+        "Submit Application",
+        "Process Payment",
+        "View all",
+        "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting",
+        "Sarah Jennings UW-2026-00143 $5,000,000.00 requirements pending",
+        "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+        "Jennifer Walsh UW-2026-00145 $3,000,000.00 submitted"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/actuarial/product-pricing",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/claims/reported/new-fnol",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8103/dashboard/overview",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "68ed6bb6bb946c2a854ab5d6b3f51315ffcfd75f097058204d7eed41a67f117c",
+      "controls_total": 31,
+      "danger_controls": 3,
+      "danger_names": [
+        "New Business Queue",
+        "Submit Application",
+        "Process Payment"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Annual Income": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "_r_36_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "City": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_30_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Date of Birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_2r_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "date"
+        },
+        "Email Address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_2u_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Employer": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_35_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "First Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_2p_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Last Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_2q_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Occupation": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_34_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Phone": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_2t_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "SSN": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_2s_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "State": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_31_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Street Address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_2v_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "ZIP Code": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_33_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8103/customers/profile",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "44c4db8272738b765b0fc5ce08278d99efa4f2b4f9509cc1d46efaac1b969301",
+      "controls_total": 28,
+      "danger_controls": 3,
+      "danger_names": [
+        "New Business Queue",
+        "Submit Application",
+        "Process Payment"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Search policies...": {
+          "locator": {
+            "bindable": true,
+            "role": "textbox",
+            "strategy": "accessible_name",
+            "value": "Search policies...",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8103/policy-admin/in-force",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "a5a0beb2589058f637c6e1e2b8d11189e9df5471141d7921abc2e13b71fefa7a",
+      "controls_total": 29,
+      "danger_controls": 3,
+      "danger_names": [
+        "New Business Queue",
+        "Submit Application",
+        "Process Payment"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported/new-fnol",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Search claims...": {
+          "locator": {
+            "bindable": true,
+            "role": "textbox",
+            "strategy": "accessible_name",
+            "value": "Search claims...",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8103/claims/reported",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "65179b6f71845c10ec0f01df31c6b148f83e927d2807fd66a0cb29617e9cef69",
+      "controls_total": 22,
+      "danger_controls": 3,
+      "danger_names": [
+        "New Business Queue",
+        "Submit Application",
+        "Process Payment"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Age": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "_r_1h_-form-item",
+            "verified": true
+          },
+          "max": "85",
+          "min": "18",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Face Amount": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "_r_1m_-form-item",
+            "verified": true
+          },
+          "min": "25000",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "step": "25000",
+          "type": "text"
+        },
+        "Gender": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_1i_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Product": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_1k_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Risk Classification": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_1n_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Tobacco Use": {
+          "locator": {
+            "bindable": false,
+            "role": "checkbox",
+            "strategy": "dom_id",
+            "value": "_r_1p_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "checkbox"
+        }
+      },
+      "location": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "d1c0a38bfd27edb5655ba09b836a5bfa77af011895728329d59073bbedb466b6",
+      "controls_total": 1,
+      "danger_controls": 0,
+      "danger_names": [],
+      "endpoints": [],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8103/settings/preferences",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "5d9ace490db0f91380baf868a884a0183fdc5cfd0529594ddc02a48510cecaa4",
+      "controls_total": 28,
+      "danger_controls": 3,
+      "danger_names": [
+        "New Business Queue",
+        "Submit Application",
+        "Process Payment"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/claims/reported",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/customers/profile",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/dashboard/overview",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/payments/process",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/policy-admin/in-force",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/sign-in",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-2c8d4e1f/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-5a1b9c3d/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-7f3a9b2e/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/app-8e2f6a4b/review",
+          "response_mime": "text/x-component",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/underwriting/new-business/new-application",
+          "response_mime": "text/x-component",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Cause of Death (if applicable)": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1i_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Circumstances Description": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1j_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Claim Type": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "_r_1a_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "select"
+        },
+        "Date of Loss": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1c_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "date"
+        },
+        "Email Address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1h_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "First Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1d_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Last Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1e_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Phone Number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1g_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Policy Number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_19_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Relationship to Insured": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "_r_1f_-form-item",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "question_groups": []
+    }
+  ],
+  "submit_candidates": [
+    "Continue",
+    "3",
+    "MC Margaret Chen",
+    "Policy Number",
+    "Insured",
+    "Product",
+    "Face Amount",
+    "Premium",
+    "Cash Value",
+    "Status",
+    "Effective",
+    "New FNOL",
+    "Claim Number",
+    "Type",
+    "Contestable",
+    "Reported",
+    "Calculate Premium",
+    "Record FNOL"
+  ],
+  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 5 form(s) found; 22 field(s) auto-filled with a default; 6 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 25 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
+  "tab_views_recorded": 0,
+  "traversal": "full",
+  "unblock_irreversible": [],
+  "unhandled_controls": [],
+  "vision_budget": {
+    "breaker_open": false,
+    "breaker_threshold": 3,
+    "calls": 0,
+    "consecutive_failures": 0,
+    "failures": 0,
+    "gate": {
+      "attestation_rung": "none",
+      "attested": false,
+      "enabled": false,
+      "reason": "no_oracle",
+      "tenant_enabled": false
+    },
+    "latency_ms": 0,
+    "max_calls": 0,
+    "refusals": {},
+    "timeout_s": 20.0
+  },
+  "vision_ledger": [],
+  "vision_refused": 0,
+  "vision_verified": 0
+}

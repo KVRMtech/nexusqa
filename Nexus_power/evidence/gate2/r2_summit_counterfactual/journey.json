@@ -1,0 +1,310 @@
+{
+  "app": "summit-life-carrier",
+  "target_url": "http://127.0.0.1:8103/",
+  "explorer_version": "qe-explorer/1.0+inv-js-v12",
+  "produced_by": {
+    "head": "e24bcf54d0883a452185d49cfabe81f40458ccd3",
+    "dirty": false,
+    "dirty_paths": []
+  },
+  "commit_control": "Submit Application",
+  "grants": [
+    {
+      "control": "Submit Application",
+      "approved_by": "gate2-operator",
+      "max_crossings": 1,
+      "role": "commit",
+      "url": "http://127.0.0.1:8103/underwriting/new-business/new-application"
+    }
+  ],
+  "known_blockers": [],
+  "oracle_source": "deterministic-stub",
+  "oracle_telemetry": {},
+  "oracle_decisions": [
+    {
+      "url": "http://127.0.0.1:8103/dashboard/overview",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "View all",
+        "Sarah Jennings UW-2026-00143 $5,000,000.00 requirements pending",
+        "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+        "Jennifer Walsh UW-2026-00145 $3,000,000.00 submitted"
+      ],
+      "picked": "Robert Vasquez UW-2026-00144 $1,000,000.00 in review",
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/underwriting/new-business/app-5a1b9c3d/review",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Requirements",
+        "Requirements",
+        "Risk Decision",
+        "Risk Decision",
+        "Overview",
+        "Health Profile",
+        "Financial",
+        "Vendor Reports (4)",
+        "Suspense (0)",
+        "Notes (1)",
+        "Overview"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/underwriting/new-business",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "New Application",
+        "Case Number",
+        "Applicant",
+        "Product",
+        "Face Amount",
+        "Status",
+        "Underwriter",
+        "Submitted"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/customers/profile",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/policy-admin/in-force",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Policy Number",
+        "Insured",
+        "Product",
+        "Face Amount",
+        "Premium",
+        "Cash Value",
+        "Status",
+        "Effective"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/claims/reported",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "New FNOL",
+        "New FNOL",
+        "Claim Number",
+        "Insured",
+        "Type",
+        "Face Amount",
+        "Status",
+        "Contestable",
+        "Reported"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/actuarial/product-pricing",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Calculate Premium"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/underwriting/new-business/new-application",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Applicant",
+        "Address & Employment",
+        "Coverage",
+        "Health"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/claims/reported/new-fnol",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Record FNOL"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/underwriting/new-business/app-2c8d4e1f/review",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Requirements",
+        "Requirements",
+        "Risk Decision",
+        "Risk Decision",
+        "Overview",
+        "Health Profile",
+        "Financial",
+        "Vendor Reports (2)",
+        "Suspense (2)",
+        "Notes (1)",
+        "Overview"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    },
+    {
+      "url": "http://127.0.0.1:8103/underwriting/new-business/app-8e2f6a4b/review",
+      "title": "Summit Life Carrier Administration",
+      "candidates": [
+        "Dashboard",
+        "New Business Queue",
+        "New Customer",
+        "In-Force Policies",
+        "Reported Claims",
+        "Product Pricing",
+        "Settings",
+        "3",
+        "MC Margaret Chen",
+        "Requirements",
+        "Requirements",
+        "Risk Decision",
+        "Risk Decision",
+        "Overview",
+        "Health Profile",
+        "Financial",
+        "Vendor Reports (0)",
+        "Suspense (0)",
+        "Notes (0)",
+        "Overview"
+      ],
+      "picked": null,
+      "tier3_source": "deterministic-stub"
+    }
+  ],
+  "boundaries_crossed": 0,
+  "crossings": [],
+  "crossings_refused": [],
+  "outcome_milestones": [],
+  "confirmation_observed": false,
+  "confirmation_rungs": [],
+  "confirmation_details": [],
+  "telemetry": {
+    "flows_found": 10,
+    "flows_completed": 10,
+    "journeys_completed": 0,
+    "boundaries_crossed": 0,
+    "deepest_flow_steps": 2,
+    "deepest_flow_proven_steps": 2,
+    "deepest_flow_capped": false,
+    "deepest_flow_terminal": "no_advance",
+    "advances_by_tier": {
+      "3": 1
+    },
+    "oracle_advances": 1
+  },
+  "stop_reason": null,
+  "approvable_boundaries_seen": [
+    "Cancel",
+    "Create Customer Profile",
+    "Michael Thornberry UW-2026-00142 $2,000,000.00 underwriting",
+    "Process Payment",
+    "Review & Submit",
+    "Submit Application"
+  ]
+}

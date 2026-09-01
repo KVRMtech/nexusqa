@@ -1,0 +1,97 @@
+{
+  "purpose": "Prove the walker descends SAME-ORIGIN iframes and stamps each captured control with a frame_selector that resolves back to the owning frame the same way page.frameLocator() would.",
+  "targeted_defect": "BUG-IFRAME-SELECTOR: frameSelectorFor() interpolates the iframe's id/name/title/src into a CSS selector with NO escaping (inventory_js.py:546-557), while the sibling label[for] lookup 12 lines up correctly uses CSS.escape. An id containing a metacharacter or a name containing a quote yields a selector that is wrong or unparseable, so every control in that frame is recorded against a frame that cannot be re-bound.",
+  "lanes": [
+    "jsdom",
+    "playwright"
+  ],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 8,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "input#order-ref"
+      },
+      "fields": {
+        "name": "Order Reference",
+        "name_source": "label-for",
+        "frame_selector": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#billing-zip"
+      },
+      "fields": {
+        "name": "Billing ZIP",
+        "name_source": "label-for",
+        "required": true,
+        "frame_selector": "iframe#billing"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "select#quote-term"
+      },
+      "fields": {
+        "name": "Term Length",
+        "name_source": "label-for",
+        "role": "combobox",
+        "options_total": 3
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#beneficiary-name"
+      },
+      "fields": {
+        "name": "Beneficiary Name",
+        "name_source": "label-for",
+        "frame_selector": "iframe[title=\"Beneficiary details\"]"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#consent"
+      },
+      "fields": {
+        "name": "I consent to the disclosure",
+        "name_source": "wrapping-label",
+        "role": "checkbox",
+        "frame_selector": "iframe[src=\"child-consent.html\"]"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#referral"
+      },
+      "fields": {
+        "name": "Referral Code",
+        "name_source": "label-for",
+        "frame_selector": "iframe >> nth=5"
+      }
+    }
+  ],
+  "describes_correct_behaviour": [
+    {
+      "where": {
+        "css_hint": "input#card-name"
+      },
+      "fields": {
+        "frame_selector": "iframe#pay\\.frame"
+      }
+    },
+    {
+      "where": {
+        "css_hint": "select#quote-term"
+      },
+      "fields": {
+        "frame_selector": "iframe[name=\"quote\\\"frame\"]"
+      }
+    }
+  ],
+  "frame_selector_recipe": {
+    "why": "frameSelectorFor() is a five-rung fallback chain (id -> name -> title -> src -> positional). Every rung is exercised here, because the two DEFECTIVE rungs sit in the middle of it and a fixture covering only the first would report the recipe healthy.",
+    "expect_distinct_frame_selectors": 7
+  }
+}

@@ -1,0 +1,111 @@
+# -----------------------------------------------------------------------------
+# VKPower Verdict - Prometheus scrape configuration (Phase 7, fleet-scale)
+#
+# Drop-in prometheus.yml for the Verdict "dedicated box" deploy
+# (docker-compose.qec.yml + scripts/verdict_box_bootstrap.sh). It scrapes the
+# QE-Central control-plane /metrics exposition and the supporting fleet
+# exporters, and loads the fleet alert rules.
+#
+# The metric families come from platform/qe-central/app/observability/metrics.py
+# (import-guarded prometheus_client, a DEDICATED registry, low-cardinality
+# labels - NO tenant_id / app_id / raw URL ever a label). The exposition route is
+# built by build_metrics_router() at QEC_METRICS_PATH (default /metrics), mounted
+# OUTSIDE /api so it needs no JWT (same public posture as /health). Metrics are
+# ON by default when prometheus_client is importable; a deploy can disable them
+# with QEC_METRICS_ENABLED=0.
+#
+# WIRING (verdict_box_bootstrap.sh style): run a prometheus container on the
+# qec-internal / nexus docker network with this file mounted at
+# /etc/prometheus/prometheus.yml and alerts-verdict.yml alongside it. The static
+# targets below use the docker-compose service DNS names.
+#
+# yaml.safe_load-valid (see scripts self-check in the runbook).
+# -----------------------------------------------------------------------------
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    # Set per deployed fleet so a central Prometheus/Alertmanager (if you
+    # federate multiple client boxes) can route by fleet. Override at deploy.
+    fleet: "verdict-default"
+
+# Fleet alert rules live next to this file (mount both into /etc/prometheus).
+rule_files:
+  - alerts-verdict.yml
+
+# Alertmanager is OPTIONAL - leave the targets empty for a scrape-only setup, or
+# point at your Alertmanager service. Kept here so the wiring seam is explicit.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # -- QE-Central control plane (THE product signal) --------------------------
+  # qe-central listens on 8093; the metrics route is QEC_METRICS_PATH (/metrics).
+  # Run N replicas behind this job (add each replica's target, or use DNS SD) so
+  # the fleet dashboards aggregate across replicas.
+  - job_name: qe-central
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - "qe-central:8093"
+        labels:
+          component: control-plane
+          service: qe-central
+    # The dedicated registry never emits secrets/PII, so no auth is required.
+
+  # -- Prometheus self-monitoring (scrape-health baseline) --------------------
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - "localhost:9090"
+
+  # -- Node exporter - host CPU/mem/disk AND the backup/restore-drill freshness
+  #    textfile metrics. verdict_pg_backup.sh writes
+  #    verdict_backup_last_success_timestamp_seconds and
+  #    verdict_restore_drill_last_success_timestamp_seconds into
+  #    NODE_EXPORTER_TEXTFILE_DIR (see the runbook); node_exporter's
+  #    --collector.textfile.directory exposes them here. Deploy node_exporter on
+  #    the box for the RestoreDrillMissed / BackupStale alerts to have a source.
+  - job_name: node
+    static_configs:
+      - targets:
+          - "node-exporter:9100"
+        labels:
+          component: host
+
+  # -- Redis exporter - the distributed admission limiter store. Redis is
+  #    FAIL-CLOSED (a Redis outage stalls the fleet by design), so its health is
+  #    load-bearing at fleet scale and MUST be HA. Deploy redis_exporter against
+  #    the stack redis (docker-compose.qec.yml QEC_REDIS_URL db 3).
+  - job_name: redis
+    static_configs:
+      - targets:
+          - "redis-exporter:9121"
+        labels:
+          component: limiter-store
+
+  # -- Postgres exporter - the evidence system-of-record + qecentral control DB.
+  #    Feeds DB-growth / connection-saturation panels for capacity planning.
+  - job_name: postgres
+    static_configs:
+      - targets:
+          - "postgres-exporter:9187"
+        labels:
+          component: system-of-record
+
+  # -- Pushgateway (OPTIONAL) - for one-shot/cron jobs that cannot be scraped
+  #    directly (an alternative to the node_exporter textfile collector for the
+  #    backup/restore-drill freshness metrics). honor_labels so pushed job/fleet
+  #    labels survive.
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets:
+          - "pushgateway:9091"
+        labels:
+          component: batch

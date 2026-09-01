@@ -1,0 +1,161 @@
+{{/*
+=================================================================
+repo-intel — OFF the critical path (design §3.3). Disabled by default.
+
+Reads the qecentral DB (its own tables) + the factory `nexus` DB
+(READ-ONLY page_visits via qec_substrate) and clones the client repo over
+the internet. It NEVER writes a VKPower table and is consumed fail-open (a
+missing seed-manifest ⇒ the crawler runs blind). Enable only when repo
+intelligence is wanted for a tenant.
+=================================================================
+*/}}
+{{- if .Values.repoIntel.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+{{- $pgEndpoint := include "verdict.pgEndpoint" . }}
+{{- $kekDir := dir .Values.kek.localKekPath }}
+{{- $kekFile := base .Values.kek.localKekPath }}
+{{- if eq .Values.repoIntel.workdir.mode "pvc" }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-repo-intel-workdir
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "repo-intel") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.repoIntel.workdir.size }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-repo-intel
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "repo-intel") | nindent 4 }}
+spec:
+  replicas: {{ .Values.repoIntel.replicas }}
+  selector:
+    matchLabels:
+      {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "repo-intel") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "repo-intel") | nindent 8 }}
+      annotations:
+        {{- include "verdict.podAnnotations" $root | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "verdict.fullname" .) }}
+      {{- include "verdict.podSpecCommon" $root | nindent 6 }}
+      securityContext:
+        {{- include "verdict.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: repo-intel
+          image: {{ include "verdict.image" (dict "root" $root "name" .Values.repoIntel.image.name "tag" .Values.repoIntel.image.tag) }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.repoIntel.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "verdict.configName" $root }}
+          env:
+            - name: NEXUS_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "verdict.secretName" $root }}
+                  key: jwt-secret
+            - name: QEC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "verdict.secretName" $root }}
+                  key: qec-db-password
+            - name: QEC_SUBSTRATE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "verdict.secretName" $root }}
+                  key: substrate-db-password
+            - name: QEC_DATABASE_URL
+              value: "postgresql+asyncpg://{{ .Values.postgres.user }}:$(QEC_DB_PASSWORD)@{{ $pgEndpoint }}/{{ .Values.postgres.database }}"
+            - name: NEXUS_DATABASE_URL_SUBSTRATE
+              value: "postgresql+asyncpg://{{ .Values.factory.substrate.user }}:$(QEC_SUBSTRATE_DB_PASSWORD)@{{ .Values.factory.substrate.host }}:{{ .Values.factory.substrate.port }}/{{ .Values.factory.substrate.database }}"
+            {{- include "verdict.kekEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.repoIntel.resources | nindent 12 }}
+          securityContext:
+            {{- include "verdict.containerSecurityContext" . | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: workdir
+              mountPath: /app/service/data/repos
+            - name: kek
+              mountPath: {{ $kekDir | quote }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workdir
+          {{- if eq .Values.repoIntel.workdir.mode "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-repo-intel-workdir
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.repoIntel.workdir.size }}
+          {{- end }}
+        - name: kek
+          {{- if eq .Values.kek.persistence.mode "secret" }}
+          secret:
+            secretName: {{ .Values.kek.persistence.secret.name }}
+            items:
+              - key: {{ .Values.kek.persistence.secret.key }}
+                path: {{ $kekFile }}
+          {{- else }}
+          # local-KEK sharing across services requires kek.persistence.mode=secret
+          # (or a KMS provider); this ephemeral dir is used only for kms/dev modes.
+          emptyDir:
+            sizeLimit: {{ .Values.kek.persistence.size }}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-repo-intel
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "repo-intel") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.repoIntel.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "repo-intel") | nindent 4 }}
+{{- end }}

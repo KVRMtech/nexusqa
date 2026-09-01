@@ -1,0 +1,4755 @@
+{
+  "advance_blocked": [
+    {
+      "business_rule": "Continue requires an answer to 'product = Term Life Insurance Affordable coverage for a spec' before it is enabled (proven: the app enabled it when the agent answered)",
+      "label": "Continue",
+      "missing_fields": [
+        "Term Life Insurance Affordable coverage for a specific period",
+        "Whole Life Insurance Lifetime coverage with cash value accumulation",
+        "Universal Life Insurance Flexible premiums and adjustable death benefit",
+        "Variable Universal Life Investment options with life insurance protection"
+      ],
+      "reason": "advance_disabled_by_app_validation",
+      "resolved_by_agent": "Term Life Insurance Affordable coverage for a specific period",
+      "rule_reused": false,
+      "url": "http://127.0.0.1:8101/life-insurance/quote/start/"
+    }
+  ],
+  "advance_oracle": {
+    "consults": 4,
+    "errors": 0,
+    "latency_ms_total": 0,
+    "picks": 4,
+    "state": "configured",
+    "unavailable": 0
+  },
+  "approvable_boundary": [
+    {
+      "boundary_key": "bnd_ac68573c6e6423e62bba",
+      "label": "Apply Now",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/review/"
+    },
+    {
+      "boundary_key": "bnd_06b60205ac7f11b77829",
+      "label": "Continue to Payment",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/decision/"
+    },
+    {
+      "boundary_key": "bnd_8fe9b2b825b9e2548942",
+      "label": "ACH Bank Transfer Direct debit from checking or savings",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.transfer",
+      "severity": "critical",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/payment/"
+    }
+  ],
+  "auth_blocked": false,
+  "auth_blocked_reason": "",
+  "auth_incomplete": true,
+  "auth_reason": "not_persisted",
+  "boundaries_crossed": 0,
+  "boundary_crossings": [],
+  "crawl_mode": "explore",
+  "discovered_rules": [
+    {
+      "blocked_label": "Continue",
+      "field_label": "Term Life Insurance Affordable coverage for a specific period",
+      "key": "rule:e17e6d3b1fb4d249283772b8",
+      "kind": "advance_gate",
+      "proof": "Continue requires an answer to 'product = Term Life Insurance Affordable coverage for a spec' before it is enabled (proven: the app enabled it when the agent answered)",
+      "schema_version": 1,
+      "url_template": "127.0.0.1/life-insurance/quote/start/"
+    }
+  ],
+  "endpoint_inventory": [
+    {
+      "actions": [
+        {
+          "action_token": "a1",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a18",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a20",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a56",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a62",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a68",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a78",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 1,
+      "first_timestamp_ms": 2358,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 80,
+      "last_timestamp_ms": 195594,
+      "method": "GET",
+      "observed_count": 17,
+      "path_template": "/life-insurance/quote/start/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 17
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a1",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "V VKPower Life Insurance",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 2,
+      "first_timestamp_ms": 2453,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 35,
+      "last_timestamp_ms": 99656,
+      "method": "GET",
+      "observed_count": 8,
+      "path_template": "/login/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 8
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a7",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a22",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a30",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a56",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a62",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a68",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 3,
+      "first_timestamp_ms": 20188,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 78,
+      "last_timestamp_ms": 195594,
+      "method": "GET",
+      "observed_count": 17,
+      "path_template": "/portal/dashboard/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 17
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a7",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a18",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a20",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a22",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a30",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a56",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 4,
+      "first_timestamp_ms": 20188,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 79,
+      "last_timestamp_ms": 195594,
+      "method": "GET",
+      "observed_count": 17,
+      "path_template": "/portal/beneficiaries/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 17
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a18",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a20",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a22",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a30",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a56",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a62",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a68",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a78",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a80",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a108",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a110",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 29,
+      "first_timestamp_ms": 95781,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 77,
+      "last_timestamp_ms": 195578,
+      "method": "GET",
+      "observed_count": 13,
+      "path_template": "/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 13
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a31",
+          "label": "Continue",
+          "verb": "click"
+        },
+        {
+          "action_token": "a89",
+          "label": "Continue",
+          "verb": "click"
+        },
+        {
+          "action_token": "a141",
+          "label": "Continue",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 48,
+      "first_timestamp_ms": 120656,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 87,
+      "last_timestamp_ms": 237250,
+      "method": "GET",
+      "observed_count": 3,
+      "path_template": "/life-insurance/quote/coverage/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a40",
+          "label": "Continue",
+          "verb": "click"
+        },
+        {
+          "action_token": "a94",
+          "label": "Continue",
+          "verb": "click"
+        },
+        {
+          "action_token": "a146",
+          "label": "Continue",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 49,
+      "first_timestamp_ms": 129391,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 88,
+      "last_timestamp_ms": 241688,
+      "method": "GET",
+      "observed_count": 3,
+      "path_template": "/life-insurance/quote/personal/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a48",
+          "label": "Continue",
+          "verb": "click"
+        },
+        {
+          "action_token": "a102",
+          "label": "Continue",
+          "verb": "click"
+        },
+        {
+          "action_token": "a154",
+          "label": "Continue",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 50,
+      "first_timestamp_ms": 135922,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 89,
+      "last_timestamp_ms": 248063,
+      "method": "GET",
+      "observed_count": 3,
+      "path_template": "/life-insurance/quote/health-check/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a53",
+          "label": "See My Quote",
+          "verb": "click"
+        },
+        {
+          "action_token": "a106",
+          "label": "See My Quote",
+          "verb": "click"
+        },
+        {
+          "action_token": "a158",
+          "label": "See My Quote",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 51,
+      "first_timestamp_ms": 141063,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 90,
+      "last_timestamp_ms": 251813,
+      "method": "GET",
+      "observed_count": 3,
+      "path_template": "/life-insurance/quote/review/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a112",
+          "label": "Continue to Personal Information",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 81,
+      "first_timestamp_ms": 198453,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 81,
+      "last_timestamp_ms": 198453,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/personal-info/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a130",
+          "label": "Continue to Replacement Information",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 82,
+      "first_timestamp_ms": 211313,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 82,
+      "last_timestamp_ms": 211313,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/replacement/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a131",
+          "label": "Continue to Health Questionnaire",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 83,
+      "first_timestamp_ms": 213094,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 83,
+      "last_timestamp_ms": 213094,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/health/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a136",
+          "label": "Continue to Lifestyle Questions",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 84,
+      "first_timestamp_ms": 218281,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 84,
+      "last_timestamp_ms": 218281,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/lifestyle/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a138",
+          "label": "Continue to Underwriting Decision",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 85,
+      "first_timestamp_ms": 229156,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 85,
+      "last_timestamp_ms": 229156,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/decision/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a139",
+          "label": "Continue to Payment",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 86,
+      "first_timestamp_ms": 233625,
+      "has_server_error": false,
+      "host": "127.0.0.1:8101",
+      "last_sequence": 86,
+      "last_timestamp_ms": 233625,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/apply/payment/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    }
+  ],
+  "endpoint_inventory_truncated": false,
+  "expansions_opened": 0,
+  "expansions_skipped": 0,
+  "field_ledger": [
+    {
+      "basis": "name_tokens",
+      "choice": "checked",
+      "confidence": 0.72,
+      "filled": true,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Term Life Insurance Affordable coverage for a specific period",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "answered_to_unblock",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "38fe2dfc2b598dcd6c085f432e555acd",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": false,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "needs_input",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": false,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "needs_input",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "a26d0473eba615ac2d96c36540931574",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Variable Universal Life Investment options with life insurance protection",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "needs_input",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "$50,000",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Coverage Amount",
+      "options": [
+        "$50,000",
+        "$100,000",
+        "$150,000",
+        "$200,000",
+        "$250,000",
+        "$300,000",
+        "$400,000",
+        "$500,000",
+        "$750,000",
+        "$1,000,000",
+        "$1,500,000",
+        "$2,000,000"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "15 years",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Term Length",
+      "options": [
+        "10 years",
+        "15 years",
+        "20 years",
+        "25 years",
+        "30 years",
+        "whole life"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "99f9e665039af94483b5a3d9b5f6ee66",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "active duty officer",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Military Affiliation",
+      "options": [
+        "active duty officer",
+        "active duty enlisted",
+        "reserve/guard",
+        "veteran (honorable discharge)",
+        "veteran (other discharge)",
+        "retired military",
+        "military spouse/dependent",
+        "civilian"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "755faf33e87744db25af3eb735fb9f0f",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "army",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Branch of Service",
+      "options": [
+        "army",
+        "navy",
+        "air force",
+        "marine corps",
+        "coast guard",
+        "space force",
+        "army national guard",
+        "air national guard",
+        "army reserve",
+        "navy reserve",
+        "air force reserve",
+        "marine corps reserve",
+        "coast guard reserve"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "662ce19c87af2fff0be506d4fa3d033e",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "First name",
+      "provenance": "synthesized",
+      "semantic_type": "given_name",
+      "sensitive": true,
+      "signature": "c8c66f71dbe8518d80b6138b03e905f6",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Last name",
+      "provenance": "synthesized",
+      "semantic_type": "family_name",
+      "sensitive": true,
+      "signature": "6a99fc2a2c3316b987be1e08ec3116a0",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Date of birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "01296a3d6de8f50df7ad63e666003772",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "female",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Gender",
+      "options": [
+        "male",
+        "female",
+        "non-binary"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "a9608726f36d0f1b6a97fa25e498708c",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "choice": "illinois",
+      "confidence": 0.98,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "State of residence",
+      "options": [
+        "alabama",
+        "alaska",
+        "arizona",
+        "arkansas",
+        "california",
+        "colorado",
+        "connecticut",
+        "delaware",
+        "florida",
+        "georgia",
+        "hawaii",
+        "idaho",
+        "illinois",
+        "indiana",
+        "iowa",
+        "kansas",
+        "kentucky",
+        "louisiana",
+        "maine",
+        "maryland",
+        "massachusetts",
+        "michigan",
+        "minnesota"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "d6ee25c4100c361e85370dd780909b02",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Email address",
+      "provenance": "synthesized",
+      "semantic_type": "email",
+      "sensitive": true,
+      "signature": "d79d966e1522cdca8024c0cbeed56396",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Phone number",
+      "provenance": "synthesized",
+      "semantic_type": "phone",
+      "sensitive": true,
+      "signature": "914fd03190497bd19949797050be1028",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "4 ft",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Height (feet)",
+      "options": [
+        "4 ft",
+        "5 ft",
+        "6 ft",
+        "7 ft"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "1ea4bbe6c3569a3e6476b4517e83ac32",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "0 in",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Height (inches)",
+      "options": [
+        "0 in",
+        "1 in",
+        "2 in",
+        "3 in",
+        "4 in",
+        "5 in",
+        "6 in",
+        "7 in",
+        "8 in",
+        "9 in",
+        "10 in",
+        "11 in"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "af5c66993ce0dcb7cf65c9043d644c1b",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.6,
+      "filled": true,
+      "name": "Weight (lbs)",
+      "provenance": "synthesized",
+      "semantic_type": "quantity",
+      "sensitive": false,
+      "signature": "591455afa75aa9915db81d788e7be25f",
+      "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "First name",
+      "provenance": "synthesized",
+      "semantic_type": "given_name",
+      "sensitive": true,
+      "signature": "15e73a3b67873867d9638f2408c3c78c",
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "Last name",
+      "provenance": "synthesized",
+      "semantic_type": "family_name",
+      "sensitive": true,
+      "signature": "350a5e5988cdab4dd6a04337345f1ec2",
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "spouse",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Relationship",
+      "options": [
+        "spouse",
+        "child",
+        "parent",
+        "sibling",
+        "grandchild",
+        "grandparent",
+        "trust",
+        "estate",
+        "charity",
+        "business partner",
+        "other"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "f083fa5abee13b2da4c8726c8193bad9",
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "primary",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Type",
+      "options": [
+        "primary",
+        "contingent"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "6a121fdcb81039762ed904a4b8268e85",
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.6,
+      "filled": true,
+      "name": "Share %",
+      "provenance": "synthesized",
+      "semantic_type": "quantity",
+      "sensitive": false,
+      "signature": "6b46f491757e9615933db6fef574f6e1",
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Date of birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "7f510ea7baa3531d4a26a05a7b87103b",
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "SSN (last 4)",
+      "provenance": "synthesized",
+      "semantic_type": "national_id",
+      "sensitive": true,
+      "signature": "3a3c75c0263943ab287592bc55adb064",
+      "url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Member Number",
+      "provenance": "synthesized",
+      "semantic_type": "quantity",
+      "sensitive": false,
+      "signature": "773407c743c69848a477e918ac48870e",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/member-lookup/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Social Security Number",
+      "provenance": "synthesized",
+      "semantic_type": "national_id",
+      "sensitive": true,
+      "signature": "d1f5f1fe579a865f56912064908915cf",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "united states citizen",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Citizenship",
+      "options": [
+        "united states citizen",
+        "permanent resident",
+        "visa holder",
+        "other"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "cbf565df6af5d483e109ec0073b3a9cc",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Street Address",
+      "provenance": "synthesized",
+      "semantic_type": "street_address",
+      "sensitive": true,
+      "signature": "d1016bc234c21b7b28c61d94055b9960",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Apt / Suite / Unit",
+      "provenance": "synthesized",
+      "semantic_type": "street_address_2",
+      "sensitive": true,
+      "signature": "6aebda506ca098da094ccafe64ba6f56",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "City",
+      "provenance": "synthesized",
+      "semantic_type": "city",
+      "sensitive": false,
+      "signature": "b0e2db1943c2cc661c0211f2c65edb65",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "choice": "illinois",
+      "confidence": 0.98,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "State",
+      "options": [
+        "alabama",
+        "alaska",
+        "arizona",
+        "arkansas",
+        "california",
+        "colorado",
+        "connecticut",
+        "delaware",
+        "florida",
+        "georgia",
+        "hawaii",
+        "idaho",
+        "illinois",
+        "indiana",
+        "iowa",
+        "kansas",
+        "kentucky",
+        "louisiana",
+        "maine",
+        "maryland",
+        "massachusetts",
+        "michigan",
+        "minnesota"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "f43be960763eb928865de724c6352d30",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "ZIP Code",
+      "provenance": "synthesized",
+      "semantic_type": "postal_code",
+      "sensitive": false,
+      "signature": "b7c61eaaded38af2f9dbb799572b5797",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "employed",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Employment Status",
+      "options": [
+        "employed",
+        "self-employed",
+        "active duty military",
+        "retired",
+        "unemployed",
+        "student",
+        "homemaker"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "3444c3fe8dccc69d95a7a7b6677ac33d",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Occupation",
+      "provenance": "synthesized",
+      "semantic_type": "job_title",
+      "sensitive": false,
+      "signature": "e63c90af944dd04e5dc60e5e7eb4ec55",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.75,
+      "filled": true,
+      "name": "Employer Name",
+      "provenance": "synthesized",
+      "semantic_type": "full_name",
+      "sensitive": true,
+      "signature": "8199774b075619907eb04134c661ca6a",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Annual Income",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "b4b72d14b840b3b3b2420c763c798ad5",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "4",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "What is your height (feet)?",
+      "options": [
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "11990735b33956b62709c5855d8cdf9c",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/health/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "0",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "What is your height (inches)?",
+      "options": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "049cea6099a63a72a3f13441602800bf",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/health/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.6,
+      "filled": true,
+      "name": "What is your current weight in pounds?",
+      "provenance": "synthesized",
+      "semantic_type": "quantity",
+      "sensitive": false,
+      "signature": "dc667d4c15870697f37a988d02eb7974",
+      "url": "http://127.0.0.1:8101/life-insurance/apply/health/",
+      "widget": "text"
+    }
+  ],
+  "fields_inferred": [
+    "First name",
+    "Last name",
+    "Relationship",
+    "Type",
+    "Share %",
+    "Date of birth",
+    "SSN (last 4)",
+    "Member Number"
+  ],
+  "fields_needing_seed": [],
+  "fields_needing_seed_detail": [],
+  "filled_by_kind": {
+    "date": 6,
+    "select": 37,
+    "text": 38
+  },
+  "flow_summary": {
+    "advance_contradicts_fills": 3,
+    "advances_by_tier": {
+      "1": 15,
+      "2": 1,
+      "3": 6
+    },
+    "boundaries_crossed": 0,
+    "branch_coverage": false,
+    "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+    "deepest_flow_capped": true,
+    "deepest_flow_proven_steps": 0,
+    "deepest_flow_steps": 12,
+    "deepest_flow_terminal": "loop",
+    "flows_completed": 0,
+    "flows_found": 3,
+    "flows_fully_answered": 0,
+    "flows_truncated": 3,
+    "intent_unmet": 0,
+    "journeys_completed": 0,
+    "oracle_advances": 6,
+    "truncation_reasons": {
+      "loop": 3
+    }
+  },
+  "flows": [
+    {
+      "advance_contradicts_fills": true,
+      "completed": false,
+      "entry_fingerprint": "68fe1ba6e8f96916746e7ff9ca2111d7ca071a79c1d35b7b32604cc47a78f0be",
+      "entry_title": "VKPower Life Insurance",
+      "entry_url": "http://127.0.0.1:8101/life-insurance/quote/start/",
+      "fields_filled_total": 17,
+      "fields_unanswered": 8,
+      "flow_id": "f6a768474882bf6a7f8f07a7",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [],
+      "step_budget": 20,
+      "step_count": 7,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "0e64ddaec98e68777cbb79279cabcbc031a58e98966f48c3a4dc0c93d240699f",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "Term Life Insurance Affordable coverage for a specific period",
+              "control_signature": "38fe2dfc2b598dcd6c085f432e555acd",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+              "control_signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+              "control_signature": "a26d0473eba615ac2d96c36540931574",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Variable Universal Life Investment options with life insurance protection",
+              "control_signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 4,
+          "fingerprint": "68fe1ba6e8f96916746e7ff9ca2111d7ca071a79c1d35b7b32604cc47a78f0be",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/start/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "$50,000",
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "15 years",
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "active duty officer",
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 0,
+          "fingerprint": "2c58d68e05aa60d6b248652d9c2f2360be822c6df5b3d94cfc66bc2f90da3136",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "$50,000",
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "15 years",
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "active duty officer",
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "army",
+              "control_label": "Branch of Service",
+              "control_signature": "662ce19c87af2fff0be506d4fa3d033e",
+              "options": [
+                "army",
+                "navy",
+                "air force",
+                "marine corps",
+                "coast guard",
+                "space force",
+                "army national guard",
+                "air national guard",
+                "army reserve",
+                "navy reserve",
+                "air force reserve",
+                "marine corps reserve",
+                "coast guard reserve"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 0,
+          "fingerprint": "a8da78d03d221b7ea2d7c5e4322f234bcccfd70eafe77b1ccc891e9c499bffc1",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "female",
+              "control_label": "Gender",
+              "control_signature": "a9608726f36d0f1b6a97fa25e498708c",
+              "options": [
+                "male",
+                "female",
+                "non-binary"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "illinois",
+              "control_label": "State of residence",
+              "control_signature": "d6ee25c4100c361e85370dd780909b02",
+              "options": [
+                "alabama",
+                "alaska",
+                "arizona",
+                "arkansas",
+                "california",
+                "colorado",
+                "connecticut",
+                "delaware",
+                "florida",
+                "georgia",
+                "hawaii",
+                "idaho",
+                "illinois",
+                "indiana",
+                "iowa",
+                "kansas",
+                "kentucky",
+                "louisiana",
+                "maine",
+                "maryland",
+                "massachusetts",
+                "michigan",
+                "minnesota"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "e31e8076a2aa3e28135a151563d677268126654da2cf890b4980591a31708902",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/personal/"
+        },
+        {
+          "advance": {
+            "control_name": "See My Quote",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "decision_points": [
+            {
+              "choice": "4 ft",
+              "control_label": "Height (feet)",
+              "control_signature": "1ea4bbe6c3569a3e6476b4517e83ac32",
+              "options": [
+                "4 ft",
+                "5 ft",
+                "6 ft",
+                "7 ft"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "0 in",
+              "control_label": "Height (inches)",
+              "control_signature": "af5c66993ce0dcb7cf65c9043d644c1b",
+              "options": [
+                "0 in",
+                "1 in",
+                "2 in",
+                "3 in",
+                "4 in",
+                "5 in",
+                "6 in",
+                "7 in",
+                "8 in",
+                "9 in",
+                "10 in",
+                "11 in"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:5638fe9deebbb794f8bdcc71",
+              "options": [
+                "No",
+                "Yes"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:32a83842df4d82ad7b0dd917",
+              "options": [
+                "No",
+                "Yes"
+              ],
+              "provenance": "questionnaire"
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 0,
+          "fingerprint": "9b8f808fba951bc16159b31cd0875d2b0dfac9dc5a9e34ae8eb4c57a35385fd4",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/"
+        },
+        {
+          "advance": {
+            "control_name": "Start Over",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:bfb6ab9d7eff32a8570223bd78411dd0",
+              "option_classes": {
+                "Apply Now": "forward",
+                "Start Over": "navigational",
+                "V VKPower Life Insurance": "navigational"
+              },
+              "options": [
+                "V VKPower Life Insurance",
+                "Apply Now",
+                "Start Over"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "dd52903353bcc85db6df730930701e0cde3c13318ade140e1017e1ced011e7c7",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/review/"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Term Life Insurance Affordable coverage for a specific period",
+              "control_signature": "38fe2dfc2b598dcd6c085f432e555acd",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+              "control_signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+              "control_signature": "a26d0473eba615ac2d96c36540931574",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Variable Universal Life Investment options with life insurance protection",
+              "control_signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 4,
+          "fingerprint": "1b20e634b5ec7234934e7d3cfdf1c6ee82bbd7784990b16c503b88b030944c46",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/start/"
+        }
+      ],
+      "terminal": "loop",
+      "terminal_url": "http://127.0.0.1:8101/life-insurance/quote/start/"
+    },
+    {
+      "advance_contradicts_fills": true,
+      "completed": false,
+      "entry_fingerprint": "b6c870009f1a9e8d3f3aca50dc451b6a3b4119c8bab8f26323585897583660fc",
+      "entry_title": "VKPower Life Insurance",
+      "entry_url": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "fields_filled_total": 21,
+      "fields_unanswered": 4,
+      "flow_id": "eecc3b5a5119fe67e47d0794",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Estimated Monthly Premium",
+          "value": "$5.26",
+          "value_type": "currency"
+        },
+        {
+          "label": "Coverage Amount",
+          "value": "$50,000",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 6,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Get a Quote",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "decision_points": [
+            {
+              "choice": "spouse",
+              "control_label": "Relationship",
+              "control_signature": "f083fa5abee13b2da4c8726c8193bad9",
+              "options": [
+                "spouse",
+                "child",
+                "parent",
+                "sibling",
+                "grandchild",
+                "grandparent",
+                "trust",
+                "estate",
+                "charity",
+                "business partner",
+                "other"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "primary",
+              "control_label": "Type",
+              "control_signature": "6a121fdcb81039762ed904a4b8268e85",
+              "options": [
+                "primary",
+                "contingent"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "b6c870009f1a9e8d3f3aca50dc451b6a3b4119c8bab8f26323585897583660fc",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/portal/beneficiaries/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "0e64ddaec98e68777cbb79279cabcbc031a58e98966f48c3a4dc0c93d240699f",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "Term Life Insurance Affordable coverage for a specific period",
+              "control_signature": "38fe2dfc2b598dcd6c085f432e555acd",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+              "control_signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+              "control_signature": "a26d0473eba615ac2d96c36540931574",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Variable Universal Life Investment options with life insurance protection",
+              "control_signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 4,
+          "fingerprint": "1b20e634b5ec7234934e7d3cfdf1c6ee82bbd7784990b16c503b88b030944c46",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/start/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "$50,000",
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "15 years",
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "active duty officer",
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "army",
+              "control_label": "Branch of Service",
+              "control_signature": "662ce19c87af2fff0be506d4fa3d033e",
+              "options": [
+                "army",
+                "navy",
+                "air force",
+                "marine corps",
+                "coast guard",
+                "space force",
+                "army national guard",
+                "air national guard",
+                "army reserve",
+                "navy reserve",
+                "air force reserve",
+                "marine corps reserve",
+                "coast guard reserve"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 0,
+          "fingerprint": "a8da78d03d221b7ea2d7c5e4322f234bcccfd70eafe77b1ccc891e9c499bffc1",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "female",
+              "control_label": "Gender",
+              "control_signature": "a9608726f36d0f1b6a97fa25e498708c",
+              "options": [
+                "male",
+                "female",
+                "non-binary"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "illinois",
+              "control_label": "State of residence",
+              "control_signature": "d6ee25c4100c361e85370dd780909b02",
+              "options": [
+                "alabama",
+                "alaska",
+                "arizona",
+                "arkansas",
+                "california",
+                "colorado",
+                "connecticut",
+                "delaware",
+                "florida",
+                "georgia",
+                "hawaii",
+                "idaho",
+                "illinois",
+                "indiana",
+                "iowa",
+                "kansas",
+                "kentucky",
+                "louisiana",
+                "maine",
+                "maryland",
+                "massachusetts",
+                "michigan",
+                "minnesota"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "e31e8076a2aa3e28135a151563d677268126654da2cf890b4980591a31708902",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/personal/"
+        },
+        {
+          "advance": {
+            "control_name": "See My Quote",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "decision_points": [
+            {
+              "choice": "4 ft",
+              "control_label": "Height (feet)",
+              "control_signature": "1ea4bbe6c3569a3e6476b4517e83ac32",
+              "options": [
+                "4 ft",
+                "5 ft",
+                "6 ft",
+                "7 ft"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "0 in",
+              "control_label": "Height (inches)",
+              "control_signature": "af5c66993ce0dcb7cf65c9043d644c1b",
+              "options": [
+                "0 in",
+                "1 in",
+                "2 in",
+                "3 in",
+                "4 in",
+                "5 in",
+                "6 in",
+                "7 in",
+                "8 in",
+                "9 in",
+                "10 in",
+                "11 in"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 0,
+          "fingerprint": "9b8f808fba951bc16159b31cd0875d2b0dfac9dc5a9e34ae8eb4c57a35385fd4",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:bfb6ab9d7eff32a8570223bd78411dd0",
+              "option_classes": {
+                "Apply Now": "forward",
+                "Start Over": "navigational",
+                "V VKPower Life Insurance": "navigational"
+              },
+              "options": [
+                "V VKPower Life Insurance",
+                "Apply Now",
+                "Start Over"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "dd52903353bcc85db6df730930701e0cde3c13318ade140e1017e1ced011e7c7",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/review/"
+        }
+      ],
+      "terminal": "loop",
+      "terminal_url": "http://127.0.0.1:8101/life-insurance/quote/review/"
+    },
+    {
+      "advance_contradicts_fills": true,
+      "completed": false,
+      "entry_fingerprint": "ec1479af73a6b1fa6efbe50fc4b898881ec231308f784fe2fe8c1faeb72dbc5b",
+      "entry_title": "VKPower Life Insurance",
+      "entry_url": "http://127.0.0.1:8101/life-insurance/apply/member-lookup/",
+      "fields_filled_total": 35,
+      "fields_unanswered": 4,
+      "flow_id": "f20a7bce440a62974e99128c",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Estimated Monthly Premium",
+          "value": "$5.26",
+          "value_type": "currency"
+        },
+        {
+          "label": "Coverage Amount",
+          "value": "$50,000",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 12,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Continue to Personal Information",
+            "oracle": false,
+            "signature": "3c5d7de7284d1773e1b2344e5ea3a6a59274b677b416032ed2768b5c5d1ad877",
+            "tier": 1
+          },
+          "fields_filled": 1,
+          "fields_unfilled": 0,
+          "fingerprint": "ec1479af73a6b1fa6efbe50fc4b898881ec231308f784fe2fe8c1faeb72dbc5b",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/member-lookup/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue to Replacement Information",
+            "oracle": false,
+            "signature": "9e39efbec19eedaaafeef999938849d52fdb44419bf5972449e9961650d6ea53",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "female",
+              "control_label": "Gender",
+              "control_signature": "a9608726f36d0f1b6a97fa25e498708c",
+              "options": [
+                "male",
+                "female",
+                "non-binary"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "united states citizen",
+              "control_label": "Citizenship",
+              "control_signature": "cbf565df6af5d483e109ec0073b3a9cc",
+              "options": [
+                "united states citizen",
+                "permanent resident",
+                "visa holder",
+                "other"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "illinois",
+              "control_label": "State",
+              "control_signature": "f43be960763eb928865de724c6352d30",
+              "options": [
+                "alabama",
+                "alaska",
+                "arizona",
+                "arkansas",
+                "california",
+                "colorado",
+                "connecticut",
+                "delaware",
+                "florida",
+                "georgia",
+                "hawaii",
+                "idaho",
+                "illinois",
+                "indiana",
+                "iowa",
+                "kansas",
+                "kentucky",
+                "louisiana",
+                "maine",
+                "maryland",
+                "massachusetts",
+                "michigan",
+                "minnesota"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "employed",
+              "control_label": "Employment Status",
+              "control_signature": "3444c3fe8dccc69d95a7a7b6677ac33d",
+              "options": [
+                "employed",
+                "self-employed",
+                "active duty military",
+                "retired",
+                "unemployed",
+                "student",
+                "homemaker"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 17,
+          "fields_unfilled": 0,
+          "fingerprint": "c2e3dff65b0b63de8dc1237692ef838c289f5a603a3ec7325ae6c76002b19a5a",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/personal-info/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue to Health Questionnaire",
+            "oracle": false,
+            "signature": "3f741aca7c991d20be476dccfe66af78cd40daa5865c19daa9fe3763bbdc2b7c",
+            "tier": 1
+          },
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "933ee311f690db542192c6ef24ca5cc0df8d9e8826ba9705451f3dbc9c18e60a",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/replacement/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue to Lifestyle Questions",
+            "oracle": false,
+            "signature": "b38da52d7341aef4413f50f39c21d35c65b9c7e8a0118f69d3c0a9dc5b7f39b2",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "4",
+              "control_label": "What is your height (feet)?",
+              "control_signature": "11990735b33956b62709c5855d8cdf9c",
+              "options": [
+                "4",
+                "5",
+                "6",
+                "7"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "0",
+              "control_label": "What is your height (inches)?",
+              "control_signature": "049cea6099a63a72a3f13441602800bf",
+              "options": [
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:3506baae2561ffa2bde63b09",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire",
+              "reveals": [
+                "button:general health 4/7 answered"
+              ]
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:8defd191cb8cb78be06a26ed",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire",
+              "reveals": [
+                "button:general health 5/7 answered"
+              ]
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 0,
+          "fingerprint": "94ffae65e9bf19cea412db9b4a81bb109bd1da736508b927cf3b7ef7384a4875",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/health/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue to Underwriting Decision",
+            "oracle": false,
+            "signature": "e6b04abdfce3daa1939859bcce08fd87f7f06cac047d13446e5e262425a07c07",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:ce3ac73a43bdfbbca3268a36",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:63202ebcdcf05a2d39652193",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:8823ca4295969a2b5353568e",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:493f312b67dc9f6987a1bbd6",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:59ebcb76be8914ce78cee86a",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:c8d3f99cc6612247a832e97f",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:8ee7b36496c4439f7fc28e56",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:195b30eda61b67306cc90705",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:b0d7645204f29c2641c83fde",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:17cd0231b0b0424adae6a676",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:75c29d320edfd54c63313717",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:63315f2e41f64d602d3315d5",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            },
+            {
+              "choice": "No",
+              "control_label": "",
+              "control_signature": "q:dac01b989aa6223ba8fbdbc9",
+              "options": [
+                "Yes",
+                "No"
+              ],
+              "provenance": "questionnaire"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue to Payment",
+            "oracle": false,
+            "tier": 2
+          },
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:8dcf74ad762256281a92b47b37b5c4df",
+              "option_classes": {
+                "Back": "navigational",
+                "Continue to Payment": "forward",
+                "V VKPower Life Insurance": "navigational"
+              },
+              "options": [
+                "V VKPower Life Insurance",
+                "Continue to Payment",
+                "Back"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "6a21e28043f8524194e1b669de93d633675d07be762f058c9a677b84e7cbab16",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/decision/"
+        },
+        {
+          "advance": {
+            "control_name": "Get a Quote",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "8a8c9b817c420ab507247358159bcc9ae1406ae251053d300708b23c5afeefc2",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/apply/payment/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "0e64ddaec98e68777cbb79279cabcbc031a58e98966f48c3a4dc0c93d240699f",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "Term Life Insurance Affordable coverage for a specific period",
+              "control_signature": "38fe2dfc2b598dcd6c085f432e555acd",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+              "control_signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+              "control_signature": "a26d0473eba615ac2d96c36540931574",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Variable Universal Life Investment options with life insurance protection",
+              "control_signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 4,
+          "fingerprint": "1b20e634b5ec7234934e7d3cfdf1c6ee82bbd7784990b16c503b88b030944c46",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/start/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "$50,000",
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "15 years",
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "active duty officer",
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "army",
+              "control_label": "Branch of Service",
+              "control_signature": "662ce19c87af2fff0be506d4fa3d033e",
+              "options": [
+                "army",
+                "navy",
+                "air force",
+                "marine corps",
+                "coast guard",
+                "space force",
+                "army national guard",
+                "air national guard",
+                "army reserve",
+                "navy reserve",
+                "air force reserve",
+                "marine corps reserve",
+                "coast guard reserve"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 0,
+          "fingerprint": "a8da78d03d221b7ea2d7c5e4322f234bcccfd70eafe77b1ccc891e9c499bffc1",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/coverage/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "female",
+              "control_label": "Gender",
+              "control_signature": "a9608726f36d0f1b6a97fa25e498708c",
+              "options": [
+                "male",
+                "female",
+                "non-binary"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "illinois",
+              "control_label": "State of residence",
+              "control_signature": "d6ee25c4100c361e85370dd780909b02",
+              "options": [
+                "alabama",
+                "alaska",
+                "arizona",
+                "arkansas",
+                "california",
+                "colorado",
+                "connecticut",
+                "delaware",
+                "florida",
+                "georgia",
+                "hawaii",
+                "idaho",
+                "illinois",
+                "indiana",
+                "iowa",
+                "kansas",
+                "kentucky",
+                "louisiana",
+                "maine",
+                "maryland",
+                "massachusetts",
+                "michigan",
+                "minnesota"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "e31e8076a2aa3e28135a151563d677268126654da2cf890b4980591a31708902",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/personal/"
+        },
+        {
+          "advance": {
+            "control_name": "See My Quote",
+            "oracle": true,
+            "signature": "gate2-forward",
+            "tier": 3
+          },
+          "decision_points": [
+            {
+              "choice": "4 ft",
+              "control_label": "Height (feet)",
+              "control_signature": "1ea4bbe6c3569a3e6476b4517e83ac32",
+              "options": [
+                "4 ft",
+                "5 ft",
+                "6 ft",
+                "7 ft"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "0 in",
+              "control_label": "Height (inches)",
+              "control_signature": "af5c66993ce0dcb7cf65c9043d644c1b",
+              "options": [
+                "0 in",
+                "1 in",
+                "2 in",
+                "3 in",
+                "4 in",
+                "5 in",
+                "6 in",
+                "7 in",
+                "8 in",
+                "9 in",
+                "10 in",
+                "11 in"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 0,
+          "fingerprint": "9b8f808fba951bc16159b31cd0875d2b0dfac9dc5a9e34ae8eb4c57a35385fd4",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/health-check/"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:bfb6ab9d7eff32a8570223bd78411dd0",
+              "option_classes": {
+                "Apply Now": "forward",
+                "Start Over": "navigational",
+                "V VKPower Life Insurance": "navigational"
+              },
+              "options": [
+                "V VKPower Life Insurance",
+                "Apply Now",
+                "Start Over"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "dd52903353bcc85db6df730930701e0cde3c13318ade140e1017e1ced011e7c7",
+          "title": "VKPower Life Insurance",
+          "url": "http://127.0.0.1:8101/life-insurance/quote/review/"
+        }
+      ],
+      "terminal": "loop",
+      "terminal_url": "http://127.0.0.1:8101/life-insurance/quote/review/"
+    }
+  ],
+  "forms_confirmed": 0,
+  "forms_found": 3,
+  "forms_submitted": 0,
+  "inventory_failure_detail": "",
+  "inventory_failures": 0,
+  "journeys_completed": 0,
+  "network_events_observed": 90,
+  "network_server_error_count": 0,
+  "network_server_errors": [],
+  "opaque_surfaces": [],
+  "open_choice_unverified": 0,
+  "outcome_milestones": [],
+  "rule_reuse": {
+    "hits": 0,
+    "known": 0,
+    "lookups": 1,
+    "misses": 1,
+    "reuse_rate": 0.0
+  },
+  "states": [
+    {
+      "ax_fingerprint": "ec36b9f74b4c8af5c06cd54fc106b5fdce1f830c0089837dd79ad9857826d1c0",
+      "controls_total": 4,
+      "danger_controls": 0,
+      "danger_names": [],
+      "endpoints": [],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "4c79705724e2f1671d2aeb131aa8ba4757949bc2a232051e5687cf2019c82446",
+      "controls_total": 8,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/login/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "2caa02a91e2592042c0f87c5489f2076ebf986af02e2d97170f6f07e63827ea1",
+      "controls_total": 8,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/login/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/portal/dashboard/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "68fe1ba6e8f96916746e7ff9ca2111d7ca071a79c1d35b7b32604cc47a78f0be",
+      "controls_total": 11,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Term Life Insurance Affordable coverage for a specific period": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Term Life Insurance Affordable coverage for a specific period",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Universal Life Insurance Flexible premiums and adjustable death benefit": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Variable Universal Life Investment options with life insurance protection": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Variable Universal Life Investment options with life insurance protection",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Whole Life Insurance Lifetime coverage with cash value accumulation": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/quote/start/",
+      "question_groups": [
+        {
+          "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+          "label": "",
+          "label_source": "",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "Term Life Insurance Affordable coverage for a specific period"
+            },
+            {
+              "kind": "radio",
+              "name": "Whole Life Insurance Lifetime coverage with cash value accumulation"
+            },
+            {
+              "kind": "radio",
+              "name": "Universal Life Insurance Flexible premiums and adjustable death benefit"
+            },
+            {
+              "kind": "radio",
+              "name": "Variable Universal Life Investment options with life insurance protection"
+            }
+          ],
+          "options": [
+            "Term Life Insurance Affordable coverage for a specific period",
+            "Whole Life Insurance Lifetime coverage with cash value accumulation",
+            "Universal Life Insurance Flexible premiums and adjustable death benefit",
+            "Variable Universal Life Investment options with life insurance protection"
+          ],
+          "options_total": 4,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "2c58d68e05aa60d6b248652d9c2f2360be822c6df5b3d94cfc66bc2f90da3136",
+      "controls_total": 12,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/coverage/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Branch of Service": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_branch",
+            "verified": true
+          },
+          "options": [
+            "Select branch...",
+            "Army",
+            "Navy",
+            "Air Force",
+            "Marine Corps",
+            "Coast Guard",
+            "Space Force",
+            "Army National Guard",
+            "Air National Guard",
+            "Army Reserve",
+            "Navy Reserve",
+            "Air Force Reserve",
+            "Marine Corps Reserve",
+            "Coast Guard Reserve"
+          ],
+          "options_total": 14,
+          "required": true,
+          "type": "select"
+        },
+        "Coverage Amount": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "coverage_amount",
+            "verified": true
+          },
+          "options": [
+            "Select coverage amount...",
+            "$50,000",
+            "$100,000",
+            "$150,000",
+            "$200,000",
+            "$250,000",
+            "$300,000",
+            "$400,000",
+            "$500,000",
+            "$750,000",
+            "$1,000,000",
+            "$1,500,000",
+            "$2,000,000"
+          ],
+          "options_total": 13,
+          "required": true,
+          "type": "select"
+        },
+        "Military Affiliation": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_status",
+            "verified": true
+          },
+          "options": [
+            "Select military status...",
+            "Active Duty Officer",
+            "Active Duty Enlisted",
+            "Reserve/Guard",
+            "Veteran (Honorable Discharge)",
+            "Veteran (Other Discharge)",
+            "Retired Military",
+            "Military Spouse/Dependent",
+            "Civilian",
+            "None"
+          ],
+          "options_total": 10,
+          "required": true,
+          "type": "select"
+        },
+        "Term Length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term_length",
+            "verified": true
+          },
+          "options": [
+            "Select term length...",
+            "10 Years",
+            "15 Years",
+            "20 Years",
+            "25 Years",
+            "30 Years",
+            "Whole Life"
+          ],
+          "options_total": 7,
+          "required": true,
+          "type": "select"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/quote/coverage/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "a8da78d03d221b7ea2d7c5e4322f234bcccfd70eafe77b1ccc891e9c499bffc1",
+      "controls_total": 12,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/coverage/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Branch of Service": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_branch",
+            "verified": true
+          },
+          "options": [
+            "Select branch...",
+            "Army",
+            "Navy",
+            "Air Force",
+            "Marine Corps",
+            "Coast Guard",
+            "Space Force",
+            "Army National Guard",
+            "Air National Guard",
+            "Army Reserve",
+            "Navy Reserve",
+            "Air Force Reserve",
+            "Marine Corps Reserve",
+            "Coast Guard Reserve"
+          ],
+          "options_total": 14,
+          "required": true,
+          "type": "select"
+        },
+        "Coverage Amount": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "coverage_amount",
+            "verified": true
+          },
+          "options": [
+            "Select coverage amount...",
+            "$50,000",
+            "$100,000",
+            "$150,000",
+            "$200,000",
+            "$250,000",
+            "$300,000",
+            "$400,000",
+            "$500,000",
+            "$750,000",
+            "$1,000,000",
+            "$1,500,000",
+            "$2,000,000"
+          ],
+          "options_total": 13,
+          "required": true,
+          "type": "select"
+        },
+        "Military Affiliation": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_status",
+            "verified": true
+          },
+          "options": [
+            "Select military status...",
+            "Active Duty Officer",
+            "Active Duty Enlisted",
+            "Reserve/Guard",
+            "Veteran (Honorable Discharge)",
+            "Veteran (Other Discharge)",
+            "Retired Military",
+            "Military Spouse/Dependent",
+            "Civilian",
+            "None"
+          ],
+          "options_total": 10,
+          "required": true,
+          "type": "select"
+        },
+        "Term Length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term_length",
+            "verified": true
+          },
+          "options": [
+            "Select term length...",
+            "10 Years",
+            "15 Years",
+            "20 Years",
+            "25 Years",
+            "30 Years",
+            "Whole Life"
+          ],
+          "options_total": 7,
+          "required": true,
+          "type": "select"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/quote/coverage/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "e31e8076a2aa3e28135a151563d677268126654da2cf890b4980591a31708902",
+      "controls_total": 15,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/personal/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Date of birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "date"
+        },
+        "Email address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_email",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "First name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_first",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Gender": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "q_gender",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "Male",
+            "Female",
+            "Non-binary"
+          ],
+          "options_total": 4,
+          "required": true,
+          "type": "select"
+        },
+        "Last name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_last",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Phone number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_phone",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "State of residence": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "q_state",
+            "verified": true
+          },
+          "options": [
+            "Select state...",
+            "Alabama",
+            "Alaska",
+            "Arizona",
+            "Arkansas",
+            "California",
+            "Colorado",
+            "Connecticut",
+            "Delaware",
+            "Florida",
+            "Georgia",
+            "Hawaii",
+            "Idaho",
+            "Illinois",
+            "Indiana",
+            "Iowa",
+            "Kansas",
+            "Kentucky",
+            "Louisiana",
+            "Maine",
+            "Maryland",
+            "Massachusetts",
+            "Michigan",
+            "Minnesota",
+            "Mississippi",
+            "Missouri",
+            "Montana",
+            "Nebraska",
+            "Nevada",
+            "New Hampshire",
+            "New Jersey",
+            "New Mexico",
+            "New York",
+            "North Carolina",
+            "North Dakota",
+            "Ohio",
+            "Oklahoma",
+            "Oregon",
+            "Pennsylvania",
+            "Rhode Island",
+            "South Carolina",
+            "South Dakota",
+            "Tennessee",
+            "Texas",
+            "Utah",
+            "Vermont",
+            "Virginia",
+            "Washington",
+            "West Virginia",
+            "Wisconsin",
+            "Wyoming",
+            "District of Columbia"
+          ],
+          "options_total": 52,
+          "required": true,
+          "type": "select"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/quote/personal/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "9b8f808fba951bc16159b31cd0875d2b0dfac9dc5a9e34ae8eb4c57a35385fd4",
+      "controls_total": 15,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/health-check/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Height (feet)": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "q_height_ft",
+            "verified": true
+          },
+          "options": [
+            "Feet...",
+            "4 ft",
+            "5 ft",
+            "6 ft",
+            "7 ft"
+          ],
+          "options_total": 5,
+          "required": true,
+          "type": "select"
+        },
+        "Height (inches)": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "q_height_in",
+            "verified": true
+          },
+          "options": [
+            "Inches...",
+            "0 in",
+            "1 in",
+            "2 in",
+            "3 in",
+            "4 in",
+            "5 in",
+            "6 in",
+            "7 in",
+            "8 in",
+            "9 in",
+            "10 in",
+            "11 in"
+          ],
+          "options_total": 13,
+          "required": true,
+          "type": "select"
+        },
+        "Weight (lbs)": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "q_weight",
+            "verified": true
+          },
+          "max": "600",
+          "min": "50",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/quote/health-check/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "dd52903353bcc85db6df730930701e0cde3c13318ade140e1017e1ced011e7c7",
+      "controls_total": 9,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/review/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/life-insurance/quote/review/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "1b20e634b5ec7234934e7d3cfdf1c6ee82bbd7784990b16c503b88b030944c46",
+      "controls_total": 11,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Term Life Insurance Affordable coverage for a specific period": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Term Life Insurance Affordable coverage for a specific period",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Universal Life Insurance Flexible premiums and adjustable death benefit": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Variable Universal Life Investment options with life insurance protection": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Variable Universal Life Investment options with life insurance protection",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Whole Life Insurance Lifetime coverage with cash value accumulation": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/quote/start/",
+      "question_groups": [
+        {
+          "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+          "label": "",
+          "label_source": "",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "Term Life Insurance Affordable coverage for a specific period"
+            },
+            {
+              "kind": "radio",
+              "name": "Whole Life Insurance Lifetime coverage with cash value accumulation"
+            },
+            {
+              "kind": "radio",
+              "name": "Universal Life Insurance Flexible premiums and adjustable death benefit"
+            },
+            {
+              "kind": "radio",
+              "name": "Variable Universal Life Investment options with life insurance protection"
+            }
+          ],
+          "options": [
+            "Term Life Insurance Affordable coverage for a specific period",
+            "Whole Life Insurance Lifetime coverage with cash value accumulation",
+            "Universal Life Insurance Flexible premiums and adjustable death benefit",
+            "Variable Universal Life Investment options with life insurance protection"
+          ],
+          "options_total": 4,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "b6c870009f1a9e8d3f3aca50dc451b6a3b4119c8bab8f26323585897583660fc",
+      "controls_total": 14,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Date of birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "date"
+        },
+        "First name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_first",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Last name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_last",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Relationship": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "b_rel",
+            "verified": true
+          },
+          "options": [
+            "Spouse",
+            "Child",
+            "Parent",
+            "Sibling",
+            "Grandchild",
+            "Grandparent",
+            "Trust",
+            "Estate",
+            "Charity",
+            "Business Partner",
+            "Other"
+          ],
+          "options_total": 11,
+          "required": false,
+          "type": "select"
+        },
+        "SSN (last 4)": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_ssn",
+            "verified": true
+          },
+          "maxlength": "4",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Share %": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "b_pct",
+            "verified": true
+          },
+          "max": "100",
+          "min": "1",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Type": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "b_type",
+            "verified": true
+          },
+          "options": [
+            "Primary",
+            "Contingent"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "select"
+        }
+      },
+      "location": "http://127.0.0.1:8101/portal/beneficiaries/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "ec1479af73a6b1fa6efbe50fc4b898881ec231308f784fe2fe8c1faeb72dbc5b",
+      "controls_total": 10,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Member Number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "app_member",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/apply/member-lookup/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "c2e3dff65b0b63de8dc1237692ef838c289f5a603a3ec7325ae6c76002b19a5a",
+      "controls_total": 27,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/apply/personal-info/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Annual Income": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "pi_income",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Apt / Suite / Unit": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_unit",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Citizenship": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "pi_citizenship",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "United States Citizen",
+            "Permanent Resident",
+            "Visa Holder",
+            "Other"
+          ],
+          "options_total": 5,
+          "required": true,
+          "type": "select"
+        },
+        "City": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_city",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Date of Birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "date"
+        },
+        "Email Address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_email",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Employer Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_employer",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Employment Status": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "pi_emp_status",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "Employed",
+            "Self-Employed",
+            "Active Duty Military",
+            "Retired",
+            "Unemployed",
+            "Student",
+            "Homemaker"
+          ],
+          "options_total": 8,
+          "required": true,
+          "type": "select"
+        },
+        "First Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_first",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Gender": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "pi_gender",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "Male",
+            "Female",
+            "Non-binary"
+          ],
+          "options_total": 4,
+          "required": true,
+          "type": "select"
+        },
+        "Last Name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_last",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Occupation": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_occupation",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Phone Number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_phone",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Social Security Number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_ssn",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "State": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "pi_state",
+            "verified": true
+          },
+          "options": [
+            "Select state...",
+            "Alabama",
+            "Alaska",
+            "Arizona",
+            "Arkansas",
+            "California",
+            "Colorado",
+            "Connecticut",
+            "Delaware",
+            "Florida",
+            "Georgia",
+            "Hawaii",
+            "Idaho",
+            "Illinois",
+            "Indiana",
+            "Iowa",
+            "Kansas",
+            "Kentucky",
+            "Louisiana",
+            "Maine",
+            "Maryland",
+            "Massachusetts",
+            "Michigan",
+            "Minnesota",
+            "Mississippi",
+            "Missouri",
+            "Montana",
+            "Nebraska",
+            "Nevada",
+            "New Hampshire",
+            "New Jersey",
+            "New Mexico",
+            "New York",
+            "North Carolina",
+            "North Dakota",
+            "Ohio",
+            "Oklahoma",
+            "Oregon",
+            "Pennsylvania",
+            "Rhode Island",
+            "South Carolina",
+            "South Dakota",
+            "Tennessee",
+            "Texas",
+            "Utah",
+            "Vermont",
+            "Virginia",
+            "Washington",
+            "West Virginia",
+            "Wisconsin",
+            "Wyoming",
+            "District of Columbia"
+          ],
+          "options_total": 52,
+          "required": true,
+          "type": "select"
+        },
+        "Street Address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_street",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "ZIP Code": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "pi_zip",
+            "verified": true
+          },
+          "maxlength": "10",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/apply/personal-info/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "933ee311f690db542192c6ef24ca5cc0df8d9e8826ba9705451f3dbc9c18e60a",
+      "controls_total": 12,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/apply/replacement/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/life-insurance/apply/replacement/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "0da9cf5a86c48e14eae87e80ea292df66926f2d2ee316f24ea466a0f0dbc842b",
+      "controls_total": 33,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "What is your current weight in pounds?": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "hlq_gen_3",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "What is your height (feet)?": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "hlq_gen_1",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "4",
+            "5",
+            "6",
+            "7"
+          ],
+          "options_total": 5,
+          "required": false,
+          "type": "select"
+        },
+        "What is your height (inches)?": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "hlq_gen_2",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11"
+          ],
+          "options_total": 13,
+          "required": false,
+          "type": "select"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/apply/health/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "94ffae65e9bf19cea412db9b4a81bb109bd1da736508b927cf3b7ef7384a4875",
+      "controls_total": 33,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/apply/health/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "What is your current weight in pounds?": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "hlq_gen_3",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "What is your height (feet)?": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "hlq_gen_1",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "4",
+            "5",
+            "6",
+            "7"
+          ],
+          "options_total": 5,
+          "required": false,
+          "type": "select"
+        },
+        "What is your height (inches)?": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "hlq_gen_2",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11"
+          ],
+          "options_total": 13,
+          "required": false,
+          "type": "select"
+        }
+      },
+      "location": "http://127.0.0.1:8101/life-insurance/apply/health/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "747af30ce300a09b888765cbc08257c4c378ce8598e2016eb928d9b4111e75f5",
+      "controls_total": 42,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/apply/lifestyle/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/life-insurance/apply/lifestyle/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "6a21e28043f8524194e1b669de93d633675d07be762f058c9a677b84e7cbab16",
+      "controls_total": 8,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/apply/decision/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/life-insurance/apply/decision/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "8a8c9b817c420ab507247358159bcc9ae1406ae251053d300708b23c5afeefc2",
+      "controls_total": 14,
+      "danger_controls": 2,
+      "danger_names": [
+        "Sign out",
+        "ACH Bank Transfer Direct debit from checking or savings"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/apply/payment/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:8101/life-insurance/apply/payment/",
+      "question_groups": []
+    }
+  ],
+  "submit_candidates": [
+    "Continue",
+    "Add Beneficiary",
+    "Look Up",
+    "Continue to Personal Information",
+    "Back to Quote",
+    "Continue to Replacement Information",
+    "Continue to Health Questionnaire",
+    "Continue to Lifestyle Questions",
+    "Continue to Underwriting Decision"
+  ],
+  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 3 form(s) found; 8 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 3 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
+  "tab_views_recorded": 0,
+  "traversal": "full",
+  "unblock_irreversible": [],
+  "unhandled_controls": [],
+  "vision_budget": {
+    "breaker_open": false,
+    "breaker_threshold": 3,
+    "calls": 0,
+    "consecutive_failures": 0,
+    "failures": 0,
+    "gate": {
+      "attestation_rung": "none",
+      "attested": false,
+      "enabled": false,
+      "reason": "no_oracle",
+      "tenant_enabled": false
+    },
+    "latency_ms": 0,
+    "max_calls": 0,
+    "refusals": {},
+    "timeout_s": 20.0
+  },
+  "vision_ledger": [],
+  "vision_refused": 0,
+  "vision_verified": 0
+}

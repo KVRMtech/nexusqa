@@ -1,0 +1,41 @@
+{
+  "purpose": "Prove a CROSS-ORIGIN iframe is ENTERED through Playwright's frame APIs and catalogued from inside - the fields, the frame identity, and a frame_selector that binds back to the frame they were read from - while the main frame's own controls are unaffected. Before M3.2 this fixture asserted the opposite: that the embed was skipped honestly and named as a blind spot.",
+  "targeted_defect": "Regression guard, re-aimed by M3.2 / T-FR-01. The honest-skip branch it used to pin (inventory_js.py, `try { cdoc = ifr.contentDocument } catch`) is UNCHANGED and still load-bearing: injected JavaScript must not attempt to read across an origin boundary, and a SecurityError must never unwind the walk and take the main frame's controls with it. What changed is who finishes the job. The walker still stops at the boundary; the PORT then crosses it the supported way - `content_frame()` asks the browser for the frame's own execution context and the walker runs inside it under that frame's origin, exactly as the frame's own scripts do. Nothing is injected across the boundary.",
+  "lanes": ["playwright"],
+  "lane_note": "Playwright only: jsdom has no true cross-origin isolation, so a second origin cannot be simulated faithfully, and it has no frame-locator equivalent to enter one with. Running this in jsdom would prove nothing about either branch under test.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 4,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#amount-due"},
+      "fields": {"name": "Amount Due", "name_source": "label-for", "value_committed": "129.00",
+                 "frame_selector": ""},
+      "why": "The main frame's own control. Entering the embed must not disturb it."
+    },
+    {
+      "where": {"css_hint": "input#card-number"},
+      "fields": {"name": "Card Number", "name_source": "label-for",
+                 "frame_selector": "iframe#card-entry"},
+      "why": "The field that takes the money, on a foreign origin - previously the named blind spot this fixture existed to document."
+    },
+    {
+      "where": {"css_hint": "input#card-cvc"},
+      "fields": {"name": "CVC", "name_source": "label-for", "frame_selector": "iframe#card-entry"}
+    },
+    {
+      "where": {"name": "Pay Now"},
+      "fields": {"role": "button", "frame_selector": "iframe#card-entry"}
+    }
+  ],
+  "opaque": {
+    "lanes": ["playwright"],
+    "expect": [
+      {"kind": "cross_origin_iframe"}
+    ],
+    "why": "The frame stays a NAMED surface even though it was entered: that row is what carries its deterministic selector, and it is the only reason `route_opaque_surfaces`'s enter_frames bucket has anything actionable in it. Whether the entry SUCCEEDED is a separate ledger row (`frame_entered`), so a frame that was named and a frame that was read are never confused."
+  },
+  "frame_selectors_must_resolve": {
+    "expect_distinct": 1,
+    "why": "The embed's selector is handed back to the browser and must resolve to exactly one frame, and every control captured through it must be findable inside that frame - i.e. the catalogued payment fields are ACTIONABLE at replay, not merely recorded."
+  }
+}

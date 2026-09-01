@@ -1,0 +1,473 @@
+'use strict';
+/**
+ * Login observer — records the CHOREOGRAPHY of an interactive login.
+ *
+ * When a tester logs in by hand inside the runner's headed auth-capture browser we
+ * already keep the resulting session (cookies). That session is ONE member. This
+ * observer records, in order, *how* the login was performed — which fields were
+ * filled and which controls were pressed — so the same login can later be REPLAYED
+ * with any other member's credentials ("record once, run with N member numbers").
+ *
+ * SECURITY — this module never captures a credential VALUE. Not redacted: never
+ * read. Only field IDENTIFIERS (name/id/label/type/autocomplete) and control names
+ * leave the page. A login recipe is choreography, never secrets; the secrets live
+ * only in the envelope-encrypted credential card.
+ *
+ * GENERIC — protocol-level DOM instrumentation, zero per-app config. A field is
+ * whatever the app calls it (member_number | email | username | policy_no | pin |
+ * password | …); the observer reports the identifier verbatim and never assumes a
+ * vocabulary. Works unchanged on any of 1000+ apps.
+ *
+ * DUMB BY DESIGN — this emits a flat, ordered event log and nothing else. Turning
+ * events into a recipe (which fill is a credential slot, which click is the submit,
+ * which trailing clicks are an optional verify-documents interstitial) is done in
+ * `login_observation.py` on the platform side, where it is unit-tested. Keeping the
+ * inference out of the runner keeps this hot-deployed file small and low-risk.
+ *
+ * Companion to ground_truth_recorder.js — same proven binding/init-script
+ * technique, different purpose; that one feeds the page-visit overlay and DOES
+ * capture (redacted) values, this one feeds the login recipe and captures none.
+ */
+
+/** Field identifier resolution, most-stable first. The winner becomes the recipe's
+ *  slot name AND the fingerprint's field name, so record-time and match-time keys
+ *  agree (see login_fingerprint._field_signature). */
+const IDENT_ORDER = ['name', 'id', 'autocomplete', 'label'];
+
+/** Origin + path only. An OIDC/SAML redirect carries the authorization code,
+ *  id_token or SAMLResponse in the query or fragment; the recipe only ever needs
+ *  the path, so the secret-bearing parts are dropped AT THE SOURCE and never
+ *  reach the event log, the observation route, or the database. */
+function safeUrl(raw) {
+  const text = String(raw || '');
+  try {
+    const u = new URL(text);
+    return (u.origin || '') + (u.pathname || '');
+  } catch (e) {
+    return text.split('?')[0].split('#')[0].slice(0, 2000);
+  }
+}
+
+/**
+ * Instrument a Playwright BrowserContext (preferred) or a single page for login
+ * observation. Returns `{ events, ready, snapshot }` — `events` is the live
+ * ordered log, `snapshot()` returns a defensive copy plus the current URL.
+ *
+ * Attach to the CONTEXT, not a page: an enterprise SSO login (Okta/Ping/Entra)
+ * routinely opens a second tab, and page-scoped bindings would record nothing
+ * for it. Context scope also registers the init script before the first page
+ * exists, so the login page itself is instrumented.
+ */
+function attachLoginObserver(target, opts) {
+  const options = opts || {};
+  const startMs = Date.now();
+  const events = [];
+  const MAX_EVENTS = Number(options.maxEvents || 400);   // bound memory on a long session
+
+  // Duck-type: a BrowserContext has newPage(), a Page does not.
+  const isContext = !!(target && typeof target.newPage === 'function');
+  const ctx = isContext ? target : (target && target.context ? target.context() : target);
+
+  const push = (e) => {
+    if (events.length >= MAX_EVENTS) return;
+    events.push(Object.assign({
+      timestamp_ms: Date.now() - startMs,
+      sequence_index: events.length,
+    }, e));
+  };
+
+  // ── Credential VALUES — a SEPARATE channel from `events`. ────────────────────
+  // Recording used to capture only THAT a field was filled, so a recording could
+  // replay nothing but a session: a snapshot that expires, and that an app whose
+  // login lives in client-side state can never restore. "Record once" therefore
+  // meant "one crawl", and re-recording produced the same dead session. Capturing
+  // what the operator signs in with is what makes one recording sign EVERY future
+  // crawl in — the same secret the product already stores encrypted when it is
+  // typed at onboarding, captured more reliably (it also catches password-manager
+  // and autofill logins, which fire no input event at all).
+  //
+  // Deliberately NOT in `events`: that log is snapshotted, shipped and persisted as
+  // the choreography. Values live here, are returned only to the save path, and are
+  // envelope-encrypted the moment they land on an app.
+  //
+  // LAST WRITE WINS, keyed by the field's identifiers: `input` fires per keystroke,
+  // so the first event holds "P" and only the last holds the real secret. The
+  // pre-submit sweep re-reports every field, so the final state always wins.
+  const values = new Map();
+  const valueKey = (f) => [f.name || '', f.id || '', f.type || '', f.label || '',
+                           f.autocomplete || ''].join('|');
+
+  const pValue = ctx.exposeBinding('__nxLoginValue', (_src, f) => {
+    try {
+      const field = f || {};
+      const value = String(field.value == null ? '' : field.value);
+      if (!value) return;
+      if (values.size >= 40 && !values.has(valueKey(field))) return;  // bound memory
+      values.set(valueKey(field), {
+        name: String(field.name || '').slice(0, 200),
+        id: String(field.id || '').slice(0, 200),
+        label: String(field.label || '').slice(0, 300),
+        type: String(field.type || '').toLowerCase().slice(0, 40),
+        autocomplete: String(field.autocomplete || '').slice(0, 100),
+        value: value.slice(0, 400),
+      });
+    } catch (e) { /* never break the capture */ }
+  }).catch(() => {});
+
+  // ── Navigations (full page). SPA route changes arrive via __nxLoginNav below. ──
+  const wirePage = (p) => {
+    try {
+      p.on('framenavigated', (frame) => {
+        try {
+          if (frame !== p.mainFrame()) return;
+          const url = frame.url() || '';
+          if (!url || url === 'about:blank') return;
+          push({ kind: 'navigate', url: safeUrl(url) });
+        } catch (e) { /* never break the capture */ }
+      });
+    } catch (e) { /* ignore */ }
+  };
+  try { ctx.on('page', wirePage); } catch (e) { /* single-page fallback */ }
+  try { (ctx.pages ? ctx.pages() : [target]).forEach(wirePage); } catch (e) { /* ignore */ }
+  if (!isContext && target) wirePage(target);
+
+  const pNav = ctx.exposeBinding('__nxLoginNav', (src, url) => {
+    try {
+      const base = (src && src.page && src.page.url && src.page.url()) || '';
+      const abs = new URL(String(url), base || undefined).toString();
+      push({ kind: 'navigate', url: safeUrl(abs) });
+    } catch (e) { /* ignore */ }
+  }).catch(() => {});
+
+  // ── Field commits — IDENTIFIERS ONLY, never the value. ──────────────────────
+  const pField = ctx.exposeBinding('__nxLoginField', (_src, f) => {
+    try {
+      const field = f || {};
+      push({
+        kind: 'fill',
+        name: String(field.name || '').slice(0, 200),
+        id: String(field.id || '').slice(0, 200),
+        label: String(field.label || '').slice(0, 300),
+        type: String(field.type || '').toLowerCase().slice(0, 40),
+        autocomplete: String(field.autocomplete || '').slice(0, 100),
+        // `filled` records only THAT a value was entered — never any part of it.
+        filled: !!field.filled,
+      });
+    } catch (e) { /* ignore */ }
+  }).catch(() => {});
+
+  // ── Control presses — the submit ladder and any interstitial acknowledgement. ─
+  const pClick = ctx.exposeBinding('__nxLoginClick', (_src, c) => {
+    try {
+      const ctl = c || {};
+      push({
+        kind: 'click',
+        text: String(ctl.text || '').slice(0, 200),
+        role: String(ctl.role || '').slice(0, 40),
+        name: String(ctl.name || '').slice(0, 200),
+        id: String(ctl.id || '').slice(0, 200),
+        type: String(ctl.type || '').toLowerCase().slice(0, 40),
+      });
+    } catch (e) { /* ignore */ }
+  }).catch(() => {});
+
+  // ── sessionStorage, PER ORIGIN. ─────────────────────────────────────────────
+  // Unlike cookies and localStorage, sessionStorage is scoped to (tab, origin)
+  // and is readable ONLY from a page currently on that origin. A federated login
+  // walks app → identity provider → app, so by the time the capture is saved the
+  // tab has long left the IdP and a read-at-save can never see what was stored
+  // there. Reading it as the page is LEAVING each origin is the only moment the
+  // data exists and is reachable — no navigating back, nothing destructive.
+  //
+  // Keyed by origin, last write wins: an origin visited twice reports its latest
+  // state. Values ARE secrets (this is where such apps keep the session), so they
+  // travel the same encrypted path as a storageState and never enter the manifest.
+  const sessionStorageByOrigin = new Map();
+
+  const rememberSession = (origin, entries) => {
+    if (!origin || !entries || typeof entries !== 'object') return;
+    if (!Object.keys(entries).length) return;
+    // Bound memory: a page may put megabytes in sessionStorage, and a capture
+    // must not be able to exhaust the runner.
+    if (sessionStorageByOrigin.size >= 20 && !sessionStorageByOrigin.has(origin)) return;
+    sessionStorageByOrigin.set(origin, entries);
+  };
+
+  // POLLED FROM NODE, not reported from the page.
+  //
+  // The first attempt had the page report its own sessionStorage on `pagehide`.
+  // It captured NOTHING, every time: `exposeBinding` is asynchronous, and by the
+  // time the call would land the page being unloaded is already gone. Reporting at
+  // teardown cannot work. Reading from here, while the page is alive, does — and
+  // the last successful read before a navigation IS the state of the origin the
+  // tab is leaving, which is the whole difficulty with a federated login.
+  const READ_SESSION_STORAGE = `(() => {
+    try {
+      const out = {};
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const k = sessionStorage.key(i);
+        if (k) out[k] = sessionStorage.getItem(k);
+      }
+      return { origin: window.location.origin, entries: out };
+    } catch (e) { return null; }
+  })()`;
+
+  async function pollSessionStorage() {
+    let pages = [];
+    try { pages = ctx.pages ? ctx.pages() : []; } catch (e) { return; }
+    for (const pg of pages) {
+      try {
+        const snap = await pg.evaluate(READ_SESSION_STORAGE);
+        if (snap) rememberSession(snap.origin, snap.entries);
+      } catch (e) { /* mid-navigation, closed, or blocked — the next tick retries */ }
+    }
+  }
+  // 300ms, not a second: an origin that lives for less than one tick is missed,
+  // and a federated chain can bounce through a transit hop quickly. A capture is
+  // single-occupancy and capped at 10 minutes, so the cost of a tighter tick is
+  // nothing next to silently losing the session. Sub-tick origins remain a known
+  // limit of polling — they are transit hops, which do not hold the final token.
+  const pollTimer = setInterval(() => { pollSessionStorage().catch(() => {}); }, 300);
+  if (pollTimer.unref) pollTimer.unref();
+  // Kept as a best-effort supplement to the poll: when a binding call DOES land
+  // before teardown it carries a write the poll could have missed. Never relied on.
+  const pStore = ctx.exposeBinding('__nxSessionStore', (_src, snap) => {
+    try {
+      rememberSession(String((snap || {}).origin || ''), (snap || {}).entries);
+    } catch (e) { /* never break the capture */ }
+  }).catch(() => {});
+
+  const pInit = ctx.addInitScript(() => {
+    // Report this origin's sessionStorage while the page can still read it.
+    const snapSession = () => {
+      try {
+        if (!window.__nxSessionStore || !window.sessionStorage) return;
+        const out = {};
+        for (let i = 0; i < sessionStorage.length; i += 1) {
+          const k = sessionStorage.key(i);
+          if (k) out[k] = sessionStorage.getItem(k);
+        }
+        if (Object.keys(out).length) {
+          window.__nxSessionStore({ origin: window.location.origin, entries: out });
+        }
+      } catch (e) { /* storage blocked / partitioned — nothing to carry */ }
+    };
+    // `pagehide` is the last moment a departing origin is readable. Also snapshot
+    // when the tab is hidden, which is what a closing SSO popup gives us instead.
+    window.addEventListener('pagehide', snapSession, true);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') snapSession();
+    }, true);
+    // And shortly after load: a token written during sign-in on THIS origin is
+    // then already captured even if the operator saves without navigating again.
+    setTimeout(snapSession, 1500);
+
+    const fire = () => { try { window.__nxLoginNav && window.__nxLoginNav(location.href); } catch (e) {} };
+    for (const m of ['pushState', 'replaceState']) {
+      const orig = history[m];
+      history[m] = function () { const r = orig.apply(this, arguments); fire(); return r; };
+    }
+    window.addEventListener('popstate', fire);
+
+    // Human-readable name for a control/field, best-effort, most-explicit first.
+    const labelFor = (el) => {
+      try {
+        if (el.labels && el.labels.length) return (el.labels[0].innerText || '').trim();
+        const al = el.getAttribute('aria-label'); if (al) return al.trim();
+        if (el.id) {
+          const l = document.querySelector('label[for="' + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id) + '"]');
+          if (l) return (l.innerText || '').trim();
+        }
+        const ph = el.getAttribute('placeholder'); if (ph) return ph.trim();
+        return (el.name || '').trim();
+      } catch (e) { return ''; }
+    };
+
+    // A committed field. The CHOREOGRAPHY carries identifiers only (de-duped, one
+    // event per field); the VALUE rides the separate __nxLoginValue channel, which is
+    // NOT de-duped so the final keystroke wins over the first.
+    const seenFields = new Set();
+    // Controls that are NOT credential slots. A "Remember me" checkbox always
+    // reports value "on", so without this every login would record a phantom
+    // slot no card can ever fill. A <select> cannot be replayed by a text fill
+    // either. Skipping them is honest: they are not credentials.
+    const NOT_A_SLOT = new Set(['submit', 'button', 'hidden', 'checkbox', 'radio',
+      'reset', 'image', 'file', 'range', 'color']);
+    const reportField = (el) => {
+      if (!el || !('value' in el)) return;
+      try {
+        const tag = (el.tagName || '').toLowerCase();
+        if (tag === 'button' || tag === 'select') return;
+        const type = (el.type || tag || '').toLowerCase();
+        if (NOT_A_SLOT.has(type) || type.indexOf('select') === 0) return;
+        const filled = !!(el.value && String(el.value).length);
+        if (!filled) return;
+        // The value the crawl will REPLAY. Reported on EVERY change/input and on the
+        // pre-submit sweep (so autofill and password managers are caught too); the
+        // Node side keeps the last one per field, which is the completed secret.
+        try {
+          window.__nxLoginValue && window.__nxLoginValue({
+            name: el.name || '',
+            id: el.id || '',
+            label: labelFor(el),
+            type: type,
+            autocomplete: el.getAttribute && (el.getAttribute('autocomplete') || ''),
+            value: String(el.value),
+          });
+        } catch (e) {}
+        // De-dupe: `input` fires per keystroke and `change` again on blur; one
+        // event per field is what the choreography needs. Keyed on every
+        // identifier we ship, so two label-only fields do not collide.
+        const key = (el.name || '') + '|' + (el.id || '') + '|' + type + '|'
+          + (labelFor(el) || '') + '|' + ((el.getAttribute && el.getAttribute('autocomplete')) || '');
+        if (seenFields.has(key)) return;
+        seenFields.add(key);
+        window.__nxLoginField && window.__nxLoginField({
+          name: el.name || '',
+          id: el.id || '',
+          label: labelFor(el),
+          type: type,
+          autocomplete: el.getAttribute && (el.getAttribute('autocomplete') || ''),
+          filled: true,
+        });
+      } catch (e) {}
+    };
+    // `change` alone is not enough: it fires on commit/blur, so a div-based login
+    // where the operator types and presses Enter without ever blurring would
+    // record ZERO fields. `input` catches those; the de-dupe above keeps them one.
+    document.addEventListener('change', (ev) => reportField(ev.target), true);
+    document.addEventListener('input', (ev) => reportField(ev.target), true);
+
+    // EVENTS ARE NOT ENOUGH ON THEIR OWN. Browser autofill and password managers
+    // routinely populate a login WITHOUT firing change or input that a page can
+    // observe — so a tester whose browser filled the form for them logs in
+    // successfully while the recorder sees an empty form and reports "no login
+    // fields were filled".
+    //
+    // So before any control is pressed, look at the form as it ACTUALLY IS: any
+    // field holding a value was filled, however it got there — typed, pasted,
+    // autofilled, or set by the page. State at submit time is evidence; the absence
+    // of an event is not. reportField de-dupes, so a field already seen is ignored.
+    const sweepFields = () => {
+      try {
+        const els = document.querySelectorAll('input, textarea');
+        for (let i = 0; i < els.length; i++) reportField(els[i]);
+      } catch (e) {}
+    };
+    // A real form submission (Enter, or a submit button doing its job).
+    document.addEventListener('submit', sweepFields, true);
+    // Enter-to-submit is a press of the form's default control, not a click —
+    // record it so the submit rung is never missing.
+    document.addEventListener('keydown', (ev) => {
+      try {
+        if (ev.key !== 'Enter') return;
+        const el = ev.target;
+        if (!el || (el.tagName || '').toLowerCase() !== 'input') return;
+        reportField(el);
+        // Resolve the control Enter actually activates — the form's default
+        // button. If we cannot NAME it, emit nothing: a step called "Enter"
+        // matches no control on replay, and a fabricated rung is worse than a
+        // missing one (the derivation surfaces "no submit observed" honestly).
+        const form = el.form;
+        if (!form) return;
+        const btn = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+        if (!btn) return;
+        const name = (btn.getAttribute('aria-label') || btn.innerText || btn.value
+          || btn.getAttribute('title') || '').trim();
+        if (!name) return;
+        // A real click event follows when the browser activates the button; the
+        // click handler de-dupes on its own, so mark this as keyboard-origin.
+        window.__nxLoginClick && window.__nxLoginClick({
+          text: name, role: 'button', name: btn.name || '', id: btn.id || '',
+          type: 'submit', via: 'keyboard',
+        });
+      } catch (e) {}
+    }, true);
+
+    // A pressed control. Walk up from the event target so a click on the <span>
+    // inside a <button> still resolves to the button.
+    document.addEventListener('click', (ev) => {
+      try {
+        let el = ev.target;
+        for (let hops = 0; el && hops < 5; hops++) {
+          const tag = (el.tagName || '').toLowerCase();
+          const role = (el.getAttribute && el.getAttribute('role')) || '';
+          const type = (el.type || '').toLowerCase();
+          const isControl = tag === 'button' || tag === 'a' || role === 'button'
+            || (tag === 'input' && (type === 'submit' || type === 'button'));
+          if (isControl) {
+            // Sweep BEFORE reporting the press, so an autofilled field is recorded
+            // as a fill that precedes the submit rather than being lost. Order is
+            // the recipe: fill, fill, click.
+            sweepFields();
+            // An icon-only submit has no innerText; without the aria-label/title
+            // fallback its click is recorded nameless and silently dropped, so
+            // the recipe loses its submit rung entirely.
+            const text = ((el.getAttribute && el.getAttribute('aria-label')) || el.innerText
+              || el.value || (el.getAttribute && el.getAttribute('title')) || '').trim();
+            window.__nxLoginClick && window.__nxLoginClick({
+              text: text,
+              role: role || tag,
+              name: el.name || '',
+              id: el.id || '',
+              type: type,
+            });
+            return;
+          }
+          el = el.parentElement;
+        }
+      } catch (e) {}
+    }, true);
+  }).catch(() => {});
+
+  // Resolves once bindings + in-page hooks are registered — await BEFORE the first
+  // navigation so the login page itself is instrumented.
+  const ready = Promise.all([pNav, pField, pValue, pClick, pStore, pInit]);
+
+  function snapshot() {
+    // The landing page is wherever the login FINISHED — with an SSO popup that is
+    // the last page in the context, not the one we started on.
+    let currentUrl = '';
+    try {
+      const pages = ctx.pages ? ctx.pages() : [];
+      currentUrl = (pages.length ? pages[pages.length - 1].url()
+        : (target && target.url ? target.url() : '')) || '';
+    } catch (e) { currentUrl = ''; }
+    return {
+      observer_version: 'v1',
+      start_url: safeUrl(options.startUrl || ''),
+      current_url: safeUrl(currentUrl),
+      truncated: events.length >= MAX_EVENTS,
+      events: events.map((e) => Object.assign({}, e)),
+    };
+  }
+
+  /** Every origin's sessionStorage seen during the capture, newest per origin.
+   *  Kept OUT of `snapshot()` on purpose: that is the login choreography, which is
+   *  stored in a plaintext column and travels into evidence. These are secrets and
+   *  ride the encrypted session path instead. */
+  function sessionStorage_() {
+    const out = [];
+    for (const [origin, entries] of sessionStorageByOrigin.entries()) {
+      out.push({ origin: origin, entries: entries });
+    }
+    return out;
+  }
+
+  /** Stop polling. The capture owns the browser; leaving a timer alive against a
+   *  closed context would log a failed evaluate every tick for the life of the
+   *  process. */
+  function stop() {
+    try { clearInterval(pollTimer); } catch (e) { /* already gone */ }
+  }
+
+  /** The credential values observed, most-recent per field. SECRET: returned only to
+   *  the save path, which maps them onto the recipe's slots and hands them straight to
+   *  envelope encryption. Never logged, never merged into `events`, never echoed. */
+  const credentialValues = () => Array.from(values.values());
+
+  return { events, ready, snapshot, credentialValues,
+           sessionStorage: sessionStorage_, pollSessionStorage, stop };
+}
+
+module.exports = { attachLoginObserver };

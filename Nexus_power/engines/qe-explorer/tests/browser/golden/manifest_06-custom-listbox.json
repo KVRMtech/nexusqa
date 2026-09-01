@@ -1,0 +1,173 @@
+[
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
+    "frame_count": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
+    "refuse_pack_version": "refuse-pack-v2",
+    "stop_reason": "",
+    "target_url": "http://127.0.0.1:<port>/06-custom-listbox/index.html",
+    "type": "crawl_meta",
+    "walk_persistence": {
+      "authorized": false,
+      "max_mutations_per_step": 0,
+      "mutations": 0,
+      "reason": "not_attested"
+    }
+  },
+  {
+    "actions": [],
+    "ax_fingerprint": "<hash>",
+    "canonical_host": "127.0.0.1",
+    "displayed_values": [],
+    "first_seen_ms": "<normalized:first_seen_ms>",
+    "form_snapshot": {
+      "Beneficiary Relationship": "Choose",
+      "Optional Rider": "",
+      "Payment Mode": "Monthly Quarterly Annual",
+      "Term Length": "20 years"
+    },
+    "form_snapshot_signals": {
+      "Beneficiary Relationship": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "lazy-trigger",
+          "verified": true
+        },
+        "options": [],
+        "options_total": 0,
+        "required": false,
+        "type": "select"
+      },
+      "Optional Rider": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "rider-trigger",
+          "verified": true
+        },
+        "options": [
+          "Waiver of Premium",
+          "Accidental Death",
+          "Child Term"
+        ],
+        "options_total": 3,
+        "required": false,
+        "type": "select"
+      },
+      "Payment Mode": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "payment-mode",
+          "verified": true
+        },
+        "options": [
+          "Monthly",
+          "Quarterly",
+          "Annual"
+        ],
+        "options_total": 3,
+        "required": false,
+        "type": "select"
+      },
+      "Term Length": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "term-trigger",
+          "verified": true
+        },
+        "options": [
+          "10 years",
+          "15 years",
+          "20 years",
+          "30 years"
+        ],
+        "options_total": 4,
+        "required": false,
+        "type": "select"
+      }
+    },
+    "last_seen_ms": "<normalized:last_seen_ms>",
+    "location": "http://127.0.0.1:<port>/06-custom-listbox/index.html",
+    "network_calls": [],
+    "screenshots": [
+      {
+        "frame_index": 0,
+        "path": "<normalized:path>",
+        "timestamp_ms": "<normalized:timestamp_ms>"
+      }
+    ],
+    "sequence_index": 0,
+    "state_id": "<normalized:state_id>",
+    "title": "Fixture 06 — custom ARIA listbox",
+    "type": "page_state",
+    "url_host": "127.0.0.1",
+    "url_path": "/06-custom-listbox/index.html",
+    "url_query": ""
+  },
+  {
+    "actions": 0,
+    "frontier": [],
+    "frontier_truncated": false,
+    "journey_crossings": 0,
+    "journeys_walked": 0,
+    "sequence_index": 1,
+    "spent_keys": [
+      "127.0.0.1/06-custom-listbox/index.html"
+    ],
+    "states": 1,
+    "timestamp_ms": "<normalized:timestamp_ms>",
+    "type": "checkpoint",
+    "visited_count": 1
+  },
+  {
+    "attestation": null,
+    "budgets": {
+      "max_actions_per_state": 30,
+      "max_depth": 6,
+      "max_requests": 200,
+      "max_states": 1,
+      "max_wall_ms": 1800000,
+      "rate_per_s": 1.0
+    },
+    "config_fingerprint": "characterization-fixed",
+    "crawl_id": "<normalized:crawl_id>",
+    "explorer_version": "qe-explorer/1.0+inv-js-v12",
+    "frame_count": 1,
+    "guard_blocks": 0,
+    "guard_version": "qe-explorer/1.0+inv-js-v12",
+    "refuse_pack_version": "refuse-pack-v2",
+    "stats": {
+      "actions": 0,
+      "elapsed_ms": "<normalized:elapsed_ms>",
+      "requests": 13,
+      "states": 1
+    },
+    "stop_reason": "budget_max_states",
+    "target_url": "http://127.0.0.1:<port>/06-custom-listbox/index.html",
+    "type": "crawl_meta",
+    "walk_persistence": {
+      "authorized": false,
+      "max_mutations_per_step": 0,
+      "mutations": 0,
+      "reason": "not_attested"
+    }
+  }
+]

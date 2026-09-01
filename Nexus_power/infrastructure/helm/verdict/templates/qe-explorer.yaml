@@ -1,0 +1,137 @@
+{{/*
+=================================================================
+qe-explorer — the QUARANTINED browser container (design §1.1).
+
+Isolation is enforced by the NetworkPolicy (networkpolicy.yaml), not by
+this Deployment: the explorer's ONLY egress is to the egress-proxy (squid)
+and back to qe-central (the HMAC-signed completion callback) — never the
+DB, never the factory, never the internet directly. It holds NO DB creds
+and NO KMS — only the per-fleet HMAC token.
+
+Live-crawl artifact handoff: with env.storageBackend=local the explorer's
+crawl output is on a pod-local emptyDir; sharing it with qe-central on k8s
+needs an RWX volume or (recommended) an object-storage backend. Live
+dispatch is OFF by default (env.explorerDispatchEnabled=false).
+=================================================================
+*/}}
+{{- if .Values.qeExplorer.enabled }}
+{{- $fullname := include "verdict.fullname" . }}
+{{- $root := . }}
+{{- $callback := .Values.qeExplorer.callbackUrl | default (include "verdict.serviceUrl" (dict "root" $root "component" "qe-central" "port" .Values.qeCentral.port)) }}
+{{- $egress := include "verdict.serviceUrl" (dict "root" $root "component" "egress-proxy" "port" .Values.egressProxy.port) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-qe-explorer
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-explorer") | nindent 4 }}
+spec:
+  replicas: {{ .Values.qeExplorer.replicas }}
+  selector:
+    matchLabels:
+      {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "qe-explorer") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "qe-explorer") | nindent 8 }}
+      annotations:
+        {{- include "verdict.podAnnotations" $root | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "verdict.fullname" .) }}
+      {{- include "verdict.podSpecCommon" $root | nindent 6 }}
+      securityContext:
+        {{- include "verdict.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: qe-explorer
+          image: {{ include "verdict.image" (dict "root" $root "name" .Values.qeExplorer.image.name "tag" .Values.qeExplorer.image.tag) }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.qeExplorer.port }}
+              protocol: TCP
+          env:
+            - name: NEXUS_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "verdict.configName" $root }}
+                  key: NEXUS_ENV
+            - name: QEC_EXPLORER_PORT
+              value: {{ .Values.qeExplorer.port | quote }}
+            - name: QEC_EXPLORER_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "verdict.configName" $root }}
+                  key: QEC_LOG_LEVEL
+            - name: QEC_CALLBACK_URL
+              value: {{ $callback | quote }}
+            - name: EGRESS_PROXY
+              value: {{ $egress | quote }}
+            - name: WORK_DIR
+              value: "/work"
+            # M0.6 observability — the crawl-lifecycle exposition (app/metrics.py).
+            # Both knobs are honoured at import time; metrics ON by default, and
+            # setting metricsEnabled=false makes every record_* a hard no-op.
+            - name: QEC_EXPLORER_METRICS_ENABLED
+              value: {{ ternary "1" "0" .Values.env.metricsEnabled | quote }}
+            - name: QEC_EXPLORER_METRICS_PATH
+              value: {{ .Values.env.explorerMetricsPath | default .Values.env.metricsPath | quote }}
+            # Per-fleet HMAC token — the ONLY authority the explorer carries.
+            - name: QEC_EXPLORER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "verdict.secretName" $root }}
+                  key: explorer-token
+          resources:
+            {{- toYaml .Values.qeExplorer.resources | nindent 12 }}
+          securityContext:
+            {{- include "verdict.containerSecurityContext" . | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: work
+          emptyDir:
+            sizeLimit: 5Gi
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.qeExplorer.shmSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-qe-explorer
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "qe-explorer") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.qeExplorer.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "qe-explorer") | nindent 4 }}
+{{- end }}

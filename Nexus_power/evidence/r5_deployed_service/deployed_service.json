@@ -1,0 +1,32 @@
+{
+  "vm_head": "3d7e0f50df4747b964fbb1dfed94fc99aaa56204",
+  "vm_branch": "feat/qec-dynamic-catalog-p0-p6",
+  "vm_dirty": false,
+  "alembic_head": "qec_023",
+  "health": {
+    "status": "healthy",
+    "service": "qe-central",
+    "db_qec": "connected",
+    "db_substrate": "connected",
+    "storage_backend": "local",
+    "guc": {
+      "ok": true,
+      "echo": "__qec_health__"
+    },
+    "kek": {
+      "provider": "gcp_kms",
+      "is_production_grade": true,
+      "envelope_ready": true
+    },
+    "harness_enabled": false
+  },
+  "qe_central_status": "Up About a minute (healthy)",
+  "migrations_applied": "qec_017 -> qec_023 (6 migrations, additive)",
+  "db_backup": "BACKUP_OK 20260827T023647Z (nexus 956262846B, qecentral 1730350B)",
+  "check": "R5' thin deployed-service check: service healthy on candidate SHA with schema at head",
+  "produced_by": {
+    "head": "3d7e0f50df4747b964fbb1dfed94fc99aaa56204",
+    "dirty": true,
+    "dirty_paths": []
+  }
+}

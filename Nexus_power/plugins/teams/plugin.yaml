@@ -1,0 +1,65 @@
+id: teams
+version: 1.0.0
+display_name: Microsoft Teams
+vendor: nexus-core
+tier: standard
+
+capabilities:
+  - source
+  - surface
+
+auth:
+  method: oauth2_client_credentials
+  scopes:
+    - https://api.botframework.com/.default
+  per_tenant: true
+
+source:
+  events:
+    - id: activity.message
+      type: activity.message
+      handler: handle_activity
+      description: Bot Framework activity (message / invoke / conversationUpdate).
+  rate_limit:
+    per_second: 50
+
+surface:
+  inbound:
+    - id: activity.message
+      type: activity.message
+      handler: handle_activity
+    - id: activity.invoke
+      type: activity.invoke
+      handler: handle_invoke
+  outbound:
+    - id: post_activity
+      description: POST a reply activity to the Bot Framework Connector.
+      required_params:
+        - service_url
+        - conversation_id
+        - activity
+      optional_params:
+        - reply_to_id
+      retries: 3
+    - id: post_card
+      description: POST an Adaptive Card attachment.
+      required_params:
+        - service_url
+        - conversation_id
+        - card
+      retries: 3
+
+routing:
+  tenant_resolver: by_aad_tenant_id
+  tenant_cache_seconds: 300
+
+health:
+  endpoint: https://login.botframework.com/v1/.well-known/openidconfiguration
+  interval_seconds: 60
+  timeout_seconds: 5
+
+min_platform_version: 1.0.0
+tags:
+  - chat
+  - integration
+documentation_url: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/

@@ -1,0 +1,219 @@
+{
+  "added_question": "Occupation",
+  "after_crawl": "a21-after-change",
+  "app": "acme-life",
+  "app_sha256_after": "01be85238e1196df693a2c617a23f54f6871356524b2928fbbde86333350bbaa",
+  "app_sha256_before": "6fa9a663aff8e0c1d0174d400820e972bbc60630f2dd42beb91e7319bf16ac70",
+  "baseline_crawl": "a21-baseline",
+  "changed_question": "State",
+  "changed_question_added_option": "NY",
+  "fingerprint": {
+    "after": {
+      "question_count": 15,
+      "questions": {
+        "Accidental death benefit amount ($)": {
+          "options": [],
+          "required": false,
+          "type": "text"
+        },
+        "Age": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Coverage amount ($)": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Date of birth": {
+          "options": [],
+          "required": true,
+          "type": "date"
+        },
+        "Full legal name": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "No": {
+          "options": [],
+          "required": false,
+          "type": "radio"
+        },
+        "Occupation": {
+          "options": [],
+          "required": false,
+          "type": "text"
+        },
+        "Password": {
+          "options": [],
+          "required": true,
+          "type": "password"
+        },
+        "Primary beneficiary": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Replacing an existing policy?": {
+          "options": [
+            "no",
+            "select an option",
+            "yes"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "State": {
+          "options": [
+            "ca",
+            "fl",
+            "ny",
+            "tx"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "Term length": {
+          "options": [
+            "10 years",
+            "20 years",
+            "30 years"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "Username": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Waiver of premium rider": {
+          "options": [
+            "no",
+            "select an option",
+            "yes"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "options": [],
+          "required": false,
+          "type": "radio"
+        }
+      }
+    },
+    "baseline": {
+      "question_count": 15,
+      "questions": {
+        "Accidental death benefit amount ($)": {
+          "options": [],
+          "required": false,
+          "type": "text"
+        },
+        "Age": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Coverage amount ($)": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Date of birth": {
+          "options": [],
+          "required": true,
+          "type": "date"
+        },
+        "Full legal name": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "No": {
+          "options": [],
+          "required": false,
+          "type": "radio"
+        },
+        "Password": {
+          "options": [],
+          "required": true,
+          "type": "password"
+        },
+        "Primary beneficiary": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Replacing an existing policy?": {
+          "options": [
+            "no",
+            "select an option",
+            "yes"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "SSN (synthetic)": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "State": {
+          "options": [
+            "ca",
+            "fl",
+            "tx"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "Term length": {
+          "options": [
+            "10 years",
+            "20 years",
+            "30 years"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "Username": {
+          "options": [],
+          "required": true,
+          "type": "text"
+        },
+        "Waiver of premium rider": {
+          "options": [
+            "no",
+            "select an option",
+            "yes"
+          ],
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "options": [],
+          "required": false,
+          "type": "radio"
+        }
+      }
+    }
+  },
+  "milestone": "GATE3-A21",
+  "removed_question": "SSN (synthetic)",
+  "surgeries_applied": [
+    "REMOVE SSN (synthetic)",
+    "ADD Occupation",
+    "CHANGE State"
+  ],
+  "surviving_questions": [
+    "Age",
+    "Coverage amount ($)",
+    "Full legal name",
+    "Date of birth",
+    "Primary beneficiary"
+  ]
+}

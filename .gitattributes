@@ -1,0 +1,164 @@
+# Line endings — CI runs on Linux, so executable text must be checked out LF.
+#
+# WHY THIS EXISTS. Every shell script in this repository is executed by a Linux
+# runner (ci.yml) or inside a Linux container (the qe-explorer / qe-central
+# images, scripts/qec_ci_db_setup.sh, ci/run_*_tests.sh). Bash cannot parse a
+# CRLF script: it reads the carriage return as part of the last token and fails
+# with a syntax error that names a line which is visibly correct —
+#
+#     scripts/gate_rollback.sh: line 33: syntax error near unexpected token $'in\r'
+#     scripts/gate_rollback.sh: line 33: `  case "$1" in'
+#
+# — which is exactly as confusing to debug as it looks. Observed on this repo:
+# tests/deploy_gate reported "12 failed, 11 errors" against a CRLF working tree
+# and "116 passed" against the identical files normalised to LF. Nothing was
+# wrong with the code.
+#
+# Without this file the outcome depends on each developer's `core.autocrlf`.
+# That happens to be `true` on the current Windows checkout, so its commits are
+# normalised to LF and CI is fine today. A contributor with `core.autocrlf=false`
+# would commit CRLF and break every shell-script job on Linux — a repository-wide
+# breakage caused by a local git setting nobody looks at.
+#
+# Scoped deliberately to the file types where the line ending is FUNCTIONAL
+# rather than cosmetic, instead of a blanket `* text=auto` that would rewrite
+# every file in the tree as a side effect of a CI fix.
+*.sh      text eol=lf
+# Config consumed INSIDE a Linux container must be LF regardless of the
+# developer's platform. squid.conf is bind-mounted (compose) or docker cp'd
+# (the A32/A33 harness) straight into ubuntu/squid; with core.autocrlf=true a
+# Windows checkout hands the container CRLF bytes while the committed blob is
+# LF, so the proof runs against config production never sees. Caught by Gate 4
+# after A32/A33 shipped 71 CR bytes into the container and still passed.
+# DELIBERATELY NARROW, AND KNOWN TO BE INCOMPLETE. These are pinned by PATH
+# rather than by `*.conf` because Gate 4 owns the egress-fence proof, not every
+# other squad's config file. That is also this rule's weakness: naming files
+# individually is precisely how the NEXT one gets missed — a repo-wide scan
+# found 727 tracked files with no eol rule (.tsx 190, .json 140, .md 126,
+# .ts 101, .html 61, .tf 35, .txt 30, .conf 5, .jsonl 4). Pinning by EXTENSION
+# across .conf .txt .json .jsonl .html .tf is tracked as Gate 0 item A3c, and
+# should supersede these two lines rather than sit beside them.
+#
+# NOTE FOR WHOEVER LANDS A3c: a rule here applies at checkout/normalise and does
+# NOT touch files already on disk. Adding the pin, confirming `git check-attr`
+# reports eol: lf, and still executing CRLF bytes are all true at once. Finish
+# with `git add --renormalize <path>` then `rm <path> && git checkout -- <path>`,
+# and re-measure the BYTES. Trusting the attribute is what hides it.
+Nexus_power/engines/qe-explorer/squid.conf                 text eol=lf
+Nexus_power/engines/qe-explorer/squid_allowed_domains.txt  text eol=lf
+*.bash    text eol=lf
+
+# Interpreter shebang lines have the same problem as bash: a `#!/usr/bin/env
+# python3\r` is not a valid interpreter path. Python source is also read by
+# tools (ruff, pytest assertion rewriting) that report CR as content.
+*.py      text eol=lf
+
+# Consumed by Linux tooling: docker build, alembic, helm, kubectl, GitHub Actions.
+Dockerfile* text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.sql     text eol=lf
+
+# PowerShell is run by Windows hosts (scripts/deploy.ps1 on the operator's box),
+# so it keeps CRLF rather than being dragged into the Linux convention.
+*.ps1     text eol=crlf
+
+# THE FILE THAT GOVERNS LINE ENDINGS DID NOT GOVERN ITSELF.
+# `.gitattributes` matched none of the patterns above, so it was `unspecified`.
+# An edit written from a Windows tool therefore committed the WHOLE file as CRLF:
+# measured on this very file, 12 real content lines and 101 lines of pure
+# line-ending churn in one commit, and the blob flipped LF -> CRLF. Pinned, so
+# the rules cannot arrive in a form that contradicts what they say.
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+
+# Recorded evidence — goldens, characterization manifests and crawl recordings.
+#
+# WHY. These files are compared BYTE FOR BYTE, both by pytest (the M0.3
+# characterization gate) and by CI itself (`git diff --quiet -- tests/browser/golden`
+# and `-- evidence/m23_retirement`). The recorder always writes an LF newline.
+# Without a rule here, `core.autocrlf=true` — which is the setting on the current
+# Windows checkout — checks them out with CRLF, and the very next re-record
+# rewrites every line back to LF. `git status` then reports the whole file dirty
+# with no behaviour change behind it, and the CI "a golden was rewritten" guard
+# cannot tell that apart from a real capture regression.
+#
+# Pinning them to LF makes a clean clone byte-identical on Linux and Windows, so
+# a diff in one of these files always means the CAPTURE changed.
+*.golden  text eol=lf
+
+# …AND THE SAME ARTEFACTS THAT ARE SHAPED LIKE JSON, which the rule above does
+# not reach. The section says "characterization manifests and crawl recordings";
+# `*.golden` was the only pattern pinned, so every JSON-shaped recording was left
+# `unspecified` and therefore CRLF in a Windows working copy and LF in the blob.
+#
+# MEASURED, on evidence/a23_live_network/manifest.jsonl: 20 CRLF in the working
+# copy, 0 in the committed blob. Nothing broke — the guards that read these files
+# use `Path.read_text()`, which applies universal newlines and normalises CRLF
+# away before hashing — but that is invisible in the code and one refactor deep:
+#
+#     read_text()  -> 1f4f4f7d…  matches the sha256 pinned in stamp.json
+#     read_bytes() -> fe50c5ac…  DOES NOT
+#
+# `read_bytes()` is the obvious "hash the actual file" change for someone to make,
+# and it would fail on Windows only, reporting the evidence as EDITED when it is
+# byte-identical to what CI recorded. Pinning eol=lf removes the trap instead of
+# relying on a reader noticing it.
+#
+# The browser goldens are here for the same reason and are not hypothetical: CI
+# guards them with `git diff --quiet -- tests/browser/golden`, which is exactly
+# the comparison a line-ending difference corrupts.
+Nexus_power/evidence/**                                   text eol=lf
+Nexus_power/engines/qe-explorer/tests/browser/golden/**    text eol=lf
+
+# AND PINNING IS NOT RETROACTIVE. The attribute applies at checkout and at
+# `git add --renormalize`; a file already sitting on disk keeps its CRLF until
+# one of those happens. Measured immediately after adding the rule above: one
+# evidence file read 0 CRLF (it had been re-checked-out to verify the fix) while
+# four others still read 218, 187, 2360 and 13. "Pinned" and "actually LF on
+# disk" are different states, and only the first survives a clean clone.
+#
+# So a checkout that predates this rule still carries the trap locally even
+# though CI does not. `git rm --cached -r <path> && git checkout -- <path>`, or
+# simply deleting and re-checking-out the files, closes it — but check
+# `git status` first: re-checkout destroys uncommitted work, and this tree is
+# shared between sessions.
+#
+# AND MEASURE BY SIZE, NOT BY GREP. On Windows git translates its own stdout, so
+# `git cat-file blob <sha> | grep -c $''` can report CR on every line of a blob
+# that is stored LF — a false POSITIVE that looks exactly like the bug. Compare
+# byte counts instead, which nothing translates:
+#
+#     git cat-file -s HEAD:<path>     vs     the file's size on disk
+#
+# Equal means the working copy is already LF. A difference means the working copy
+# has CR bytes the blob does not — which is the healthy normalised state, not a
+# defect.
+#
+# THE DIFFERENCE IS THE CR-BYTE COUNT, NOT THE LINE COUNT. An earlier version of
+# this note said "line count", which is right only when EVERY line ends CRLF and
+# raises a false alarm otherwise. Measured on three constructed files:
+#
+#     case        disk  normalised  delta  CR bytes  lines   line-count rule
+#     pure CRLF      9           6      3         3      3   OK (coincidence)
+#     MIXED          8           6      2         2      3   FALSE ALARM
+#     pure LF        6           6      0         0      3   FALSE ALARM
+#
+# Mixed endings are not exotic — one file created by an editor and appended to by
+# a bash heredoc is enough. Count CR bytes:
+#
+#     tr -dc '' < "$f" | wc -c
+#
+# The correction matters more than the arithmetic: a check that fires on healthy
+# files gets muted, and a muted check is indistinguishable from one that cannot
+# fire. The line-count form would have been switched off by the first person to
+# run it on an already-LF file, and the real CRLF regression would then have
+# arrived unopposed. (Rule and correction both from nexusqa-e3, who hit the
+# mixed-ending case in their own lane minutes after writing the first version.)
+
+# Binary — never touched, never diffed as text.
+*.png     binary
+*.jpg     binary
+*.gz      binary
+*.tgz     binary
+*.zip     binary

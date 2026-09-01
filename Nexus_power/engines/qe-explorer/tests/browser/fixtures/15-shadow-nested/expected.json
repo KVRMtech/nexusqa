@@ -1,0 +1,34 @@
+{
+  "purpose": "The anti-overfit variation for BUG-SHADOW-NAME. Fixture 01 proves ONE open shadow root resolves its own labels; this proves the rule is the general one - names resolve against the node's own root at any depth - and that the fix scopes correctly rather than widening the search to the whole document.",
+  "targeted_defect": "BUG-SHADOW-NAME (variation): a fix that resolved shadow names by searching the TOP-LEVEL document would make fixture 01 pass while naming input#account.inner 'Outer Account Number' - a wrong but plausible name that binds to the wrong field at replay instead of failing loudly. This fixture fails that fix.",
+  "lanes": ["jsdom", "playwright"],
+  "snippet": "INVENTORY_JS",
+  "min_controls": 5,
+  "expect_controls": [
+    {
+      "where": {"css_hint": "input#account.outer"},
+      "fields": {"name": "Outer Account Number", "name_source": "label-for", "frame_selector": ""},
+      "why": "The light-DOM control keeps its own label. The shadow root must not capture it."
+    },
+    {
+      "where": {"css_hint": "input#account.inner"},
+      "fields": {"name": "Inner Account Number", "name_source": "label-for"},
+      "why": "THE decisive assertion. Same id as the outer control; a document-scoped lookup names this 'Outer Account Number'."
+    },
+    {
+      "where": {"css_hint": "input#share.pct"},
+      "fields": {"name": "Share Percentage", "name_source": "label-for", "min": "0", "max": "100"},
+      "why": "Two labels for one control inside a shadow root - the first in document order wins, as it does in the light DOM."
+    },
+    {
+      "where": {"css_hint": "input#deep-field.deep"},
+      "fields": {"name": "Deep Nested Field", "name_source": "label-for", "required": true},
+      "why": "TWO shadow boundaries deep. Resolution must follow the node's own root at any nesting depth."
+    },
+    {
+      "where": {"css_hint": "input#deep-aria.deeparia"},
+      "fields": {"name": "Trust Registered name", "name_source": "aria-labelledby"},
+      "why": "aria-labelledby resolved two boundaries deep - the id-reference rung uses the same root as label[for], and the CAP-03 accessible-text fix must survive shadow scoping."
+    }
+  ]
+}

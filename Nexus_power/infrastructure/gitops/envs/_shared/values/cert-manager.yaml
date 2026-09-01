@@ -1,0 +1,87 @@
+# cert-manager — shared baseline. Applies to every env unless overridden
+# in envs/<env>/values/cert-manager.yaml.
+#
+# Responsibilities:
+#   - Provision TLS certs for ingress hostnames via ACME (Let's Encrypt)
+#   - Provision the Linkerd trust anchor + identity issuer (auto-rotated)
+#   - Provision internal TLS for any service that requests it
+#
+# The actual ClusterIssuer / Certificate CRs that USE this controller are
+# created by the infra-resources ApplicationSet, not here.
+
+installCRDs: true
+
+replicaCount: 2
+
+# Pod security: cert-manager runs unprivileged in the restricted PSS.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+# Liveness / readiness on the controller pod
+livenessProbe:
+  enabled: true
+
+# Prometheus scraping — every controller exposes /metrics. The cluster's
+# kube-prometheus-stack scrapes via the ServiceMonitor below.
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: kube-prometheus-stack
+
+# Webhook (cert-manager's mutating/validating admission)
+webhook:
+  replicaCount: 2
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# CA injector (injects CA bundles into webhook-CA secrets etc.)
+cainjector:
+  replicaCount: 2
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# Pod topology: spread replicas across zones when possible.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/instance: cert-manager

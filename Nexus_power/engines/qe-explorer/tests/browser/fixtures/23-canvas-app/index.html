@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 23 — canvas-only application</title>
+<style>
+  body { margin: 0; font: 14px system-ui, sans-serif; }
+  canvas { display: block; }
+  #applybox { padding: 12px; }
+</style>
+</head>
+<body>
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       FIXTURE 23 — A CANVAS APPLICATION THE DOM CANNOT DESCRIBE.
+
+       Fixture 13 has canvases ON a page; this fixture IS a canvas. That is the
+       difference the vision milestone turns on:
+
+         * 13 asserts a canvas is NAMED as an opaque surface while the real DOM
+           controls beside it are still read. Its DOM explains the page.
+         * 23 has NO readable interactive control at all until one is EARNED.
+           `should_perceive` is true here and false there, and the crawl either
+           perceives this application or records an empty page.
+
+       WHAT IS PAINTED, AND WHAT EACH SUBJECT PROVES
+       ---------------------------------------------
+       Every control below is drawn with fillRect + fillText. None of them is an
+       element. None has a role, a name, a bounding box the accessibility tree
+       can reach, or a locator any generated script could bind. The ONLY handle
+       is a coordinate.
+
+         A · "Annual Income"  (a canvas TEXT FIELD, blue)
+             Clicking it focuses it: the canvas repaints with a caret and the
+             field outline changes. NOTHING in the DOM moves. This is the
+             subject that can only be verified by the PERCEPTUAL R0 rung, and it
+             is the one that becomes a catalogue QUESTION (role=textbox → kind
+             text → form signal), so it proves the whole chain end to end.
+
+         B · "Recalculate"    (a canvas BUTTON, blue)
+             Clicking it repaints the canvas AND appends a real <button> to the
+             DOM. The interactive signature therefore changes, so R0 verifies on
+             the DOM rung. Proves a coordinate action can be verified by the
+             ordinary, strongest rung — no pixel evidence required.
+
+         C · the decorative crest (grey, NOT blue)
+             Inert. Clicking it does nothing at all: no repaint, no DOM change.
+             This is where the deliberately INCORRECT perception is aimed, and
+             the assertion is that it reaches neither the catalogue nor a
+             locator nor a journey step.
+
+       WHY THE BUTTON COLOUR MATTERS
+       -----------------------------
+       The proving-ground test's perceiver finds the controls by scanning the
+       SCREENSHOT for blocks of BUTTON_RGB. That is a real perception from
+       pixels — no DOM, no coordinates handed over — which is what makes the
+       coordinates it produces evidence rather than a rehearsal. The crest is
+       deliberately a different colour so a pixel perceiver does NOT find it,
+       and the hallucinated control has to be injected by the test on purpose.
+
+       SCREEN STATE IS EXPOSED FOR THE TEST, NOT FOR THE CRAWLER
+       ---------------------------------------------------------
+       `window.__canvasApp` is GROUND TRUTH: it records what the application
+       itself believes happened. The test asserts the crawl's verdict against
+       it, so "R0 said verified" is checked against "the app really did react"
+       rather than trusted.  Nothing the crawler reads consults it.
+       ═══════════════════════════════════════════════════════════════════════ -->
+
+  <h1>Illustration Studio</h1>
+
+  <!-- T-VIS-05 SUBJECT — VISIBLE PII, RENDERED AS ORDINARY TEXT.
+       No input holds these: they are printed on the review strip exactly as a
+       real application prints them once a case is open. A text scan of the
+       PROMPT sees nothing, because they are not in the prompt; they are in the
+       image travelling beside it. If the redaction pass does not mask them, a
+       third-party model receives a real-shaped SSN, DOB, account number and
+       email of a named person. The proving-ground test asserts they are BLACK
+       in the bytes the perceiver was handed. -->
+  <p id="case-strip">
+    Applicant: Dana Whitfield &nbsp; SSN: 123-45-6789 &nbsp;
+    DOB: 1978-04-12 &nbsp; Account: 4539 1488 0343 6467 &nbsp;
+    dana.whitfield@example.com
+  </p>
+
+  <canvas id="app" width="900" height="620" aria-label="illustration studio"></canvas>
+  <div id="applybox"></div>
+
+<script>
+(function () {
+  "use strict";
+  var cv = document.getElementById("app");
+  // A page that THROWS is a page that can mislead: capture would then be running
+  // against a half-built DOM and any "nothing was captured" result would be an
+  // artefact rather than a finding. jsdom has no 2D context at all, so the guard
+  // is not hypothetical — see the lane_note in expected.json.
+  var ctx = cv && cv.getContext ? cv.getContext("2d") : null;
+  if (!ctx) { return; }
+
+  // The one colour a pixel perceiver looks for.
+  var BUTTON = "#1a4fd6";
+  var CREST  = "#9aa0a6";
+
+  // Painted control geometry. The DOM cannot see any of this.
+  var INCOME  = { x: 60,  y: 140, w: 300, h: 56, label: "Annual Income" };
+  var RECALC  = { x: 60,  y: 260, w: 300, h: 56, label: "Recalculate" };
+  var CREST_R = { x: 700, y: 120, w: 120, h: 120 };
+
+  var state = { focus: "", runs: 0 };
+
+  window.__canvasApp = {
+    // GROUND TRUTH for the test — never read by the crawler.
+    clicks: [],
+    get focus() { return state.focus; },
+    get runs() { return state.runs; },
+    rects: { income: INCOME, recalc: RECALC, crest: CREST_R }
+  };
+
+  function paint() {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, cv.width, cv.height);
+
+    ctx.fillStyle = "#111111";
+    ctx.font = "28px system-ui, sans-serif";
+    ctx.fillText("Term Life Illustration", 60, 80);
+
+    // A · the canvas text field. Focus is rendered as a caret + a heavier box,
+    //     so a focus click is a REAL visual change and nothing else moves.
+    ctx.fillStyle = BUTTON;
+    ctx.fillRect(INCOME.x, INCOME.y, INCOME.w, INCOME.h);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "18px system-ui, sans-serif";
+    ctx.fillText(INCOME.label, INCOME.x + 16, INCOME.y + 35);
+    if (state.focus === "income") {
+      // FOCUS IS A SCREEN, NOT A CARET.
+      // The identity ladder's perceptual rung is an 8x8 average hash — coarse on
+      // purpose, so a blinking cursor cannot fragment a canvas app into an
+      // infinite frontier. A 4px caret is therefore INVISIBLE to it, and rightly
+      // so. Canvas applications express focus the way this does: the field opens
+      // an editor panel. That is a different screen, and a different screen is
+      // what the rung is built to see.
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(INCOME.x + INCOME.w - 24, INCOME.y + 12, 4, 32);   // caret
+      ctx.fillStyle = "#0b2a72";
+      ctx.fillRect(INCOME.x, INCOME.y + INCOME.h + 8, 420, 300);      // editor panel
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "18px system-ui, sans-serif";
+      for (var k = 0; k < 9; k++) {
+        ctx.fillRect(INCOME.x + 20 + (k % 3) * 130,
+                     INCOME.y + INCOME.h + 30 + Math.floor(k / 3) * 88, 110, 70);
+      }
+    }
+
+    // B · the canvas button.
+    ctx.fillStyle = BUTTON;
+    ctx.fillRect(RECALC.x, RECALC.y, RECALC.w, RECALC.h);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(RECALC.label, RECALC.x + 16, RECALC.y + 35);
+
+    // C · the decorative crest — a different colour, and inert.
+    ctx.fillStyle = CREST;
+    ctx.fillRect(CREST_R.x, CREST_R.y, CREST_R.w, CREST_R.h);
+
+    // The illustration itself, redrawn per run so a Recalculate is visible.
+    ctx.fillStyle = "#333333";
+    for (var i = 0; i < 12; i++) {
+      var h = 20 + ((i * 17 + state.runs * 29) % 140);
+      ctx.fillRect(60 + i * 44, 560 - h, 30, h);
+    }
+    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillText("runs: " + state.runs, 60, 590);
+  }
+
+  function inside(r, x, y) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  cv.addEventListener("click", function (ev) {
+    var rect = cv.getBoundingClientRect();
+    var x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+    window.__canvasApp.clicks.push([Math.round(x), Math.round(y)]);
+
+    if (inside(INCOME, x, y)) {
+      // PIXELS ONLY. No element is created, removed or renamed, so the
+      // interactive signature is byte-identical before and after.
+      state.focus = "income";
+      paint();
+      return;
+    }
+    if (inside(RECALC, x, y)) {
+      state.runs += 1;
+      state.focus = "";
+      paint();
+      // …and this one ALSO earns a real DOM control, which is how a hybrid
+      // canvas application actually behaves (a Flutter/WebGL app that surfaces
+      // its next step as a real link once a computation completes).
+      var box = document.getElementById("applybox");
+      if (!document.getElementById("apply-btn")) {
+        var b = document.createElement("button");
+        b.id = "apply-btn";
+        b.type = "button";
+        b.textContent = "Continue to application";
+        box.appendChild(b);
+      }
+      return;
+    }
+    // Anywhere else — including the crest — is INERT. Nothing repaints and
+    // nothing is added. A perception aimed here can never be verified.
+  });
+
+  paint();
+})();
+</script>
+</body>
+</html>

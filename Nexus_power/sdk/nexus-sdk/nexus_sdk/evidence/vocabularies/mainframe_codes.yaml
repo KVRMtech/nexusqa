@@ -1,0 +1,89 @@
+# Mainframe transaction-code → human-readable label dictionary.
+#
+# Consumed by the mainframe_3270 surface extractor to enrich
+# ``terminal_command`` and ``terminal_function`` controls with a
+# display_label that explains what the captured command actually does.
+#
+# The list is deliberately conservative — only standard codes that
+# come with every CICS / TSO / ISPF / IMS installation.  Customer-
+# specific Z-prefixed T-codes are out of scope (those belong to a
+# per-tenant override layer, not the shipped vocabulary).
+vertical: mainframe_codes
+display_name: Mainframe Transaction Codes
+description: >
+  Canonical CICS, TSO, ISPF, and IMS transaction codes plus PF/PA key
+  labels.  Used to enrich mainframe-surface controls with the kind of
+  context an engineer would have to look up in a manual otherwise.
+
+synonyms: []
+pii_patterns: []
+
+transaction_codes:
+  # ── CICS ─────────────────────────────────────────────────────
+  CEMT: CICS Master Terminal — system administration
+  CEDA: CICS Resource Definition Online
+  CEDF: CICS Execution Diagnostic Facility (debugger)
+  CEBR: CICS Temporary-Storage Browser
+  CECI: CICS Command-Level Interpreter
+  CESN: CICS Sign On
+  CESF: CICS Sign Off
+  CSMT: CICS Master Terminal (legacy)
+  CMSG: CICS Send Message
+  CEOT: CICS Display Terminal Status
+
+  # ── TSO / ISPF ───────────────────────────────────────────────
+  ISPF: Interactive System Productivity Facility (main menu)
+  TSO: Time-Sharing Option
+  PDF: ISPF Program Development Facility
+  SDSF: System Display & Search Facility
+  IOF: Interactive Output Facility
+  SD: ISPF Data Set List Utility
+  SE: ISPF Edit
+  SB: ISPF Browse
+  RM: ISPF Reference Manual
+
+  # ── IMS commands (slash prefix) ──────────────────────────────
+  /DIS: IMS Display
+  /LOG: IMS Log
+  /MSG: IMS Send Message
+  /SHU: IMS Shutdown
+  /STA: IMS Start
+  /STO: IMS Stop
+  /BRO: IMS Broadcast Message
+  /SIG: IMS Sign On
+  /RCL: IMS Recall
+
+  # ── DB2 ──────────────────────────────────────────────────────
+  DB2I: DB2 Interactive
+  SPUFI: DB2 SQL Processor Using File Input
+  QMF:  Query Management Facility
+
+  # ── PF function keys ─────────────────────────────────────────
+  PF1:  Help
+  PF2:  Split screen
+  PF3:  Exit / End
+  PF4:  Return to primary panel
+  PF5:  Repeat find
+  PF6:  Change setting
+  PF7:  Page up
+  PF8:  Page down
+  PF9:  Swap panels
+  PF10: Action bar / Left
+  PF11: Right
+  PF12: Cancel
+
+  # PF13-24 are PF1-12 + shift; we don't enumerate them — the
+  # surface extractor falls back to the bare key id when no label
+  # is registered.
+
+  # ── PA (Program Attention) keys ──────────────────────────────
+  PA1: Attention interrupt
+  PA2: Re-display
+  PA3: Reserved
+
+  # ── JCL / utility ────────────────────────────────────────────
+  IEBGENER: Sequential data set copy/print
+  IEFBR14: Null utility — pure JCL allocation
+  IEBCOPY: Partitioned data set copy
+  IDCAMS: VSAM Access Method Services
+  SORT: DFSORT — sort/merge utility

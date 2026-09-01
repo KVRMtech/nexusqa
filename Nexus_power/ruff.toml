@@ -1,0 +1,81 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Ruff configuration — the repo-wide lint baseline the CI `lint` job enforces.
+#
+# WHY THIS FILE EXISTS. The `lint` job used to run
+#     ruff check . --select E,W,F,I --ignore E501 && ruff format --check .
+# with no configuration anywhere. Because the workflow lived at
+# Nexus_power/.github/ (below the git root) GitHub never discovered it, so that
+# command had never actually run. It reports 1884 findings and demands a
+# 1163-file reformat — i.e. the gate could not go green without a whole-repo
+# rewrite, which is not a lint gate, it is a migration.
+#
+# THE RATCHET (same doctrine as scripts/golden_crawl_gate.sh): a gate that is
+# permanently red gets ignored within a week, and an ignored gate is worse than
+# none because it converts a real signal into background noise. So this config
+# splits the rules in two:
+#
+#   * ENFORCED NOW — the correctness rules that are ALREADY clean repo-wide, so
+#     the gate is green today and any NEW violation is a genuine, blocking
+#     regression. These are the rules that catch code that would raise at
+#     runtime, not code that is merely untidy.
+#
+#   * DEFERRED — real but non-breaking style debt, listed below with the count
+#     measured on this commit. Each is a follow-up ratchet: fix the backlog for
+#     one rule, move it up into `select`, and it can never regress again.
+#
+# Enabling the correctness set was not free: it surfaced 19 real defects that
+# were fixed in the same change as introducing it — 11 F821 undefined names
+# (8 `logger` NameErrors inside spine-engine exception handlers, 2 in
+# platform/api test_factory.py, 1 missing `Any` import) and an F811 duplicate
+# Pydantic model that made the legacy /ground-truth route 422 every payload
+# missing `sequence_index`. That is what a correctness gate is for.
+# ═══════════════════════════════════════════════════════════════════════════
+
+target-version = "py310"          # matches sdk/nexus-sdk/pyproject.toml
+line-length = 100                 # matches sdk/nexus-sdk/pyproject.toml
+
+extend-exclude = [
+    ".venv",
+    "node_modules",
+    "alembic/versions",           # generated migration scaffolding
+    "platform/qe-central/alembic_qec/versions",
+    "**/__pycache__",
+]
+
+[lint]
+# ── ENFORCED NOW — clean repo-wide; a new violation is a blocking regression ──
+select = [
+    "E9",     # syntax / IO errors that stop the file being parsed at all
+    "F6",     # invalid literal comparisons, `assert (x, y)` always-true tuples…
+    "F7",     # break/continue/return outside a valid block, etc.
+    "F81",    # F811 redefinition of an unused name (the duplicate-model class)
+    "F82",    # F821/F822/F823 undefined or unbound names — runtime NameError
+    "F901",   # raise NotImplemented (should be NotImplementedError)
+    "F502", "F506", "F507", "F509",   # %-format argument mistakes
+]
+
+# ── DEFERRED RATCHET — real debt, counted on the commit that added this file ──
+# Do NOT add these to `select` without clearing the backlog in the same change;
+# a red required check trains everyone to ignore it.
+#
+#   I001  919  unsorted-imports                  (pure ordering)
+#   F401  593  unused-import                     (many are deliberate re-exports
+#                                                  / import-for-side-effect and
+#                                                  need per-case judgement)
+#   E402  128  module-import-not-at-top-of-file  (mostly INTENTIONAL: sys.path
+#                                                  is mutated before the import)
+#   F841   54  unused-variable
+#   E702   42  multiple-statements-on-one-line
+#   F541   41  f-string-missing-placeholders
+#   E741   34  ambiguous-variable-name
+#   W293   31  blank-line-with-whitespace
+#
+# `ruff format` is likewise NOT gated: 1163 of 1325 files would be reformatted,
+# so adopting it must be its own reviewed commit (ideally with the reformat
+# recorded in .git-blame-ignore-revs), not a side effect of wiring up CI.
+ignore = []
+
+[lint.per-file-ignores]
+# Tests legitimately import fixtures for their side effects and shadow names
+# inside parametrised helpers.
+"tests/**" = ["F811"]

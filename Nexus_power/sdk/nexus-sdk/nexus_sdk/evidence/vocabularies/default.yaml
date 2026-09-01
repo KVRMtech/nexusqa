@@ -1,0 +1,87 @@
+# Default baseline vocabulary.
+#
+# Every vertical inherits these patterns implicitly — the PII detector
+# always evaluates default.yaml before the vertical-specific file, so a
+# tenant without a vertical assignment still gets baseline SSN / card /
+# email / phone detection.
+vertical: default
+display_name: Default / Baseline
+description: >
+  Universal PII patterns that apply regardless of industry vertical.
+  Loaded for every artifact in addition to the tenant's vertical.
+
+synonyms:
+  - canonical: full_name
+    aliases:
+      - Full Name
+      - Customer Name
+      - Legal Name
+      - First and Last Name
+  - canonical: date_of_birth
+    aliases:
+      - DOB
+      - Date of Birth
+      - Birthday
+      - Birthdate
+  - canonical: address
+    aliases:
+      - Street Address
+      - Mailing Address
+      - Address Line 1
+      - Service Address
+  - canonical: zip_code
+    aliases:
+      - ZIP
+      - Zip Code
+      - Postal Code
+
+pii_patterns:
+  # US Social Security Number — hyphenated form only (digit-only 9s
+  # have a 99% false-positive rate on screen recordings; the hyphen
+  # is the tell).
+  - name: ssn_us
+    regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    severity: high
+    description: US Social Security Number (formatted)
+    redaction: "***-**-####"
+
+  # Credit-card-like sequence (4 groups of 4 digits, optionally hyphen/space-separated).
+  # Catches the common Visa / Mastercard / Discover format; AmEx (15) is
+  # handled separately to avoid a single all-digit regex with too much latitude.
+  - name: credit_card_4x4
+    regex: "\\b(?:\\d{4}[\\s-]?){3}\\d{4}\\b"
+    severity: high
+    description: 16-digit credit card number
+    redaction: "****-****-****-####"
+
+  - name: credit_card_amex
+    regex: "\\b3[47]\\d{2}[\\s-]?\\d{6}[\\s-]?\\d{5}\\b"
+    severity: high
+    description: American Express card number (15 digits)
+    redaction: "****-******-#####"
+
+  # Email — RFC-loose; tested against EasyOCR output where occasional
+  # whitespace bleed-in matters.
+  - name: email_address
+    regex: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b"
+    severity: medium
+    description: Email address
+    redaction: "[REDACTED_EMAIL]"
+
+  # US phone — accepts (XXX) XXX-XXXX, XXX-XXX-XXXX, XXX.XXX.XXXX,
+  # plus +1 prefix variants.  E.164 / international handled per-vertical
+  # for telecom where the screen format is wider.
+  - name: phone_us
+    regex: "(?:\\+?1[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}\\b"
+    severity: medium
+    description: US-style phone number
+    redaction: "[REDACTED_PHONE]"
+
+  # Date of birth — short MM/DD/YYYY or YYYY-MM-DD captured *only*
+  # when preceded by "DOB" / "Date of Birth" within ~16 chars; raw
+  # date regexes hit too many false positives on demo screens.
+  - name: dob_labelled
+    regex: "(?i)\\b(?:DOB|Date\\s+of\\s+Birth|Birthdate)[:\\s]{0,4}(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2})\\b"
+    severity: high
+    description: Date of birth when prefixed by an explicit label
+    redaction: "[REDACTED_DOB]"

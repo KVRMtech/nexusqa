@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 12 — download step</title></head>
+<body>
+  <main>
+    <h1>Your documents</h1>
+
+    <!-- SUBJECT A: a same-origin download link. hrefOf() reads the IDL property,
+         so the RELATIVE href must come back ABSOLUTE - that is what lets the
+         crawler follow a route directly instead of relying on a click producing
+         an observable url change. -->
+    <a id="dl-policy" href="policy.pdf" download>Download Policy Document</a>
+
+    <!-- SUBJECT B: a ROOT-RELATIVE href. Same rule, different resolution path. -->
+    <a id="dl-schedule" href="/documents/schedule.pdf" download="schedule.pdf">Download Schedule</a>
+
+    <!-- SUBJECT C: a HASH ROUTE. An SPA route, not a scroll anchor - the URL
+         normaliser keeps `#/...` precisely so route-to-route navigation stays
+         visible. Captured here so the crawler has a frontier item to push. -->
+    <a id="route-claims" href="#/claims">Claims</a>
+
+    <!-- SUBJECT D: a pure SCROLL ANCHOR. Cosmetic - must NOT read as a
+         navigation target. It is still a captured control; the distinction is
+         made downstream by _norm_url(). -->
+    <a id="anchor-faq" href="#faq">Frequently asked questions</a>
+
+    <!-- SUBJECT E: an anchor with NO href. implicitRole() returns "" for it, so
+         it is not a link; the SELECTOR only matches a[href], so it must be
+         ABSENT from the inventory entirely. -->
+    <a id="not-a-link">Not a link</a>
+
+    <!-- SUBJECT F: a javascript: href. Captured as a link, but its destination
+         is not followable - the crawler must see the scheme and not enqueue it. -->
+    <a id="js-print" href="javascript:window.print()">Print</a>
+
+    <!-- SUBJECT G: a BUTTON that triggers a download. There is no href at all;
+         the only signal is the accessible name. This is the case where capture
+         alone cannot tell a download from any other action. -->
+    <button type="button" id="btn-export">Export to PDF</button>
+
+    <!-- SUBJECT H: an external absolute href, for the scope/allowed-host gate. -->
+    <a id="ext-help" href="https://help.example.com/policies">Help Centre</a>
+  </main>
+</body>
+</html>

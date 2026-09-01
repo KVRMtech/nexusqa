@@ -1,0 +1,108 @@
+{{/*
+=================================================================
+KEDA ScaledObjects — queue-driven autoscaling for engines.
+
+For every component in .Values.autoscaling.kedaComponents, this
+template emits a ScaledObject that scales the matching Deployment
+based on the depth of its workflow queue lane(s).
+
+The triggers query Redis via XLEN on the canonical stream key:
+  nexus:queue:<engine>.<kind>
+where <kind> is "cpu" or "gpu".
+
+When the workflow layer is OFF (.Values.autoscaling.kedaComponents
+is empty), this template emits nothing — the chart's HPA template
+remains the scaling source.
+=================================================================
+*/}}
+
+{{- if .Values.autoscaling.keda.enabled }}
+{{- $fullname := include "nexus-qa.fullname" . }}
+{{- $root := . }}
+{{- $redisAddress := default (printf "%s-redis:%v" $fullname (default 6379 .Values.redis.port)) .Values.autoscaling.keda.redisAddress }}
+{{- $passwordSecretRef := default (include "nexus-qa.secretName" .) .Values.autoscaling.keda.redisPasswordSecret }}
+{{- $passwordKey := default "redis-password" .Values.autoscaling.keda.redisPasswordKey }}
+
+---
+# TriggerAuthentication: shared across every ScaledObject so the Redis
+# password reference lives in one place.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ $fullname }}-redis-auth
+  labels:
+    {{- include "nexus-qa.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: {{ $passwordSecretRef }}
+      key: {{ $passwordKey }}
+
+{{- range $comp := .Values.autoscaling.keda.components }}
+{{- $engineKey := lower $comp.engine }}
+{{- $kindList := default (list "cpu") $comp.kinds }}
+
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $fullname }}-{{ $comp.engine }}-engine
+  labels:
+    {{- include "nexus-qa.componentLabels" (dict "root" $root "component" (printf "%s-engine" $comp.engine)) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullname }}-{{ $comp.engine }}-engine
+  pollingInterval: {{ default 15 $comp.pollingInterval }}
+  cooldownPeriod: {{ default 120 $comp.cooldownPeriod }}
+  minReplicaCount: {{ default 1 $comp.minReplicas }}
+  maxReplicaCount: {{ default 10 $comp.maxReplicas }}
+  # idleReplicaCount lets KEDA scale to zero when the queues are empty.
+  # Disabled by default — engine cold-start (model load) is too slow.
+  {{- if hasKey $comp "idleReplicas" }}
+  idleReplicaCount: {{ $comp.idleReplicas }}
+  {{- end }}
+  fallback:
+    failureThreshold: 5
+    replicas: {{ default 2 $comp.fallbackReplicas }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 25
+              periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 30
+            - type: Pods
+              value: 4
+              periodSeconds: 30
+          selectPolicy: Max
+  triggers:
+    {{- range $kind := $kindList }}
+    - type: redis-streams
+      authenticationRef:
+        name: {{ $fullname }}-redis-auth
+      metadata:
+        # The stream KEDA polls. Workflow dispatcher writes to
+        #   nexus:queue:<engine>.<kind>
+        # (see sdk/nexus-sdk/nexus_sdk/workflows/dispatch.py).
+        stream: nexus:queue:{{ $comp.engine }}.{{ $kind }}
+        # consumerGroup = "nexus:workers:<engine>.<kind>" — KEDA measures
+        # the depth of jobs that haven't been claimed by the group yet.
+        consumerGroup: nexus:workers:{{ $comp.engine }}.{{ $kind }}
+        # Pending entries per replica before scale-up fires. Lower for
+        # latency-sensitive GPU lanes; default 2 for CPU.
+        pendingEntriesCount: {{ default (eq $kind "gpu" | ternary 1 2) (index $comp (printf "pendingEntries_%s" $kind)) | quote }}
+        address: {{ $redisAddress | quote }}
+        databaseIndex: {{ default 3 $root.Values.autoscaling.keda.redisDbIndex | quote }}
+    {{- end }}
+{{- end }}
+{{- end }}

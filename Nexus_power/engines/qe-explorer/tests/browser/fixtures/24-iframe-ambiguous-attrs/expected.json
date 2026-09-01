@@ -1,0 +1,86 @@
+{
+  "purpose": "Prove a frame_selector is DETERMINISTIC and ROOT-SCOPED, not merely escaped. Two frames whose only identifying attribute is an identical metacharacter-laden title must get two different selectors; a frame nested in a shadow root must be addressed through its host rather than by a page-global ordinal; and the HOST itself must be addressable whether or not it carries an id.",
+  "targeted_defect": "BUG-FRAME-AMBIGUOUS (M3.2 / T-FR-03), two defects in frameSelectorFor(). (1) No uniqueness check: two iframes sharing a title/name/src emitted the SAME selector, frameLocator silently bound the first, and every control captured in the second was recorded against a frame it is not in. (2) Page-global indexing: the positional rung emitted `iframe >> nth=N` where N was the loop index inside whichever subtree the walker was standing in, so a shadow-nested frame was numbered among its shadow siblings while Playwright resolves the ordinal document-wide - binding the selector to an unrelated frame.",
+  "lanes": [
+    "playwright"
+  ],
+  "lane_note": "Playwright only: the acceptance is that each emitted selector RESOLVES to exactly one frame AND binds the control captured through it, in a real engine with a real shadow-piercing selector implementation. jsdom has no frame-locator equivalent and no shadow-piercing query, so it could only compare selector strings - which is precisely the test this ticket must not be reduced to.",
+  "snippet": "INVENTORY_JS",
+  "min_controls": 7,
+  "expect_controls": [
+    {
+      "where": {
+        "css_hint": "input#claim-ref"
+      },
+      "fields": {
+        "name": "Claim Reference",
+        "name_source": "label-for",
+        "frame_selector": ""
+      }
+    },
+    {
+      "where": {
+        "css_hint": "input#step-one-field"
+      },
+      "fields": {
+        "name": "Step One Field",
+        "frame_selector": "iframe[title=\"payment \\\"step\\\" [1]\"] >> nth=0"
+      },
+      "why": "First of two frames sharing one title: escaped AND disambiguated by its ordinal among its own matches."
+    },
+    {
+      "where": {
+        "css_hint": "input#step-two-field"
+      },
+      "fields": {
+        "name": "Step Two Field",
+        "frame_selector": "iframe[title=\"payment \\\"step\\\" [1]\"] >> nth=1"
+      },
+      "why": "The control that used to be recorded against frame (a). A single unqualified selector for both frames is how capture claims coverage of a frame it never read."
+    },
+    {
+      "where": {
+        "css_hint": "input#shadow-frame-field"
+      },
+      "fields": {
+        "name": "Shadow Frame Field",
+        "frame_selector": "div#shadow-host >> iframe >> nth=0"
+      },
+      "why": "ROOT-SCOPED. The frame is addressed through its shadow host, which Playwright resolves by scoping the right side of `>>` to the host subtree - so the selector never depends on a cross-root ordinal at all."
+    },
+    {
+      "where": {
+        "css_hint": "input#light-frame-field"
+      },
+      "fields": {
+        "name": "Light Frame Field",
+        "frame_selector": "iframe >> nth=2"
+      },
+      "why": "The light-DOM positional rung. 2 - not 3 - because framesOf() lists a root's own tree BEFORE the shadow roots hanging off it, which is the order Playwright's shadow-piercing engine resolves in. A depth-first list interleaving the shadow frame at its host's position looks more natural and is wrong, and the old code was wrong the other way: it numbered the shadow frame among its shadow siblings."
+    },
+    {
+      "where": {
+        "css_hint": "input#aside-frame-field"
+      },
+      "fields": {
+        "name": "Aside Frame Field",
+        "frame_selector": "aside >> iframe >> nth=0"
+      },
+      "why": "A shadow host with NO id that is the only element of its tag in its root: the bare tag addresses it. The id rung is the easy one, and it was the only one any fixture executed."
+    },
+    {
+      "where": {
+        "css_hint": "input#section-frame-field"
+      },
+      "fields": {
+        "name": "Section Frame Field",
+        "frame_selector": "section >> nth=1 >> iframe >> nth=0"
+      },
+      "why": "A shadow host with no id AND same-tag siblings, so the host itself needs a positional ordinal before the frame inside it can be reached. A component library that never expected to be addressed from outside gives its hosts neither ids nor unique tags reliably."
+    }
+  ],
+  "frame_selectors_must_resolve": {
+    "expect_distinct": 6,
+    "why": "Asserted in test_capture_contract.py by handing each emitted selector back to the browser: it must resolve to exactly one frame, AND the control captured through it must be findable inside that frame. Resolving to one frame is not enough - the whole defect class here is a selector that confidently resolves to the WRONG one."
+  }
+}

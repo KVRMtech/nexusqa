@@ -1,0 +1,1130 @@
+{
+  "advance_blocked": [],
+  "advance_oracle": {
+    "consults": 2,
+    "errors": 0,
+    "latency_ms_total": 0,
+    "picks": 0,
+    "state": "configured",
+    "unavailable": 0
+  },
+  "approvable_boundary": [
+    {
+      "boundary_key": "bnd_1ff17f31c2044b9f49a8",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:61645/acme-life/index.html"
+    },
+    {
+      "boundary_key": "bnd_a3a941e0ed580653ab7a",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:61645/acme-life/index.html"
+    },
+    {
+      "boundary_key": "bnd_bbd4aca714c27e819a34",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote"
+    },
+    {
+      "boundary_key": "bnd_01e2398ba74549982604",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote"
+    },
+    {
+      "boundary_key": "bnd_4b610aa049503872cfdd",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply"
+    },
+    {
+      "boundary_key": "bnd_8d25ac1a7cbd5d63ef19",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply"
+    },
+    {
+      "boundary_key": "bnd_a4774bfbf3e6e8ff87ca",
+      "label": "Apply",
+      "reason": "commit_shaped_label",
+      "rule_id": "",
+      "severity": "high",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/review"
+    },
+    {
+      "boundary_key": "bnd_3c707ecc73272ff9ac0a",
+      "label": "Review & bind",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/review"
+    },
+    {
+      "boundary_key": "bnd_31360717dc516243054f",
+      "label": "Bind policy",
+      "reason": "refuse_pack_irreversible_verb",
+      "rule_id": "rp.verb.bind",
+      "severity": "critical",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/review"
+    }
+  ],
+  "auth_blocked": false,
+  "auth_blocked_reason": "",
+  "auth_incomplete": true,
+  "auth_reason": "not_persisted",
+  "boundaries_crossed": 2,
+  "boundary_crossings": [
+    {
+      "approval_id": "apr_8e82e8f057d9722a",
+      "boundary_key": "bnd_e55735c91d3494179af7",
+      "completed_at_ms": 64625,
+      "confirmed": false,
+      "control_name": "Get quote",
+      "crossing_id": "cross_e55735c91d34_1",
+      "outcome": "dom_changed",
+      "refusal_reason": "",
+      "reserved_at_ms": 51453,
+      "sequence_index": 2,
+      "state_fingerprint": "16519dd0ea4ba923613b0b72d9d55e9719627955c3bde57da893f7fb2af14473",
+      "status": "crossed",
+      "url": "http://127.0.0.1:61645/acme-life/index.html"
+    },
+    {
+      "approval_id": "apr_049cc1820a3f2675",
+      "boundary_key": "bnd_af504c3dfe6a57ba5b59",
+      "completed_at_ms": 203188,
+      "confirmed": true,
+      "control_name": "Continue to review",
+      "crossing_id": "cross_af504c3dfe6a_1",
+      "outcome": "navigation",
+      "refusal_reason": "",
+      "reserved_at_ms": 118016,
+      "sequence_index": 5,
+      "state_fingerprint": "0a9779f634b4fc9d7ece126303213b97577b4501d198fcf9af9ce76c1922fe4b",
+      "status": "crossed",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply"
+    }
+  ],
+  "crawl_mode": "explore",
+  "discovered_rules": [],
+  "endpoint_inventory": [],
+  "endpoint_inventory_truncated": false,
+  "expansions_opened": 2,
+  "expansions_skipped": 0,
+  "field_ledger": [
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Age",
+      "provenance": "synthesized",
+      "semantic_type": "age",
+      "sensitive": false,
+      "signature": "a7b73ae66849e2b68bd4f40153a60cb1",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Coverage amount ($)",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "d86bb15a50a8fb7d74f5e427153c659e",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "10 years",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Term length",
+      "options": [
+        "10 years",
+        "20 years",
+        "30 years"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "03489eaa156d8ef29544a58413f47f25",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "widget": "native_select"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "tx",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "State",
+      "options": [
+        "tx",
+        "fl",
+        "ca"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "097ae56e5321a87ccecb6f7fa930adbb",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "group_id": "aa9515a598bce229af0dccec5f940657",
+      "name": "No",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "needs_input",
+      "question_label": "Do you use tobacco?",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "group_id": "aa9515a598bce229af0dccec5f940657",
+      "name": "Yes",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "needs_input",
+      "question_label": "Do you use tobacco?",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Full legal name",
+      "provenance": "synthesized",
+      "semantic_type": "full_name",
+      "sensitive": true,
+      "signature": "227db94b944ba0a7d9dc40ab5aeff5a3",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Date of birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "662ff44f5bae70bf02b5e790553f82bf",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "SSN (synthetic)",
+      "provenance": "synthesized",
+      "semantic_type": "national_id",
+      "sensitive": true,
+      "signature": "0bdbc40b8be9067114bf356d4ee6b819",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.4,
+      "filled": true,
+      "name": "Primary beneficiary",
+      "provenance": "synthesized",
+      "semantic_type": "free_text",
+      "sensitive": false,
+      "signature": "702715d410dc2d30c094e36daf526d62",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Accidental death benefit amount ($)",
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "0bb620e268785461a14b0b1db41b32e1",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "no",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Waiver of premium rider",
+      "options": [
+        "yes",
+        "no"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "83b0f6cd28c06fcfd2f9b68707817068",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "no",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Replacing an existing policy?",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "e1984a2b4bd1882f7934fee2c329392e",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "widget": "native_select"
+    }
+  ],
+  "fields_inferred": [
+    "Age",
+    "Coverage amount ($)",
+    "Term length",
+    "State",
+    "Full legal name",
+    "Date of birth",
+    "SSN (synthetic)",
+    "Primary beneficiary",
+    "Accidental death benefit amount ($)",
+    "Waiver of premium rider",
+    "Replacing an existing policy?"
+  ],
+  "fields_needing_seed": [
+    "No",
+    "Yes"
+  ],
+  "fields_needing_seed_detail": [
+    {
+      "label": "No",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote"
+    },
+    {
+      "label": "Yes",
+      "url": "http://127.0.0.1:61645/acme-life/index.html#/quote"
+    }
+  ],
+  "filled_by_kind": {
+    "date": 2,
+    "select": 4,
+    "text": 9
+  },
+  "flow_summary": {
+    "advance_contradicts_fills": 0,
+    "advances_by_tier": {
+      "1": 1
+    },
+    "boundaries_crossed": 1,
+    "branch_coverage": false,
+    "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+    "deepest_flow_capped": true,
+    "deepest_flow_proven_steps": 1,
+    "deepest_flow_steps": 2,
+    "deepest_flow_terminal": "oracle_unavailable",
+    "flows_completed": 1,
+    "flows_found": 2,
+    "flows_fully_answered": 0,
+    "flows_truncated": 1,
+    "intent_unmet": 0,
+    "journeys_completed": 0,
+    "oracle_advances": 0,
+    "truncation_reasons": {
+      "oracle_unavailable": 1
+    }
+  },
+  "flows": [
+    {
+      "advance_contradicts_fills": false,
+      "completed": true,
+      "entry_fingerprint": "16519dd0ea4ba923613b0b72d9d55e9719627955c3bde57da893f7fb2af14473",
+      "entry_title": "Acme Life Insurance",
+      "entry_url": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "fields_filled_total": 4,
+      "fields_unanswered": 2,
+      "flow_id": "f90b9bd07f658b1c88923678",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": {
+        "approval_id": "apr_8e82e8f057d9722a",
+        "attestation_attributed_to": "characterization",
+        "attestation_env_kind": "disposable",
+        "boundary_key": "bnd_e55735c91d3494179af7",
+        "clicked_at_ms": 62922,
+        "confirmation_detail": "",
+        "confirmation_rung": "",
+        "control_name": "Get quote",
+        "crossing_id": "cross_e55735c91d34_1",
+        "dom_digest_after": "dom_2a406d6a371ae7fbdf93_12",
+        "dom_digest_before": "dom_3c67a93c42549485ba15_11",
+        "grant": {
+          "approval_id": "apr_8e82e8f057d9722a",
+          "approved_at": "",
+          "approved_by": "a21-catalog-diff",
+          "control": "Get quote",
+          "max_crossings": 4,
+          "state_fingerprint": "",
+          "url": ""
+        },
+        "guard_rule_id": "guard.submit.mutation_ok",
+        "latency_ms": 1453,
+        "milestone_id": "mst_9b9b47db9fe7168f",
+        "navigated": false,
+        "observed_at_ms": 64375,
+        "outcome": "dom_changed",
+        "outcome_values": [
+          {
+            "label": "Estimated monthly premium",
+            "selector": "div.prem",
+            "text": "$96.32",
+            "value_candidate": "true",
+            "value_confidence": "0.90",
+            "value_reason": "currency value under an outcome label",
+            "value_type": "currency"
+          },
+          {
+            "label": "Estimated monthly premium",
+            "selector": "p.muted",
+            "text": "36 yrs \u00b7 $800,000 \u00b7 10-yr",
+            "value_candidate": "true",
+            "value_confidence": "0.90",
+            "value_reason": "currency value under an outcome label",
+            "value_type": "currency"
+          }
+        ],
+        "refuse_pack_version": "refuse-pack-v1",
+        "screenshot_after": "frame_00003.png",
+        "screenshot_before": "frame_00002.png",
+        "state_fingerprint_after": "submit_51fa1dfa474825a3",
+        "state_fingerprint_before": "16519dd0ea4ba923613b0b72d9d55e9719627955c3bde57da893f7fb2af14473",
+        "url_after": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+        "url_before": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+        "verified": false
+      },
+      "outcome_values": [],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "choice": "10 years",
+              "control_label": "Term length",
+              "control_signature": "03489eaa156d8ef29544a58413f47f25",
+              "options": [
+                "10 years",
+                "20 years",
+                "30 years"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "tx",
+              "control_label": "State",
+              "control_signature": "097ae56e5321a87ccecb6f7fa930adbb",
+              "options": [
+                "tx",
+                "fl",
+                "ca"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "control_label": "Do you use tobacco?",
+              "control_signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+              "group_id": "aa9515a598bce229af0dccec5f940657",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Do you use tobacco?",
+              "control_signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+              "group_id": "aa9515a598bce229af0dccec5f940657",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 2,
+          "fingerprint": "16519dd0ea4ba923613b0b72d9d55e9719627955c3bde57da893f7fb2af14473",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:61645/acme-life/index.html#/quote"
+        }
+      ],
+      "terminal": "submit_crossed",
+      "terminal_url": "http://127.0.0.1:61645/acme-life/index.html#/quote"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": false,
+      "entry_fingerprint": "0a9779f634b4fc9d7ece126303213b97577b4501d198fcf9af9ce76c1922fe4b",
+      "entry_title": "Acme Life Insurance",
+      "entry_url": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "fields_filled_total": 4,
+      "fields_unanswered": 2,
+      "flow_id": "e2550022a26ac5fee8bf0383",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "Coverage",
+          "value": "$800,000",
+          "value_type": "currency"
+        },
+        {
+          "label": "Monthly premium",
+          "value": "$96.32",
+          "value_type": "currency"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 2,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Continue to review",
+            "oracle": false,
+            "signature": "cb55ffdcb3dacf872c39160b2046b332342d1f99dc85b05bea0a1f7c35af4bda",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "In the last 5 years, any major diagnosis?",
+              "control_signature": "e23cc9b9bd7c1b0c554d5607880a2d40",
+              "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "In the last 5 years, any major diagnosis?",
+              "control_signature": "55c2d05f07b27c8b9bf1ed73300b105a",
+              "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+              "options": [
+                "no",
+                "yes"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:20b8a7c3bd99a82bf4041f8b2513b461",
+              "option_classes": {
+                "Apply": "forward",
+                "Continue to review": "navigational",
+                "Optional riders": "navigational",
+                "Policy replacement disclosures": "navigational",
+                "Review & bind": "destructive"
+              },
+              "options": [
+                "Apply",
+                "Review & bind",
+                "Optional riders",
+                "Policy replacement disclosures",
+                "Continue to review"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 2,
+          "fingerprint": "0a9779f634b4fc9d7ece126303213b97577b4501d198fcf9af9ce76c1922fe4b",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:61645/acme-life/index.html#/apply"
+        },
+        {
+          "decision_points": [
+            {
+              "control_label": "Next action",
+              "control_signature": "nextaction:b21cd922fe0579ba2d6fdd8a8cb91115",
+              "option_classes": {
+                "Apply": "forward",
+                "Bind policy": "destructive",
+                "Review & bind": "destructive"
+              },
+              "options": [
+                "Apply",
+                "Review & bind",
+                "Bind policy"
+              ],
+              "provenance": "next_action"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 0,
+          "fingerprint": "814060cbfa547b54ddcf5b9236ef42d6216d1494424f4478799995b6ba5f3776",
+          "title": "Acme Life Insurance",
+          "url": "http://127.0.0.1:61645/acme-life/index.html#/review"
+        }
+      ],
+      "terminal": "oracle_unavailable",
+      "terminal_url": "http://127.0.0.1:61645/acme-life/index.html#/review"
+    }
+  ],
+  "forms_confirmed": 1,
+  "forms_found": 2,
+  "forms_submitted": 2,
+  "inventory_failure_detail": "",
+  "inventory_failures": 0,
+  "journeys_completed": 1,
+  "network_events_observed": 0,
+  "network_server_error_count": 0,
+  "network_server_errors": [],
+  "opaque_surfaces": [],
+  "open_choice_unverified": 0,
+  "outcome_milestones": [
+    {
+      "approval_id": "apr_8e82e8f057d9722a",
+      "attestation_attributed_to": "characterization",
+      "attestation_env_kind": "disposable",
+      "boundary_key": "bnd_e55735c91d3494179af7",
+      "clicked_at_ms": 62922,
+      "confirmation_detail": "",
+      "confirmation_rung": "",
+      "control_name": "Get quote",
+      "crossing_id": "cross_e55735c91d34_1",
+      "dom_digest_after": "dom_2a406d6a371ae7fbdf93_12",
+      "dom_digest_before": "dom_3c67a93c42549485ba15_11",
+      "grant": {
+        "approval_id": "apr_8e82e8f057d9722a",
+        "approved_at": "",
+        "approved_by": "a21-catalog-diff",
+        "control": "Get quote",
+        "max_crossings": 4,
+        "state_fingerprint": "",
+        "url": ""
+      },
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "latency_ms": 1453,
+      "milestone_id": "mst_9b9b47db9fe7168f",
+      "navigated": false,
+      "observed_at_ms": 64375,
+      "outcome": "dom_changed",
+      "outcome_values": [
+        {
+          "label": "Estimated monthly premium",
+          "selector": "div.prem",
+          "text": "$96.32",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        },
+        {
+          "label": "Estimated monthly premium",
+          "selector": "p.muted",
+          "text": "36 yrs \u00b7 $800,000 \u00b7 10-yr",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        }
+      ],
+      "refuse_pack_version": "refuse-pack-v1",
+      "screenshot_after": "frame_00003.png",
+      "screenshot_before": "frame_00002.png",
+      "state_fingerprint_after": "submit_51fa1dfa474825a3",
+      "state_fingerprint_before": "16519dd0ea4ba923613b0b72d9d55e9719627955c3bde57da893f7fb2af14473",
+      "url_after": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "url_before": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "verified": false
+    },
+    {
+      "approval_id": "apr_049cc1820a3f2675",
+      "attestation_attributed_to": "characterization",
+      "attestation_env_kind": "disposable",
+      "boundary_key": "bnd_af504c3dfe6a57ba5b59",
+      "clicked_at_ms": 201483,
+      "confirmation_detail": "",
+      "confirmation_rung": "navigation",
+      "control_name": "Continue to review",
+      "crossing_id": "cross_af504c3dfe6a_1",
+      "dom_digest_after": "dom_b277a9de4261c1724f50_5",
+      "dom_digest_before": "dom_e385953c8f4d74e81cea_13",
+      "grant": {
+        "approval_id": "apr_049cc1820a3f2675",
+        "approved_at": "",
+        "approved_by": "a21-catalog-diff",
+        "control": "Continue to review",
+        "max_crossings": 4,
+        "state_fingerprint": "",
+        "url": ""
+      },
+      "guard_rule_id": "guard.submit.mutation_ok",
+      "latency_ms": 1517,
+      "milestone_id": "mst_0591ca108dcbec7c",
+      "navigated": true,
+      "observed_at_ms": 203000,
+      "outcome": "navigation",
+      "outcome_values": [
+        {
+          "label": "Coverage",
+          "selector": "div",
+          "text": "$800,000",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        },
+        {
+          "label": "Monthly premium",
+          "selector": "div",
+          "text": "$96.32",
+          "value_candidate": "true",
+          "value_confidence": "0.90",
+          "value_reason": "currency value under an outcome label",
+          "value_type": "currency"
+        }
+      ],
+      "refuse_pack_version": "refuse-pack-v1",
+      "screenshot_after": "frame_00007.png",
+      "screenshot_before": "frame_00006.png",
+      "state_fingerprint_after": "submit_e49c9bcac362d599",
+      "state_fingerprint_before": "0a9779f634b4fc9d7ece126303213b97577b4501d198fcf9af9ce76c1922fe4b",
+      "url_after": "http://127.0.0.1:61645/acme-life/index.html#/review",
+      "url_before": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "verified": true
+    }
+  ],
+  "rule_reuse": {
+    "hits": 0,
+    "known": 0,
+    "lookups": 0,
+    "misses": 0,
+    "reuse_rate": 0.0
+  },
+  "states": [
+    {
+      "ax_fingerprint": "e63edbf15839d1cd729ee9de0d88cc9ed852a54596b1da6acfa485a8f9a0ffc7",
+      "controls_total": 7,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Password": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "password",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "password"
+        },
+        "Username": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "username",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        }
+      },
+      "location": "http://127.0.0.1:61645/acme-life/index.html",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "16519dd0ea4ba923613b0b72d9d55e9719627955c3bde57da893f7fb2af14473",
+      "controls_total": 11,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Age": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "age",
+            "verified": true
+          },
+          "max": "85",
+          "min": "18",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Coverage amount ($)": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "coverage",
+            "verified": true
+          },
+          "max": "2000000",
+          "min": "50000",
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "step": "50000",
+          "type": "text"
+        },
+        "No": {
+          "locator": {
+            "bindable": true,
+            "group_id": "aa9515a598bce229af0dccec5f940657",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "No",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "State": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "state",
+            "verified": true
+          },
+          "options": [
+            "TX",
+            "FL",
+            "CA"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Term length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term",
+            "verified": true
+          },
+          "options": [
+            "10 years",
+            "20 years",
+            "30 years"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "locator": {
+            "bindable": true,
+            "group_id": "aa9515a598bce229af0dccec5f940657",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Yes",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:61645/acme-life/index.html#/quote",
+      "question_groups": [
+        {
+          "group_id": "aa9515a598bce229af0dccec5f940657",
+          "label": "Do you use tobacco?",
+          "label_source": "legend",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "No"
+            },
+            {
+              "kind": "radio",
+              "name": "Yes"
+            }
+          ],
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "0a9779f634b4fc9d7ece126303213b97577b4501d198fcf9af9ce76c1922fe4b",
+      "controls_total": 16,
+      "danger_controls": 1,
+      "danger_names": [
+        "Review & bind"
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Accidental death benefit amount ($)": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "riderAdb",
+            "verified": true
+          },
+          "max": "500000",
+          "min": "0",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "step": "25000",
+          "type": "text"
+        },
+        "Date of birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "date"
+        },
+        "Full legal name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "fullName",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "No": {
+          "locator": {
+            "bindable": true,
+            "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "No",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Primary beneficiary": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "beneficiary",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Replacing an existing policy?": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "replacePolicy",
+            "verified": true
+          },
+          "options": [
+            "Select an option",
+            "No",
+            "Yes"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "SSN (synthetic)": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "ssn",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "pattern": "900-\\d{2}-\\d{4}",
+          "required": true,
+          "type": "text"
+        },
+        "Waiver of premium rider": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "riderWaiver",
+            "verified": true
+          },
+          "options": [
+            "Select an option",
+            "Yes",
+            "No"
+          ],
+          "options_total": 3,
+          "required": false,
+          "type": "select"
+        },
+        "Yes": {
+          "locator": {
+            "bindable": true,
+            "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Yes",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "http://127.0.0.1:61645/acme-life/index.html#/apply",
+      "question_groups": [
+        {
+          "group_id": "31b304e0cbf5ee8083f19efab844cbe1",
+          "label": "In the last 5 years, any major diagnosis?",
+          "label_source": "legend",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "No"
+            },
+            {
+              "kind": "radio",
+              "name": "Yes"
+            }
+          ],
+          "options": [
+            "No",
+            "Yes"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "814060cbfa547b54ddcf5b9236ef42d6216d1494424f4478799995b6ba5f3776",
+      "controls_total": 5,
+      "danger_controls": 2,
+      "danger_names": [
+        "Review & bind",
+        "Bind policy"
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {},
+      "location": "http://127.0.0.1:61645/acme-life/index.html#/review",
+      "question_groups": []
+    }
+  ],
+  "submit_candidates": [
+    "Get quote",
+    "Optional riders",
+    "Policy replacement disclosures",
+    "Continue to review"
+  ],
+  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 2 form(s) found; 11 field(s) auto-filled with a default; 2 field(s) need a real seed; 2 submit(s) exercised (Phase-B), 9 irreversible boundary/ies awaiting approval; 1 journey(s) completed end-to-end through an approved crossing.",
+  "tab_views_recorded": 0,
+  "traversal": "full",
+  "unblock_irreversible": [],
+  "unhandled_controls": [],
+  "vision_budget": {
+    "breaker_open": false,
+    "breaker_threshold": 3,
+    "calls": 0,
+    "consecutive_failures": 0,
+    "failures": 0,
+    "gate": {
+      "attestation_rung": "none",
+      "attested": false,
+      "enabled": false,
+      "reason": "no_oracle",
+      "tenant_enabled": false
+    },
+    "latency_ms": 0,
+    "max_calls": 0,
+    "refusals": {},
+    "timeout_s": 20.0
+  },
+  "vision_ledger": [],
+  "vision_refused": 0,
+  "vision_verified": 0
+}

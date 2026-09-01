@@ -1,0 +1,49 @@
+# Sigstore / cosign verification of every image deployed into platform
+# namespaces. The publicKey block is a per-env placeholder filled at
+# bootstrap time from the env's config.yaml signatureKey field (or
+# replaced by Sigstore keyless via Fulcio when the cluster's identity
+# is bound to it).
+#
+# In dev: enforcement is Audit (we log but allow). In production: Enforce.
+# The per-env Kyverno values file overrides validationFailureAction.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signatures
+  annotations:
+    policies.kyverno.io/title: Require cosign-signed images
+    policies.kyverno.io/category: Supply Chain
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/subject: Pod
+spec:
+  validationFailureAction: Audit
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: verify-platform-images
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchLabels:
+                  pod-security.kubernetes.io/enforce: restricted
+      verifyImages:
+        - imageReferences:
+            - "*"
+          # Each entry below is one acceptable signing identity. Real
+          # keys / Fulcio identities are injected per env. Operators add
+          # entries here in a controlled PR to extend trust.
+          attestors:
+            - entries:
+                - keyless:
+                    # Keyless verification via Sigstore Fulcio. The
+                    # ${SIGNING_ISSUER} and ${SIGNING_SUBJECT} tokens are
+                    # rendered at bootstrap from the env config — the
+                    # platform never trusts an unconfigured identity.
+                    issuer: ${SIGNING_ISSUER}
+                    subject: ${SIGNING_SUBJECT}
+                    rekor:
+                      url: https://rekor.sigstore.dev
+          mutateDigest: true
+          required: true

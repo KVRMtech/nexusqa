@@ -1,0 +1,9 @@
+CONVERGENCE FAILURES: 2
+
+  WITHIN 3.11.16: 'HTTPS://EXAMPLE.TEST/x' -> explorer='https://example.test' central='https://example.test.TAMPERED'
+  ACROSS interpreters, central: 'HTTPS://EXAMPLE.TEST/x' -> 3.10.11='https://example.test'  3.11.16='https://example.test.TAMPERED'
+
+normalize_origin is duplicated by value in two services that run DIFFERENT CPython versions. A divergence here means one service mints an origin the other refuses — walk persistence fails fleet-wide, presenting as origin_mismatch on a healthy environment.
+interpreters compared: 3.10.11, 3.11.16
+vectors per interpreter: 24
+

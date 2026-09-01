@@ -1,0 +1,328 @@
+# Action extractor (Phase 1.5) — additive env override + full LLM tier ladder.
+#
+# This override:
+#   * Defines a 5-tier LLM ladder (premium → balanced → fast_cloud → vision → fast)
+#   * Routes the multimodal action_extraction task to tier_premium (Claude
+#     Sonnet 4.6) with automatic fallback to GPT-4o → Gemini → llava
+#   * Keeps caption_rewriter on tier_fast (Ollama llama3.2:3b — text only)
+#   * Bumps STORYBOARD_ACTION_EXTRACTOR_VERSION to v3 to force re-derivation
+#     of every artifact with the new Sonnet pipeline
+#
+# Apply by copying alongside docker-compose.yml on the VM as
+# ``docker-compose.override.yml`` — compose auto-merges override files.
+# API keys are read from /home/harik/nexus/Nexus_power/.env (mode 600) so
+# they never appear in this file or in git.
+#
+# Rollback: delete this file and restart platform-api.  Composer's
+# freshness check then sees no scene_actions rows at the new version
+# and treats their absence as acceptable (the visual-flow frontend
+# conditional gracefully hides the green panel).
+services:
+  platform-api:
+    environment:
+      # ── Tier enrollment (order doesn't affect routing; routing uses
+      # LLM_TASK_* and per-tier FALLBACK chains) ──────────────────────
+      LLM_TIERS: tier_premium,tier_balanced,tier_fast_cloud,tier_vision,tier_fast
+
+      # ── Task routing ──────────────────────────────────────────────
+      # Captions stay on the existing free local model.  Action
+      # extraction goes to Sonnet 4.6, with auto-fallback through the
+      # chain on transient failures.
+      LLM_TASK_ACTION_EXTRACTION: tier_balanced
+      LLM_TASK_CAPTION: tier_fast
+
+      # ── tier_premium — Claude Sonnet 4.6 (PRIMARY for action_extraction)
+      LLM_TIER_TIER_PREMIUM_PROVIDER: anthropic
+      LLM_TIER_TIER_PREMIUM_BASE_URL: https://api.anthropic.com
+      LLM_TIER_TIER_PREMIUM_MODEL: claude-sonnet-4-6
+      LLM_TIER_TIER_PREMIUM_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_TIER_TIER_PREMIUM_TIMEOUT_S: '120.0'
+      # Raised 2→4 (2026-05-31): a 16-way concurrent Sonnet load test
+      # showed ~19% HTTP 429 under burst.  The page_action +
+      # form_snapshot extractors were falling back to GPT-4o on every
+      # call (sparse, value-less output) because 2 short retries
+      # couldn't clear the rate-limit window.  4 retries + the router's
+      # exponential backoff (0.25/0.5/1/2s) gives Sonnet enough chances
+      # to land.  Paired with the concurrency reduction below.
+      LLM_TIER_TIER_PREMIUM_MAX_RETRIES: '4'
+      LLM_TIER_TIER_PREMIUM_FALLBACK: tier_balanced
+
+      # ── tier_balanced — OpenAI GPT-4o (FALLBACK 1)
+      LLM_TIER_TIER_BALANCED_PROVIDER: openai_compat
+      LLM_TIER_TIER_BALANCED_BASE_URL: https://api.openai.com/v1
+      LLM_TIER_TIER_BALANCED_MODEL: gpt-4o
+      LLM_TIER_TIER_BALANCED_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_TIER_TIER_BALANCED_TIMEOUT_S: '120.0'
+      LLM_TIER_TIER_BALANCED_MAX_RETRIES: '2'
+      LLM_TIER_TIER_BALANCED_FALLBACK: tier_fast_cloud
+
+      # ── tier_fast_cloud — Gemini 2.0 Flash via Google's OpenAI-compat
+      #     endpoint (FALLBACK 2; cheap + fast vision)
+      LLM_TIER_TIER_FAST_CLOUD_PROVIDER: openai_compat
+      LLM_TIER_TIER_FAST_CLOUD_BASE_URL: https://generativelanguage.googleapis.com/v1beta/openai
+      LLM_TIER_TIER_FAST_CLOUD_MODEL: gemini-2.0-flash
+      LLM_TIER_TIER_FAST_CLOUD_API_KEY: ${GEMINI_API_KEY:-}
+      LLM_TIER_TIER_FAST_CLOUD_TIMEOUT_S: '60.0'
+      LLM_TIER_TIER_FAST_CLOUD_MAX_RETRIES: '1'
+      LLM_TIER_TIER_FAST_CLOUD_FALLBACK: tier_vision
+
+      # ── tier_vision — Local Ollama llava:7b (FALLBACK 3; last-resort vision)
+      LLM_TIER_TIER_VISION_PROVIDER: ollama
+      LLM_TIER_TIER_VISION_BASE_URL: http://ollama:11434
+      LLM_TIER_TIER_VISION_MODEL: llava:7b
+      LLM_TIER_TIER_VISION_TIMEOUT_S: '120.0'
+      LLM_TIER_TIER_VISION_MAX_RETRIES: '1'
+
+      # ── tier_fast — Local Ollama llama3.2:3b (CAPTIONS — text only)
+      # Inherited from base compose; declared here for clarity.
+      LLM_TIER_TIER_FAST_PROVIDER: ollama
+      LLM_TIER_TIER_FAST_BASE_URL: http://ollama:11434
+      LLM_TIER_TIER_FAST_MODEL: llama3.2:3b
+      LLM_TIER_TIER_FAST_TIMEOUT_S: '30.0'
+      LLM_TIER_TIER_FAST_MAX_RETRIES: '1'
+
+      # ── Force re-derivation across all artifacts ──────────────────
+      # v1 — initial Phase 1 deploy (per-scene llava call).
+      # v2 — Phase 1.5: journey-context + URL canonicalization +
+      #      verb=none→navigate override.
+      # v3 — Phase 1.5+Sonnet: tier_premium routes to Claude Sonnet 4.6.
+      #      Sonnet rejected images due to JPEG bytes with image/png
+      #      media_type mismatch; only 6/17 scenes got GPT-4o fallback rows.
+      # v4 — Force re-encode every image through Pillow to PNG before
+      #      sending, guaranteeing media_type matches actual bytes.
+      # v5 — Pass JWT as ?token= query param to eyes-engine (not Bearer
+      #      header); the route only honours the query form.
+      # v6 — JPEG q85 (not PNG) + 1024px max dimension (was 1568) so
+      #      image payload fits Anthropic's 5 MB/image limit.  Plus
+      #      app-grouping canonicalization rewrites ghost Msdd.com
+      #      labels.  Plus richer error logging.
+      # v7 — Fix LLMRouter response reconstruction dropping tool_calls.
+      #      Use dataclasses.replace() instead of manual field copy so
+      #      new fields (tool_calls, cache_read_tokens) propagate from
+      #      the provider through the router back to the caller.
+      # v8 — Multi-action per scene.  Long scenes (≥5s) sample 4
+      #      intra-scene frames and the LLM returns a LIST of actions
+      #      (one per detected field change).  Schema: scene_actions
+      #      gets a ``subaction_index`` column; constraint moves from
+      #      (scene_id, version) to (scene_id, version, subaction_index).
+      #      See migration 033.
+      # v9 — System+user prompt rewrite.  v8 prompt still said "ONE
+      #      action" so Sonnet ignored the list contract and returned
+      #      length-1 even on long scenes.  v9 explicitly instructs
+      #      pairwise frame comparison and lists 3-7 actions for
+      #      typical form-fill pages.
+      # v10 — Two improvements:
+      #      1. Very-long scenes (≥10s) now sample 8 frames instead
+      #         of 4 — catches faster form-fill cadences.
+      #      2. When LLM returns an empty action list, write a
+      #         verb=none placeholder row instead of dropping the
+      #         scene entirely — keeps the journey visually complete.
+      # v11 — Safety net: _fallback_result always emits at least one
+      #      action (verb=none placeholder when no controls AND no
+      #      LLM output).  Closes the gap where scenes silently
+      #      dropped on LLM failure / no-controls combinations.
+      STORYBOARD_ACTION_EXTRACTOR_VERSION: v11
+      STORYBOARD_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
+
+      # ── Phase 2 — URL-keyed extractors ───────────────────────────
+      #
+      # Phase 2.0 — page_visits (URL log).  Deterministic tiers 1-4
+      # cover ~99% of real recordings; LLM inference (tier 5) is OFF
+      # by default.  Bump version to force re-extraction.
+      #
+      # v1 — Initial deploy.  Tier 1 regex required scheme/www.  Live
+      #      test on 72be675e showed OCR captures URLs as
+      #      "Msdd comlinsurance/.../personal-information/X" (no
+      #      scheme, space in host), so Tier 1 missed every USAA
+      #      sub-page — only the canonical pipeline's scene URL
+      #      survived through Tier 2.  4 sub-pages in OCR; 1 captured.
+      # v2 — Add Tier 1.5 path-only fallback that recovers OCR-
+      #      corrupted URLs by matching /<seg>/<seg>... shapes and
+      #      synthesizing the host from the dominant canonical_host.
+      #      Recovers all USAA /personal-information/* sub-pages that
+      #      survived OCR.
+      #      Live UI review found hosts inconsistent: some visits showed
+      #      msdd.com, others usaa.com, for the same single-app journey.
+      #      The canonicaliser only rewrote "dirty" (mixed-case) hosts,
+      #      so the clean-lowercase OCR ghost "msdd.com" (a misread of
+      #      "usaa.com" sharing no characters) slipped through while the
+      #      router rewrote scenes to usaa.com → mismatch.
+      # v3 — _canonicalise_host now rewrites ANY non-dominant host to the
+      #      dominant when the artifact is single-app (no rival clean
+      #      domain), mirroring the router's _canonicalize_scene_urls.
+      #      BUT the dominant-resolver only looked at canonical_domain;
+      #      the OCR ghost was stored as canonical_domain="msdd.com"
+      #      (clean lowercase) + canonical_name="Msdd.com" (uppercase M),
+      #      with the SAME scene_count (4) as the real usaa.com grouping.
+      #      So it read as 2 clean rival domains → multi-app → no rewrite.
+      # v4 — Dominant-resolver now also reads canonical_name and excludes
+      #      ghost-named groupings (uppercase head, the router's
+      #      _name_looks_like_ocr_ghost rule) from both the dominant pick
+      #      and the rival count.  "Msdd.com" is now correctly treated as
+      #      a ghost of usaa.com → single-app → msdd rewritten to usaa.
+      # v5 — SPA defragmentation.  The USAA quote flow is a single-page
+      #      app: one address-bar URL spans many client-side steps and
+      #      the OCR vs scene-URL sources disagreed on the trailing path
+      #      segment frame-to-frame, fragmenting one logical page into a
+      #      5-visit ping-pong (/insurance/life ⇄ /insurance/life/iwa).
+      #      _merge_path_prefix_fragments now folds consecutive same-host
+      #      visits whose shorter path (>= 2 segments) is a segment-prefix
+      #      of the longer, adopting the deeper path + unioning the window.
+      #      Gated by STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX (default on).
+      # v6 — Vision page-identity pass.  OCR cannot read the USAA SPA
+      #      address bar: gender/birthdate/cardiovascular have ZERO
+      #      footprint in OCR text AND in the frozen pipeline's own
+      #      per-frame vision descriptions, and coverage-needs/estimate
+      #      are captured as page content but their URL was never OCR'd.
+      #      The new pass runs Sonnet over sampled frames to read each
+      #      page's identity (address-bar URL if legible, else heading
+      #      label) directly from pixels, then overrides the per-frame
+      #      location before grouping so distinct SPA sub-pages split
+      #      into distinct visits.  Generic (no domain assumptions),
+      #      bounded by VISION_MAX_FRAMES, cached after first derivation.
+      # v7 — No page_visit code change; forces re-derivation now that the
+      #      openai_compat provider fix lets the vision pass actually
+      #      receive images (Anthropic credits are down, so vision runs
+      #      on the GPT-4o fallback).  Direct test confirmed GPT-4o reads
+      #      deep address-bar URLs OCR missed (birthdate, etc.).
+      #      Result: vision recovered the deep URLs (coverage-needs,
+      #      clean estimate, personal-information/*) BUT over-fragmented
+      #      to 37 visits — the heading-label fallback created noisy
+      #      per-frame splits mixed with URL keys.
+      # v8 — Vision override is now URL-AUTHORITATIVE: group only on
+      #      vision URLs (stable); heading label is a last resort only
+      #      for frames with no URL from any source.  29 rows, all 13
+      #      logical pages present but with duplicate representations
+      #      (OCR tail vs vision full; "publicfestimate" vs "estimate").
+      # v9 — Same-page-tail dedup: GLOBAL merge of URL visits by
+      #      (canonical_host, last-path-segment) with a substring
+      #      fallback for OCR run-together garble — collapses the
+      #      duplicate representations to one row per logical page.
+      #      Plus vision concurrency 2->6 (runs on GPT-4o, whose OpenAI
+      #      rate limits are generous) to cut the ~452s derive.
+      STORYBOARD_PAGE_VISIT_EXTRACTOR_VERSION: v9
+      STORYBOARD_PAGE_VISIT_MERGE_PATH_PREFIX: 'true'
+      STORYBOARD_PAGE_VISIT_PATH_PREFIX_MIN_SEGMENTS: '2'
+      STORYBOARD_PAGE_VISIT_MERGE_SAME_PAGE_TAIL: 'true'
+      STORYBOARD_PAGE_VISIT_SAME_PAGE_TAIL_MIN_SUBSTRING: '6'
+      STORYBOARD_PAGE_VISIT_VISION_IDENTITY: 'true'
+      STORYBOARD_PAGE_VISIT_VISION_MAX_FRAMES: '120'
+      STORYBOARD_PAGE_VISIT_VISION_CONCURRENCY: '6'
+      STORYBOARD_PAGE_VISIT_VISION_MIN_CONFIDENCE: '0.5'
+      STORYBOARD_PAGE_VISIT_LLM_INFERENCE: 'false'
+      STORYBOARD_PAGE_VISIT_MERGE_ADJACENT_SAME_URL: 'true'
+      STORYBOARD_PAGE_VISIT_SCREEN_NAME_FALLBACK: 'true'
+      STORYBOARD_PAGE_VISIT_WINDOW_TITLE_FALLBACK: 'true'
+
+      # Phase 2.1 — page_actions (per-URL Sonnet extraction).  Routes
+      # through the same tier ladder as scene-keyed action extraction.
+      #
+      # v1 — Initial deploy.  Live test on 72be675e showed:
+      #      * Sonnet sometimes returned text-payload instead of
+      #        tool_use → "invalid_text_output" warning → fallback
+      #        produced fewer rows than expected.
+      #      * no_frames code path returned actions=[] silently —
+      #        visits whose every frame fetch failed got dropped from
+      #        page_actions entirely.
+      #      Result: 6 actions for 14 v2 visits.
+      # v2 — Prompt strengthening: "You MUST respond by calling the
+      #      record_page_actions tool — do not return prose or text
+      #      JSON".  Plus _no_frames_fallback emits a placeholder so
+      #      visits are always represented.  Plus visible f-string
+      #      logging so the next failure has diagnosable detail.
+      #      Live test: actions 17→37, but f-string logs revealed two
+      #      remaining bugs: (a) eyes-engine 429 rate-limit, (b) GPT-4o
+      #      fallback returns ```python record_page_actions([...])```
+      #      code blocks that the JSON parser couldn't read, plus it
+      #      uses key "target" not "target_label".
+      # v3 — Frame fetch retries on 429/5xx with 1/2/4/8s backoff
+      #      (honoring Retry-After).  Text-fallback parser extracts
+      #      the bracketed arg list from GPT-4o python code-blocks and
+      #      normalizes the "target"→"target_label" alias.
+      #      Live test: STILL 100% GPT-4o fallback — every action row's
+      #      extractor_model was gpt-4o, producing sparse value-less
+      #      actions and 0 form snapshots.  Root cause (confirmed by a
+      #      16-way concurrent Sonnet load test → 19% 429): Anthropic
+      #      rate-limit under the parallel extractor burst, not a code
+      #      bug.  Scene action_extractor (concurrency 4) ran first and
+      #      ate the per-minute Sonnet budget; page extractors then
+      #      429'd and fell back.
+      # v4 — No logic change.  Concurrency 4→2 to stay under Anthropic's
+      #      burst limit (extractors run sequentially in the composer,
+      #      so peak concurrent Sonnet load = one extractor's
+      #      concurrency).  Paired with tier_premium MAX_RETRIES 2→4.
+      #      Version bumped only to force re-derivation.
+      #      Live test: Sonnet now wins (7 Sonnet / 2 GPT-4o), and the
+      #      address-bar + nav actions extract well — BUT the
+      #      /personal-information form pages still got 0 actions.
+      #      Root cause: the extractor processed ALL page_visit versions
+      #      (11 stale v1 rows + 14 current v2), exhausting the
+      #      total_timeout on duplicates before reaching the form pages.
+      # v5 — Code fix: page_action + form_snapshot now filter
+      #      page_visits to the CURRENT (max) extractor version, so the
+      #      LLM budget is spent only on the 14 real visits.  Version
+      #      bumped to force re-derivation under the new code.
+      # v6 — SPA defrag (page_visit v5) merged the quote-shell ping-pong
+      #      into one /insurance/life/iwa visit with a much wider time
+      #      window (17 frames); the fixed 8-frame "very long" sample
+      #      then spread too thin and missed the gender step.  Raise
+      #      very-long sampling 8->12 to recover multi-field coverage on
+      #      merged SPA pages.  Version bumped to re-derive actions only.
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_VERSION: v6
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_CONCURRENCY: '2'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_DEFAULT: '4'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_LONG: '6'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_FRAMES_VERY_LONG: '12'
+      STORYBOARD_PAGE_ACTION_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
+
+      # Phase 2.2 — form_snapshots (per-URL final form state).
+      #
+      # v1 — Initial deploy.  Live test on 72be675e showed every
+      #      frame fetch failing with frame_http_error but status
+      #      detail was hidden inside Python logging's extra={} dict
+      #      so the failure was undiagnosable from docker logs.
+      #      Result: 0 snapshots written.
+      # v2 — Switch frame fetch + LLM error logs to f-string format
+      #      so the HTTP status + body preview appear in docker
+      #      logs.  Plus stronger system prompt requiring tool use.
+      #      Live test: f-string logs revealed the root cause — every
+      #      frame fetch was HTTP 429 (eyes-engine 120 req/min limit,
+      #      saturated by parallel extractors).  Still 0 snapshots.
+      # v3 — Frame fetch retries on 429/5xx with 1/2/4/8s backoff.
+      #      Plus GPT-4o python code-block fallback parser.
+      #      Live test: still 0 snapshots — same Anthropic rate-limit
+      #      fallback as page_action (see v4 note above).
+      # v4 — No logic change.  Concurrency 4→2 + tier_premium retries
+      #      2→4.  Version bumped only to force re-derivation.
+      #      Live test: still 0 snapshots.  Two causes: (a) processed
+      #      stale page_visit versions, exhausting timeout before the
+      #      form pages; (b) the "skip pages with <2 label-shaped OCR
+      #      tokens" heuristic filtered out the form pages because this
+      #      artifact's OCR is too corrupted to match the label pattern.
+      # v5 — Code fix: filter page_visits to current version (same as
+      #      page_action).  Plus disable the OCR heuristic skip
+      #      (SKIP_INPUT_CANDIDATES_BELOW 2→0) so every visit gets a
+      #      snapshot attempt and the LLM itself decides if a form is
+      #      present — robust to bad OCR.
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_VERSION: v5
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_CONCURRENCY: '2'
+      STORYBOARD_FORM_SNAPSHOT_SKIP_INPUT_CANDIDATES_BELOW: '0'
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_WEB_ONLY: 'false'
+      STORYBOARD_FORM_SNAPSHOT_EXTRACTOR_IMAGE_MAX_DIMENSION_PX: '1024'
+
+      # Phase 2 tasks route to the same vision-capable tier ladder as
+      # the scene-keyed action extractor.  The router falls back tier
+      # by tier on transient errors.
+      LLM_TASK_PAGE_ACTION_EXTRACTION: tier_balanced
+      LLM_TASK_FORM_SNAPSHOT_EXTRACTION: tier_balanced
+      LLM_TASK_PAGE_VISIT_INFERENCE: tier_fast_cloud
+      # Vision page-identity reads tiny URL-bar text + headings, so it
+      # needs the strongest vision tier (Sonnet) with GPT-4o fallback.
+      LLM_TASK_PAGE_VISIT_IDENTITY: tier_balanced
+
+  # Raise the per-client rate limit so the storyboard derivation can
+  # burst-fetch frames for the vision/form/page-action LLM passes
+  # without tripping the default 120 rpm (caused 429 frame loss).
+  eyes:
+    environment:
+      NEXUS_RATE_LIMIT_RPM: '3000'

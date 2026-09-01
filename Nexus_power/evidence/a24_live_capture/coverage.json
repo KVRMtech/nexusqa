@@ -1,0 +1,2361 @@
+{
+  "advance_blocked": [
+    {
+      "business_rule": "Continue requires an answer to 'product = Term Life Insurance Affordable coverage for a spec' before it is enabled (proven: the app enabled it when the agent answered)",
+      "label": "Continue",
+      "missing_fields": [
+        "Term Life Insurance Affordable coverage for a specific period",
+        "Whole Life Insurance Lifetime coverage with cash value accumulation",
+        "Universal Life Insurance Flexible premiums and adjustable death benefit",
+        "Variable Universal Life Investment options with life insurance protection"
+      ],
+      "reason": "advance_disabled_by_app_validation",
+      "resolved_by_agent": "Term Life Insurance Affordable coverage for a specific period",
+      "rule_reused": false,
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/"
+    }
+  ],
+  "advance_oracle": {
+    "consults": 1,
+    "errors": 0,
+    "latency_ms_total": 0,
+    "picks": 0,
+    "state": "configured",
+    "unavailable": 0
+  },
+  "approvable_boundary": [],
+  "auth_blocked": false,
+  "auth_blocked_reason": "",
+  "auth_incomplete": true,
+  "auth_reason": "not_persisted",
+  "boundaries_crossed": 0,
+  "boundary_crossings": [],
+  "crawl_mode": "explore",
+  "discovered_rules": [
+    {
+      "blocked_label": "Continue",
+      "field_label": "Term Life Insurance Affordable coverage for a specific period",
+      "key": "rule:856fa2474e1ae04233ba443e",
+      "kind": "advance_gate",
+      "proof": "Continue requires an answer to 'product = Term Life Insurance Affordable coverage for a spec' before it is enabled (proven: the app enabled it when the agent answered)",
+      "schema_version": 1,
+      "url_template": "vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/"
+    }
+  ],
+  "endpoint_inventory": [
+    {
+      "actions": [
+        {
+          "action_token": "a1",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a19",
+          "label": "V VKPower Life Insurance",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 1,
+      "first_timestamp_ms": 5843,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 35,
+      "last_timestamp_ms": 35234,
+      "method": "GET",
+      "observed_count": 8,
+      "path_template": "/login/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 8
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a1",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a18",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a20",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a54",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a60",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a66",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a76",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 2,
+      "first_timestamp_ms": 5859,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 64,
+      "last_timestamp_ms": 337609,
+      "method": "GET",
+      "observed_count": 14,
+      "path_template": "/life-insurance/quote/start/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 14
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a7",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a22",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a30",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a54",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a60",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a66",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 3,
+      "first_timestamp_ms": 10266,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 63,
+      "last_timestamp_ms": 337609,
+      "method": "GET",
+      "observed_count": 14,
+      "path_template": "/portal/dashboard/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 14
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a7",
+          "label": "Verify & Sign In",
+          "verb": "click"
+        },
+        {
+          "action_token": "a8",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a10",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a12",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a14",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a16",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a18",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a20",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a22",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a30",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a54",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 4,
+      "first_timestamp_ms": 10718,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 57,
+      "last_timestamp_ms": 321546,
+      "method": "GET",
+      "observed_count": 15,
+      "path_template": "/portal/beneficiaries/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 15
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a18",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a20",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a22",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a27",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a30",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a54",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a60",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a66",
+          "label": "",
+          "verb": "navigate"
+        },
+        {
+          "action_token": "a76",
+          "label": "",
+          "verb": "navigate"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 30,
+      "first_timestamp_ms": 31187,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 62,
+      "last_timestamp_ms": 337609,
+      "method": "GET",
+      "observed_count": 10,
+      "path_template": "/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": true,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 10
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a31",
+          "label": "Continue",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 48,
+      "first_timestamp_ms": 50843,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 48,
+      "last_timestamp_ms": 50843,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/quote/coverage/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a40",
+          "label": "Continue",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 49,
+      "first_timestamp_ms": 61875,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 49,
+      "last_timestamp_ms": 61875,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/quote/personal/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "actions": [
+        {
+          "action_token": "a53",
+          "label": "Continue",
+          "verb": "click"
+        }
+      ],
+      "auth_pattern": "none",
+      "first_sequence": 50,
+      "first_timestamp_ms": 314359,
+      "has_server_error": false,
+      "host": "vkpowerlife.136-85-106-73.sslip.io",
+      "last_sequence": 50,
+      "last_timestamp_ms": 314359,
+      "method": "GET",
+      "observed_count": 1,
+      "path_template": "/life-insurance/quote/health-check/index.txt",
+      "rate_limited": false,
+      "request_keys": [],
+      "resource_types": [
+        "fetch"
+      ],
+      "response_shape": "text",
+      "retried": false,
+      "status_classes": [
+        "2xx"
+      ],
+      "statuses": {
+        "200": 1
+      }
+    }
+  ],
+  "endpoint_inventory_truncated": false,
+  "expansions_opened": 0,
+  "expansions_skipped": 0,
+  "field_ledger": [
+    {
+      "basis": "name_tokens",
+      "choice": "checked",
+      "confidence": 0.72,
+      "filled": true,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Term Life Insurance Affordable coverage for a specific period",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "answered_to_unblock",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "38fe2dfc2b598dcd6c085f432e555acd",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": false,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "needs_input",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": false,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "needs_input",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "a26d0473eba615ac2d96c36540931574",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "structural",
+      "confidence": 0.5,
+      "filled": false,
+      "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+      "name": "Variable Universal Life Investment options with life insurance protection",
+      "options": [
+        "term life insurance affordable coverage for a specific period",
+        "whole life insurance lifetime coverage with cash value accumulation",
+        "universal life insurance flexible premiums and adjustable death benefit",
+        "variable universal life investment options with life insurance protection"
+      ],
+      "provenance": "needs_input",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/",
+      "widget": "radio_group"
+    },
+    {
+      "basis": "name_tokens",
+      "choice": "$50,000",
+      "confidence": 0.72,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Coverage Amount",
+      "options": [
+        "$50,000",
+        "$100,000",
+        "$150,000",
+        "$200,000",
+        "$250,000",
+        "$300,000",
+        "$400,000",
+        "$500,000",
+        "$750,000",
+        "$1,000,000",
+        "$1,500,000",
+        "$2,000,000"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "currency_amount",
+      "sensitive": false,
+      "signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "30 years",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Term Length",
+      "options": [
+        "10 years",
+        "15 years",
+        "20 years",
+        "25 years",
+        "30 years",
+        "whole life"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "99f9e665039af94483b5a3d9b5f6ee66",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "active duty officer",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Military Affiliation",
+      "options": [
+        "active duty officer",
+        "active duty enlisted",
+        "reserve/guard",
+        "veteran (honorable discharge)",
+        "veteran (other discharge)",
+        "retired military",
+        "military spouse/dependent",
+        "civilian"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "755faf33e87744db25af3eb735fb9f0f",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "army",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Branch of Service",
+      "options": [
+        "army",
+        "navy",
+        "air force",
+        "marine corps",
+        "coast guard",
+        "space force",
+        "army national guard",
+        "air national guard",
+        "army reserve",
+        "navy reserve",
+        "air force reserve",
+        "marine corps reserve",
+        "coast guard reserve"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "662ce19c87af2fff0be506d4fa3d033e",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "First name",
+      "provenance": "synthesized",
+      "semantic_type": "given_name",
+      "sensitive": true,
+      "signature": "c8c66f71dbe8518d80b6138b03e905f6",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Last name",
+      "provenance": "synthesized",
+      "semantic_type": "family_name",
+      "sensitive": true,
+      "signature": "6a99fc2a2c3316b987be1e08ec3116a0",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Date of birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "01296a3d6de8f50df7ad63e666003772",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "female",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Gender",
+      "options": [
+        "male",
+        "female",
+        "non-binary"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "a9608726f36d0f1b6a97fa25e498708c",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "choice": "georgia",
+      "confidence": 0.98,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "State of residence",
+      "options": [
+        "alabama",
+        "alaska",
+        "arizona",
+        "arkansas",
+        "california",
+        "colorado",
+        "connecticut",
+        "delaware",
+        "florida",
+        "georgia",
+        "hawaii",
+        "idaho",
+        "illinois",
+        "indiana",
+        "iowa",
+        "kansas",
+        "kentucky",
+        "louisiana",
+        "maine",
+        "maryland",
+        "massachusetts",
+        "michigan",
+        "minnesota"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "region",
+      "sensitive": false,
+      "signature": "d6ee25c4100c361e85370dd780909b02",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Email address",
+      "provenance": "synthesized",
+      "semantic_type": "email",
+      "sensitive": true,
+      "signature": "d79d966e1522cdca8024c0cbeed56396",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "autocomplete",
+      "confidence": 0.98,
+      "filled": true,
+      "name": "Phone number",
+      "provenance": "synthesized",
+      "semantic_type": "phone",
+      "sensitive": true,
+      "signature": "914fd03190497bd19949797050be1028",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "First name",
+      "provenance": "synthesized",
+      "semantic_type": "given_name",
+      "sensitive": true,
+      "signature": "15e73a3b67873867d9638f2408c3c78c",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.8,
+      "filled": true,
+      "name": "Last name",
+      "provenance": "synthesized",
+      "semantic_type": "family_name",
+      "sensitive": true,
+      "signature": "350a5e5988cdab4dd6a04337345f1ec2",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "structural",
+      "choice": "spouse",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Relationship",
+      "options": [
+        "spouse",
+        "child",
+        "parent",
+        "sibling",
+        "grandchild",
+        "grandparent",
+        "trust",
+        "estate",
+        "charity",
+        "business partner",
+        "other"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "f083fa5abee13b2da4c8726c8193bad9",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "structural",
+      "choice": "primary",
+      "confidence": 0.5,
+      "filled": true,
+      "mechanic": "native_select_option",
+      "name": "Type",
+      "options": [
+        "primary",
+        "contingent"
+      ],
+      "provenance": "synthesized",
+      "semantic_type": "choice",
+      "sensitive": false,
+      "signature": "6a121fdcb81039762ed904a4b8268e85",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "widget": "native_select"
+    },
+    {
+      "basis": "input_type",
+      "confidence": 0.6,
+      "filled": true,
+      "name": "Share %",
+      "provenance": "synthesized",
+      "semantic_type": "quantity",
+      "sensitive": false,
+      "signature": "6b46f491757e9615933db6fef574f6e1",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "Date of birth",
+      "provenance": "synthesized",
+      "semantic_type": "date_of_birth",
+      "sensitive": true,
+      "signature": "7f510ea7baa3531d4a26a05a7b87103b",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "widget": "text"
+    },
+    {
+      "basis": "name_tokens",
+      "confidence": 0.72,
+      "filled": true,
+      "name": "SSN (last 4)",
+      "provenance": "synthesized",
+      "semantic_type": "national_id",
+      "sensitive": true,
+      "signature": "3a3c75c0263943ab287592bc55adb064",
+      "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "widget": "text"
+    }
+  ],
+  "fields_inferred": [
+    "First name",
+    "Last name",
+    "Relationship",
+    "Type",
+    "Share %",
+    "Date of birth",
+    "SSN (last 4)"
+  ],
+  "fields_needing_seed": [],
+  "fields_needing_seed_detail": [],
+  "filled_by_kind": {
+    "date": 2,
+    "select": 11,
+    "text": 8
+  },
+  "flow_summary": {
+    "advance_contradicts_fills": 1,
+    "advances_by_tier": {
+      "1": 4
+    },
+    "boundaries_crossed": 0,
+    "branch_coverage": false,
+    "branch_coverage_note": "One path per journey. At each decision point a single option was taken, so business paths behind the other options were not visited.",
+    "deepest_flow_capped": true,
+    "deepest_flow_proven_steps": 0,
+    "deepest_flow_steps": 5,
+    "deepest_flow_terminal": "loop",
+    "flows_completed": 0,
+    "flows_found": 2,
+    "flows_fully_answered": 0,
+    "flows_truncated": 2,
+    "intent_unmet": 0,
+    "journeys_completed": 0,
+    "oracle_advances": 0,
+    "truncation_reasons": {
+      "loop": 1,
+      "oracle_unavailable": 1
+    }
+  },
+  "flows": [
+    {
+      "advance_contradicts_fills": true,
+      "completed": false,
+      "entry_fingerprint": "ce48849e51e0a143dda30b3685e080113c8cc6193dd50c6fee5233803dce1d18",
+      "entry_title": "VKPower Life Insurance",
+      "entry_url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/",
+      "fields_filled_total": 14,
+      "fields_unanswered": 8,
+      "flow_id": "51df5f13df1f1b5303cdfee3",
+      "fully_answered": false,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [],
+      "step_budget": 20,
+      "step_count": 5,
+      "steps": [
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "0e64ddaec98e68777cbb79279cabcbc031a58e98966f48c3a4dc0c93d240699f",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "Term Life Insurance Affordable coverage for a specific period",
+              "control_signature": "38fe2dfc2b598dcd6c085f432e555acd",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+              "control_signature": "2ebc7ec946fe1721a1c4fb9a8ecdc469",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+              "control_signature": "a26d0473eba615ac2d96c36540931574",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            },
+            {
+              "control_label": "Variable Universal Life Investment options with life insurance protection",
+              "control_signature": "fb2beae01a9ee53dc96a57f4b909aeb9",
+              "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+              "options": [
+                "term life insurance affordable coverage for a specific period",
+                "whole life insurance lifetime coverage with cash value accumulation",
+                "universal life insurance flexible premiums and adjustable death benefit",
+                "variable universal life investment options with life insurance protection"
+              ],
+              "provenance": "needs_input"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 4,
+          "fingerprint": "ce48849e51e0a143dda30b3685e080113c8cc6193dd50c6fee5233803dce1d18",
+          "title": "VKPower Life Insurance",
+          "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "$50,000",
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "30 years",
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "active duty officer",
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 3,
+          "fields_unfilled": 0,
+          "fingerprint": "6b5dd2d5ef9169f4c59d2f2608f41a94dd20c45816f744057bc978f1f14c69ff",
+          "title": "VKPower Life Insurance",
+          "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "choice": "$50,000",
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "30 years",
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "active duty officer",
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "army",
+              "control_label": "Branch of Service",
+              "control_signature": "662ce19c87af2fff0be506d4fa3d033e",
+              "options": [
+                "army",
+                "navy",
+                "air force",
+                "marine corps",
+                "coast guard",
+                "space force",
+                "army national guard",
+                "air national guard",
+                "army reserve",
+                "navy reserve",
+                "air force reserve",
+                "marine corps reserve",
+                "coast guard reserve"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 4,
+          "fields_unfilled": 0,
+          "fingerprint": "c4b4e56e5082df6535731e85de3bb015ff7440720639f5de812cac58aa1c7505",
+          "title": "VKPower Life Insurance",
+          "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/"
+        },
+        {
+          "advance": {
+            "control_name": "Continue",
+            "oracle": false,
+            "signature": "b0931e0be89d0b2e44b02bb1c7efc33b4768b9804f08dedbde101b174f190477",
+            "tier": 1
+          },
+          "decision_points": [
+            {
+              "control_label": "Coverage Amount",
+              "control_signature": "f29ddf0b1c6ade38bc5bbdb413cd254f",
+              "options": [
+                "$50,000",
+                "$100,000",
+                "$150,000",
+                "$200,000",
+                "$250,000",
+                "$300,000",
+                "$400,000",
+                "$500,000",
+                "$750,000",
+                "$1,000,000",
+                "$1,500,000",
+                "$2,000,000"
+              ],
+              "provenance": "intent_unmet"
+            },
+            {
+              "control_label": "Term Length",
+              "control_signature": "99f9e665039af94483b5a3d9b5f6ee66",
+              "options": [
+                "10 years",
+                "15 years",
+                "20 years",
+                "25 years",
+                "30 years",
+                "whole life"
+              ],
+              "provenance": "intent_unmet"
+            },
+            {
+              "control_label": "Military Affiliation",
+              "control_signature": "755faf33e87744db25af3eb735fb9f0f",
+              "options": [
+                "active duty officer",
+                "active duty enlisted",
+                "reserve/guard",
+                "veteran (honorable discharge)",
+                "veteran (other discharge)",
+                "retired military",
+                "military spouse/dependent",
+                "civilian"
+              ],
+              "provenance": "intent_unmet"
+            },
+            {
+              "control_label": "Branch of Service",
+              "control_signature": "662ce19c87af2fff0be506d4fa3d033e",
+              "options": [
+                "army",
+                "navy",
+                "air force",
+                "marine corps",
+                "coast guard",
+                "space force",
+                "army national guard",
+                "air national guard",
+                "army reserve",
+                "navy reserve",
+                "air force reserve",
+                "marine corps reserve",
+                "coast guard reserve"
+              ],
+              "provenance": "intent_unmet"
+            }
+          ],
+          "fields_filled": 0,
+          "fields_unfilled": 4,
+          "fingerprint": "71fa406354f028609b364f4c490923ba9be88b71ed9e36fa5bb949924d9067f8",
+          "title": "VKPower Life Insurance",
+          "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/"
+        },
+        {
+          "decision_points": [
+            {
+              "choice": "female",
+              "control_label": "Gender",
+              "control_signature": "a9608726f36d0f1b6a97fa25e498708c",
+              "options": [
+                "male",
+                "female",
+                "non-binary"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "georgia",
+              "control_label": "State of residence",
+              "control_signature": "d6ee25c4100c361e85370dd780909b02",
+              "options": [
+                "alabama",
+                "alaska",
+                "arizona",
+                "arkansas",
+                "california",
+                "colorado",
+                "connecticut",
+                "delaware",
+                "florida",
+                "georgia",
+                "hawaii",
+                "idaho",
+                "illinois",
+                "indiana",
+                "iowa",
+                "kansas",
+                "kentucky",
+                "louisiana",
+                "maine",
+                "maryland",
+                "massachusetts",
+                "michigan",
+                "minnesota"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "13cf8aaacb71bf57f3aa00a8edeac0fdf3db7edf46e885d4ce91f17d9b7e1277",
+          "title": "VKPower Life Insurance",
+          "url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/"
+        }
+      ],
+      "terminal": "loop",
+      "terminal_url": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/"
+    },
+    {
+      "advance_contradicts_fills": false,
+      "completed": false,
+      "entry_fingerprint": "bae91b76ca4553df9e4b59eda4326ef9dfbdbef1f6c3739e5e58d3295a37c76f",
+      "entry_title": "VKPower Life Insurance",
+      "entry_url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "fields_filled_total": 7,
+      "fields_unanswered": 0,
+      "flow_id": "847cdd7e29837d15a533bc5c",
+      "fully_answered": true,
+      "journey_completed": false,
+      "outcome_milestone": null,
+      "outcome_values": [
+        {
+          "label": "2023-06-10",
+          "value": "50%",
+          "value_type": "percent"
+        }
+      ],
+      "step_budget": 20,
+      "step_count": 1,
+      "steps": [
+        {
+          "decision_points": [
+            {
+              "choice": "spouse",
+              "control_label": "Relationship",
+              "control_signature": "f083fa5abee13b2da4c8726c8193bad9",
+              "options": [
+                "spouse",
+                "child",
+                "parent",
+                "sibling",
+                "grandchild",
+                "grandparent",
+                "trust",
+                "estate",
+                "charity",
+                "business partner",
+                "other"
+              ],
+              "provenance": "synthesized"
+            },
+            {
+              "choice": "primary",
+              "control_label": "Type",
+              "control_signature": "6a121fdcb81039762ed904a4b8268e85",
+              "options": [
+                "primary",
+                "contingent"
+              ],
+              "provenance": "synthesized"
+            }
+          ],
+          "fields_filled": 7,
+          "fields_unfilled": 0,
+          "fingerprint": "bae91b76ca4553df9e4b59eda4326ef9dfbdbef1f6c3739e5e58d3295a37c76f",
+          "title": "VKPower Life Insurance",
+          "url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/"
+        }
+      ],
+      "terminal": "oracle_unavailable",
+      "terminal_url": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/"
+    }
+  ],
+  "forms_confirmed": 0,
+  "forms_found": 2,
+  "forms_submitted": 0,
+  "inventory_failure_detail": "",
+  "inventory_failures": 0,
+  "journeys_completed": 0,
+  "network_events_observed": 64,
+  "network_server_error_count": 0,
+  "network_server_errors": [],
+  "opaque_surfaces": [],
+  "open_choice_unverified": 0,
+  "outcome_milestones": [],
+  "rule_reuse": {
+    "hits": 0,
+    "known": 0,
+    "lookups": 1,
+    "misses": 1,
+    "reuse_rate": 0.0
+  },
+  "states": [
+    {
+      "ax_fingerprint": "4f8389e5363655a7f129e74c7bbcc46cb2ca3c065f07587a4cb84e5cad12513b",
+      "controls_total": 4,
+      "danger_controls": 0,
+      "danger_names": [],
+      "endpoints": [],
+      "form_snapshot_signals": {},
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "4d6f38145c5aba65fd510f3fd433275158b911e5f0d942d72329bb00c9221e48",
+      "controls_total": 8,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/login/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "7943b580ecd5afb530aa3395c2c2845d756a15d7046af86d548913fc68f381f4",
+      "controls_total": 8,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/login/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {},
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/portal/dashboard/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "ce48849e51e0a143dda30b3685e080113c8cc6193dd50c6fee5233803dce1d18",
+      "controls_total": 11,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Term Life Insurance Affordable coverage for a specific period": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Term Life Insurance Affordable coverage for a specific period",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Universal Life Insurance Flexible premiums and adjustable death benefit": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Universal Life Insurance Flexible premiums and adjustable death benefit",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Variable Universal Life Investment options with life insurance protection": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Variable Universal Life Investment options with life insurance protection",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        },
+        "Whole Life Insurance Lifetime coverage with cash value accumulation": {
+          "locator": {
+            "bindable": true,
+            "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+            "role": "radio",
+            "strategy": "accessible_name",
+            "value": "Whole Life Insurance Lifetime coverage with cash value accumulation",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "radio"
+        }
+      },
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/start/",
+      "question_groups": [
+        {
+          "group_id": "0d7cf8053fe19f641bd1179dc4aaed66",
+          "label": "",
+          "label_source": "",
+          "members": [
+            {
+              "kind": "radio",
+              "name": "Term Life Insurance Affordable coverage for a specific period"
+            },
+            {
+              "kind": "radio",
+              "name": "Whole Life Insurance Lifetime coverage with cash value accumulation"
+            },
+            {
+              "kind": "radio",
+              "name": "Universal Life Insurance Flexible premiums and adjustable death benefit"
+            },
+            {
+              "kind": "radio",
+              "name": "Variable Universal Life Investment options with life insurance protection"
+            }
+          ],
+          "options": [
+            "Term Life Insurance Affordable coverage for a specific period",
+            "Whole Life Insurance Lifetime coverage with cash value accumulation",
+            "Universal Life Insurance Flexible premiums and adjustable death benefit",
+            "Variable Universal Life Investment options with life insurance protection"
+          ],
+          "options_total": 4,
+          "required": false,
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "ax_fingerprint": "6b5dd2d5ef9169f4c59d2f2608f41a94dd20c45816f744057bc978f1f14c69ff",
+      "controls_total": 12,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/coverage/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Branch of Service": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_branch",
+            "verified": true
+          },
+          "options": [
+            "Select branch...",
+            "Army",
+            "Navy",
+            "Air Force",
+            "Marine Corps",
+            "Coast Guard",
+            "Space Force",
+            "Army National Guard",
+            "Air National Guard",
+            "Army Reserve",
+            "Navy Reserve",
+            "Air Force Reserve",
+            "Marine Corps Reserve",
+            "Coast Guard Reserve"
+          ],
+          "options_total": 14,
+          "required": true,
+          "type": "select"
+        },
+        "Coverage Amount": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "coverage_amount",
+            "verified": true
+          },
+          "options": [
+            "Select coverage amount...",
+            "$50,000",
+            "$100,000",
+            "$150,000",
+            "$200,000",
+            "$250,000",
+            "$300,000",
+            "$400,000",
+            "$500,000",
+            "$750,000",
+            "$1,000,000",
+            "$1,500,000",
+            "$2,000,000"
+          ],
+          "options_total": 13,
+          "required": true,
+          "type": "select"
+        },
+        "Military Affiliation": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_status",
+            "verified": true
+          },
+          "options": [
+            "Select military status...",
+            "Active Duty Officer",
+            "Active Duty Enlisted",
+            "Reserve/Guard",
+            "Veteran (Honorable Discharge)",
+            "Veteran (Other Discharge)",
+            "Retired Military",
+            "Military Spouse/Dependent",
+            "Civilian",
+            "None"
+          ],
+          "options_total": 10,
+          "required": true,
+          "type": "select"
+        },
+        "Term Length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term_length",
+            "verified": true
+          },
+          "options": [
+            "Select term length...",
+            "10 Years",
+            "15 Years",
+            "20 Years",
+            "25 Years",
+            "30 Years",
+            "Whole Life"
+          ],
+          "options_total": 7,
+          "required": true,
+          "type": "select"
+        }
+      },
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "c4b4e56e5082df6535731e85de3bb015ff7440720639f5de812cac58aa1c7505",
+      "controls_total": 12,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Branch of Service": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_branch",
+            "verified": true
+          },
+          "options": [
+            "Select branch...",
+            "Army",
+            "Navy",
+            "Air Force",
+            "Marine Corps",
+            "Coast Guard",
+            "Space Force",
+            "Army National Guard",
+            "Air National Guard",
+            "Army Reserve",
+            "Navy Reserve",
+            "Air Force Reserve",
+            "Marine Corps Reserve",
+            "Coast Guard Reserve"
+          ],
+          "options_total": 14,
+          "required": true,
+          "type": "select"
+        },
+        "Coverage Amount": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "coverage_amount",
+            "verified": true
+          },
+          "options": [
+            "Select coverage amount...",
+            "$50,000",
+            "$100,000",
+            "$150,000",
+            "$200,000",
+            "$250,000",
+            "$300,000",
+            "$400,000",
+            "$500,000",
+            "$750,000",
+            "$1,000,000",
+            "$1,500,000",
+            "$2,000,000"
+          ],
+          "options_total": 13,
+          "required": true,
+          "type": "select"
+        },
+        "Military Affiliation": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_status",
+            "verified": true
+          },
+          "options": [
+            "Select military status...",
+            "Active Duty Officer",
+            "Active Duty Enlisted",
+            "Reserve/Guard",
+            "Veteran (Honorable Discharge)",
+            "Veteran (Other Discharge)",
+            "Retired Military",
+            "Military Spouse/Dependent",
+            "Civilian",
+            "None"
+          ],
+          "options_total": 10,
+          "required": true,
+          "type": "select"
+        },
+        "Term Length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term_length",
+            "verified": true
+          },
+          "options": [
+            "Select term length...",
+            "10 Years",
+            "15 Years",
+            "20 Years",
+            "25 Years",
+            "30 Years",
+            "Whole Life"
+          ],
+          "options_total": 7,
+          "required": true,
+          "type": "select"
+        }
+      },
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/coverage/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "71fa406354f028609b364f4c490923ba9be88b71ed9e36fa5bb949924d9067f8",
+      "controls_total": 12,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/personal/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Branch of Service": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_branch",
+            "verified": true
+          },
+          "options": [
+            "Select branch...",
+            "Army",
+            "Navy",
+            "Air Force",
+            "Marine Corps",
+            "Coast Guard",
+            "Space Force",
+            "Army National Guard",
+            "Air National Guard",
+            "Army Reserve",
+            "Navy Reserve",
+            "Air Force Reserve",
+            "Marine Corps Reserve",
+            "Coast Guard Reserve"
+          ],
+          "options_total": 14,
+          "required": true,
+          "type": "select"
+        },
+        "Coverage Amount": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "coverage_amount",
+            "verified": true
+          },
+          "options": [
+            "Select coverage amount...",
+            "$50,000",
+            "$100,000",
+            "$150,000",
+            "$200,000",
+            "$250,000",
+            "$300,000",
+            "$400,000",
+            "$500,000",
+            "$750,000",
+            "$1,000,000",
+            "$1,500,000",
+            "$2,000,000"
+          ],
+          "options_total": 13,
+          "required": true,
+          "type": "select"
+        },
+        "Military Affiliation": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "military_status",
+            "verified": true
+          },
+          "options": [
+            "Select military status...",
+            "Active Duty Officer",
+            "Active Duty Enlisted",
+            "Reserve/Guard",
+            "Veteran (Honorable Discharge)",
+            "Veteran (Other Discharge)",
+            "Retired Military",
+            "Military Spouse/Dependent",
+            "Civilian",
+            "None"
+          ],
+          "options_total": 10,
+          "required": true,
+          "type": "select"
+        },
+        "Term Length": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "term_length",
+            "verified": true
+          },
+          "options": [
+            "Select term length...",
+            "10 Years",
+            "15 Years",
+            "20 Years",
+            "25 Years",
+            "30 Years",
+            "Whole Life"
+          ],
+          "options_total": 7,
+          "required": true,
+          "type": "select"
+        }
+      },
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "13cf8aaacb71bf57f3aa00a8edeac0fdf3db7edf46e885d4ce91f17d9b7e1277",
+      "controls_total": 15,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [],
+      "form_snapshot_signals": {
+        "Date of birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "date"
+        },
+        "Email address": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_email",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "First name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_first",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Gender": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "q_gender",
+            "verified": true
+          },
+          "options": [
+            "Select...",
+            "Male",
+            "Female",
+            "Non-binary"
+          ],
+          "options_total": 4,
+          "required": true,
+          "type": "select"
+        },
+        "Last name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_last",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Phone number": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "q_phone",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "State of residence": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "q_state",
+            "verified": true
+          },
+          "options": [
+            "Select state...",
+            "Alabama",
+            "Alaska",
+            "Arizona",
+            "Arkansas",
+            "California",
+            "Colorado",
+            "Connecticut",
+            "Delaware",
+            "Florida",
+            "Georgia",
+            "Hawaii",
+            "Idaho",
+            "Illinois",
+            "Indiana",
+            "Iowa",
+            "Kansas",
+            "Kentucky",
+            "Louisiana",
+            "Maine",
+            "Maryland",
+            "Massachusetts",
+            "Michigan",
+            "Minnesota",
+            "Mississippi",
+            "Missouri",
+            "Montana",
+            "Nebraska",
+            "Nevada",
+            "New Hampshire",
+            "New Jersey",
+            "New Mexico",
+            "New York",
+            "North Carolina",
+            "North Dakota",
+            "Ohio",
+            "Oklahoma",
+            "Oregon",
+            "Pennsylvania",
+            "Rhode Island",
+            "South Carolina",
+            "South Dakota",
+            "Tennessee",
+            "Texas",
+            "Utah",
+            "Vermont",
+            "Virginia",
+            "Washington",
+            "West Virginia",
+            "Wisconsin",
+            "Wyoming",
+            "District of Columbia"
+          ],
+          "options_total": 52,
+          "required": true,
+          "type": "select"
+        }
+      },
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/life-insurance/quote/personal/",
+      "question_groups": []
+    },
+    {
+      "ax_fingerprint": "bae91b76ca4553df9e4b59eda4326ef9dfbdbef1f6c3739e5e58d3295a37c76f",
+      "controls_total": 14,
+      "danger_controls": 1,
+      "danger_names": [
+        "Sign out"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/health-check/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/life-insurance/quote/start/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/beneficiaries/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        },
+        {
+          "method": "GET",
+          "path": "/portal/dashboard/index.txt",
+          "response_mime": "text/plain",
+          "status": "200"
+        }
+      ],
+      "form_snapshot_signals": {
+        "Date of birth": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_dob",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "date"
+        },
+        "First name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_first",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Last name": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_last",
+            "verified": true
+          },
+          "options": [],
+          "options_total": 0,
+          "required": true,
+          "type": "text"
+        },
+        "Relationship": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "b_rel",
+            "verified": true
+          },
+          "options": [
+            "Spouse",
+            "Child",
+            "Parent",
+            "Sibling",
+            "Grandchild",
+            "Grandparent",
+            "Trust",
+            "Estate",
+            "Charity",
+            "Business Partner",
+            "Other"
+          ],
+          "options_total": 11,
+          "required": false,
+          "type": "select"
+        },
+        "SSN (last 4)": {
+          "locator": {
+            "bindable": false,
+            "role": "textbox",
+            "strategy": "dom_id",
+            "value": "b_ssn",
+            "verified": true
+          },
+          "maxlength": "4",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Share %": {
+          "locator": {
+            "bindable": false,
+            "role": "spinbutton",
+            "strategy": "dom_id",
+            "value": "b_pct",
+            "verified": true
+          },
+          "max": "100",
+          "min": "1",
+          "options": [],
+          "options_total": 0,
+          "required": false,
+          "type": "text"
+        },
+        "Type": {
+          "locator": {
+            "bindable": false,
+            "role": "combobox",
+            "strategy": "dom_id",
+            "value": "b_type",
+            "verified": true
+          },
+          "options": [
+            "Primary",
+            "Contingent"
+          ],
+          "options_total": 2,
+          "required": false,
+          "type": "select"
+        }
+      },
+      "location": "https://vkpowerlife.136-85-106-73.sslip.io/portal/beneficiaries/",
+      "question_groups": []
+    }
+  ],
+  "submit_candidates": [
+    "Continue",
+    "Add Beneficiary"
+  ],
+  "summary": "AUTHENTICATED AREAS NOT COVERED \u2014 the crawl SIGNED IN successfully, but this app drops the sign-in on every page load (it keeps the signed-in user in the page, not in a cookie), so pages behind the login could not be reached. Re-recording and new credentials will not change this. 2 form(s) found; 7 field(s) auto-filled with a default; 0 field(s) need a real seed; 0 submit(s) exercised (Phase-B), 0 irreversible boundary/ies awaiting approval; 0 journey(s) completed end-to-end through an approved crossing.",
+  "tab_views_recorded": 0,
+  "traversal": "full",
+  "unblock_irreversible": [],
+  "unhandled_controls": [],
+  "vision_budget": {
+    "breaker_open": false,
+    "breaker_threshold": 3,
+    "calls": 0,
+    "consecutive_failures": 0,
+    "failures": 0,
+    "gate": {
+      "attestation_rung": "none",
+      "attested": false,
+      "enabled": false,
+      "reason": "no_oracle",
+      "tenant_enabled": false
+    },
+    "latency_ms": 0,
+    "max_calls": 0,
+    "refusals": {},
+    "timeout_s": 20.0
+  },
+  "vision_ledger": [],
+  "vision_refused": 0,
+  "vision_verified": 0
+}

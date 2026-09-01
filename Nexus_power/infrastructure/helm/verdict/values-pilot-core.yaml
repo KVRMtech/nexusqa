@@ -1,0 +1,22 @@
+# Pilot-core scoped install — the Verdict control plane + substrate only.
+#
+# Deploys qe-central + in-cluster Postgres + the migrations Job: enough to PROVE
+# the install path (clean build → deploy → migrate → healthy → code==git) on a
+# resource-bounded host (a CI runner or dev laptop). The crawler (qe-explorer),
+# repo-intel, the portal SPA and the egress proxy are deploy-time OPTIONAL and are
+# switched off here; a real pilot on a client cluster enables them. This is used by
+# .github/workflows/prove-install.yml and scripts/prove_install.sh --values … .
+# This is a DEV install-path proof on kind, which has no KMS — so run as a
+# development env. The fail-closed boot gate then WARNS (instead of REFUSING) on the
+# local KEK, and the install path (deploy → migrate → healthy → code==git) is proven.
+# A REAL pilot on the client cluster keeps nexusEnv=production + a KMS-backed KEK,
+# which the gate correctly enforces (that enforcement is a feature, not a blocker).
+env:
+  nexusEnv: development
+
+qeExplorer:
+  enabled: false
+portal:
+  enabled: false
+egressProxy:
+  enabled: false

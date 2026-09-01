@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 05 — aria-labelledby over block children</title>
+<style>
+  .q-title, .q-body { display: block; }
+  .hint { display: block; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Underwriting questionnaire</h1>
+
+    <!-- WHY THIS FILE HAS NO WHITESPACE BETWEEN THE BLOCK CHILDREN
+         ==========================================================
+         The defect is that idText() reads textContent where accname (and every
+         AT, and Playwright's getByRole) reads RENDERED text.
+
+         With pretty-printed source, the newline + indentation BETWEEN two block
+         children is itself part of textContent, and norm() collapses it to a
+         single space - which accidentally produces the correct answer and MASKS
+         the defect entirely. A fixture written that way reports a passing
+         capture and proves nothing.
+
+         Server-rendered markup has no such whitespace: React/Next.js SSR, Vue
+         SSR, and every minifier emit <div><div>A</div><div>B</div></div>. That
+         is the markup real applications ship - including the Next.js
+         proving-ground app in this repo - so it is the markup this fixture uses.
+         Formatting is therefore LOAD-BEARING here; do not reformat this file. -->
+
+    <!-- CONTROL GROUP: a single text node. textContent and innerText agree, so
+         this control must be named identically either way. It proves the fixture
+         is about BLOCK SEPARATION and not about aria-labelledby in general. -->
+    <span id="lbl-simple">Annual Income</span>
+    <input id="income" name="income" type="text" aria-labelledby="lbl-simple">
+
+    <!-- SUBJECT A: ONE referenced element containing TWO BLOCK children.
+           textContent -> "Question 7Have you used tobacco in the last 12 months?"
+           innerText   -> "Question 7 Have you used tobacco in the last 12 months?"
+         Only the second is the accessible name a browser computes. -->
+    <div id="q7"><div class="q-title">Question 7</div><div class="q-body">Have you used tobacco in the last 12 months?</div></div>
+    <input id="tobacco" name="tobacco" type="text" aria-labelledby="q7">
+
+    <!-- SUBJECT B: TWO referenced ids, the SECOND of which contains block
+         children. The join ACROSS ids is already spaced by the implementation;
+         the break is strictly INSIDE the second element.
+           textContent -> "Beneficiary Full legal nameas printed on the policy"
+           innerText   -> "Beneficiary Full legal name as printed on the policy" -->
+    <span id="lbl-sect">Beneficiary</span>
+    <div id="lbl-field"><span class="q-title">Full legal name</span><span class="hint">as printed on the policy</span></div>
+    <input id="beneficiary" name="beneficiary" type="text"
+           aria-labelledby="lbl-sect lbl-field">
+
+    <!-- SUBJECT C: the SAME markup shape reached through the label[for] rung,
+         which already goes via accText()/innerText.
+           textContent -> "Heightfeet and inches"
+           innerText   -> "Height feet and inches"
+         It is the in-fixture proof that the project already knows the right
+         answer and that idText() is the single place not applying it. -->
+    <label for="height"><span class="q-title">Height</span><span class="hint">feet and inches</span></label>
+    <input id="height" name="height" type="text">
+  </main>
+</body>
+</html>

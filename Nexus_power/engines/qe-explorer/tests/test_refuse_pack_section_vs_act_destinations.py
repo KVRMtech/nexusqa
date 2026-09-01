@@ -1,0 +1,488 @@
+"""R7' — a SECTION named after a verb is not the act. Pinned three ways.
+
+WHAT R7' CHANGED
+================
+``rp.verb.pay`` and ``rp.verb.underwrite`` each carried one broad regex used for
+BOTH the control's label and its destination. That is right for a label and
+wrong for a path, because "payment"/"payments"/"underwriting" are the names of
+SECTIONS of an insurance console:
+
+    link -> /underwriting/new-business    matched \\bunderwriting\\b   -> critical
+    link -> /policy-admin/payments        matched \\bpayments\\b       -> critical
+
+Every link into those sections was refused as an irreversible commit, which is
+why the summit-life-carrier crawl visited 8 routes and never reached the wizard
+holding its own commit control. Entering a section commits nothing.
+
+So each rule was split: the broad vocabulary keeps ``button_name``, and a narrow
+segment-anchored pattern takes the DESTINATION (``url_path`` + ``url_query``).
+The narrow patterns match an act segment with an optional ``-``/``.`` suffix
+(``/pay-now``, ``/pay.php``), a payment noun followed by an act verb
+(``/payments/42/execute``), the phrase ``submit-to-underwriting``, and the verb
+carried in a query parameter in either position (``?action=pay``, ``?pay=1``).
+Every one of those forms was added because a non-author red-team found the first
+cut had stopped refusing it — see the pinned cases at the end of this module.
+
+This is the shape ``rp.get.destructive_path`` already uses — enumerate the ACT
+segments, anchor them to whole path segments, leave the section nouns out — and
+the reasoning ``rp.verb.admin`` already carries in this pack: *"an /admin PATH is
+a fence concern, not an irreversible verb"*.
+
+WHY THIS MODULE IS AT THE INVENTORY LAYER
+=========================================
+``tests/test_guard.py`` pins the same split at ``classify_action_verb``. This
+module pins it through :func:`build_inventory`, which is **the layer that
+actually gates the crawl**: a control marked ``danger`` is dropped from every
+advance tier, so this is where an over-block stops a funnel and where an
+under-block would let one through.
+
+That distinction is not academic. An earlier attempt at this fix was justified by
+calling ``classify_control_danger`` directly with the PAGE url — something
+``build_inventory`` never does, because it passes each control's own
+DESTINATION. The measurement looked like a page-wide over-block that did not
+exist, and the proposed fix would have removed destination refusal entirely.
+Testing at the layer the crawler really uses is what makes this file evidence.
+
+THE THREE DIRECTIONS
+====================
+1. section destinations           -> allowed (the bug R7' fixes);
+2. destructive destinations       -> still refused (R7' must not have reached them);
+3. act-shaped money/uw dests      -> still refused (the narrow rules must still bite);
+   plus labels                    -> still refused (the broad regex still binds to names).
+"""
+from __future__ import annotations
+
+import pytest
+
+from app.config import Settings
+from app.guard import load_refuse_pack
+from app.inventory import build_inventory
+
+_PACK = load_refuse_pack(Settings().refuse_pack_path)
+
+#: A page with no verb in its own path, so nothing here can be a page artefact.
+_PAGE = "https://admin.example/dashboard/overview"
+
+
+def _raw(role: str, name: str, **over):
+    base = {
+        "role": role, "name": name, "name_source": "content", "best_effort": False,
+        "kind": role, "tag": over.pop("tag", "button"), "input_type": "",
+        "options": [], "required": False, "disabled": False,
+        "frame_selector": "", "testid": "", "css_hint": "", "value_committed": "",
+        "landmark": {"role": "", "name": ""},
+    }
+    base.update(over)
+    return base
+
+
+def _link_danger(href: str) -> bool:
+    ctrl = _raw("link", "Go", tag="a", href=href)
+    return bool(build_inventory([ctrl], _PACK, url=_PAGE)[0]["danger"])
+
+
+def _button_danger(label: str) -> bool:
+    return bool(build_inventory([_raw("button", label)], _PACK, url=_PAGE)[0]["danger"])
+
+
+# ── 1 · a section named after a verb is navigation ──────────────────────────
+
+@pytest.mark.parametrize("href", [
+    "/underwriting/new-business",
+    "/underwriting/new-business/new-application",
+    "/underwriting/queue",
+    "/policy-admin/payments",
+    "/billing/payments",
+    "/payments/history",
+])
+def test_a_link_into_a_verb_named_SECTION_is_not_dangerous(href):
+    assert _link_danger(href) is False, (
+        f"{href} is refused. It is a section, not an act — this is the over-block "
+        f"that sealed the summit-life-carrier funnel."
+    )
+
+
+# ── 2 · R7' must not have reached the destructive rules ─────────────────────
+
+@pytest.mark.parametrize("href", [
+    "/account/delete", "/records/destroy", "/admin/users/purge",
+    "/things/1/remove", "/data/erase",
+])
+def test_a_destructive_destination_is_still_refused(href):
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. R7' touched only rp.verb.pay and rp.verb.underwrite; "
+        f"if a destructive path stopped being refused, it reached further than it "
+        f"was authorised to."
+    )
+
+
+# ── 3 · the narrow rules must still bite ────────────────────────────────────
+
+@pytest.mark.parametrize("href", [
+    "/pay", "/api/pay", "/invoices/42/pay",
+    "/payout", "/payouts", "/remit", "/repay", "/autopay",
+    "/underwrite", "/applications/7/underwrite",
+])
+def test_a_destination_that_IS_the_act_is_still_refused(href):
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. The whole premise of R7' is that the ACT segments "
+        f"keep matching while the section nouns stop — if this fails, the "
+        f"narrowing went too far and money destinations are unguarded."
+    )
+
+
+@pytest.mark.parametrize("label", [
+    "Pay Now", "Make Payment", "Process Payment", "Payout",
+    "Submit to Underwriting", "Underwrite Now",
+    "Bind Policy", "Delete Account", "Transfer Funds",
+])
+def test_a_label_that_names_the_act_is_still_refused(label):
+    """The broad vocabulary still binds to the NAME — that half was never the
+    problem, and R7' must not have cost it anything."""
+    assert _button_danger(label) is True
+
+
+# ── the fence ───────────────────────────────────────────────────────────────
+
+def test_the_path_rules_still_separate_a_section_from_an_act():
+    """THE FENCE, stated behaviourally rather than as regex text.
+
+    An earlier version of this asserted the patterns literally started ``(^|/)``
+    and ended ``(/|$)``. That broke the moment the patterns grew alternations to
+    close the red-team's findings — and it was the wrong invariant anyway: what
+    must hold is not the shape of the regex but that a SECTION does not match and
+    an ACT does. Asserted directly, so the rules may be rewritten freely as long
+    as the property survives.
+    """
+    by_id = {r.id: r for r in _PACK.irreversible_verbs}
+    for rule_id in ("rp.verb.pay_path", "rp.verb.underwrite_path"):
+        assert rule_id in by_id, f"{rule_id} is gone — the R7' split was undone"
+        assert "button_name" not in by_id[rule_id].applies_to, (
+            f"{rule_id} is the DESTINATION half of a split; its label half lives "
+            f"on the sibling rule and the broad vocabulary must not reach names."
+        )
+    # a section is not an act …
+    for href in ("/payments/history", "/underwriting/queue", "/policy-admin/payments"):
+        assert _link_danger(href) is False, f"{href} matched — the section leak is back"
+    # … and an act is still an act
+    for href in ("/pay", "/underwrite", "/payout"):
+        assert _link_danger(href) is True, f"{href} stopped matching — the rule went blind"
+
+
+# ── the non-author red-team's findings, pinned so they cannot recur ─────────
+# Reported by session `nexusqa-2d` against d3ed533 from a fresh clone, measured
+# through build_inventory. Thirteen destinations were refused by pack v1 and
+# allowed by the first cut of v2 — a real hole, opened by this fix. Two causes:
+#
+#   (a) the segment anchor `(/|$)` rejected the hyphen/dot suffixes that v1's
+#       `` accepted, so `/pay-now` — the act, by the rule's own description —
+#       stopped matching;
+#   (b) `url_query` silently left both rules when their `applies_to` narrowed,
+#       and the assumed route-layer backstop did not exist: rp.get.action_mutation
+#       listed neither `underwrite` nor `remit`.
+#
+# Every case below is one the red-team found, not one this author imagined.
+
+@pytest.mark.parametrize("href", [
+    "/pay-now", "/pay.php", "/remit-now", "/autopay-enroll",      # (a) suffixes
+    "/submit-to-underwriting",                                     # (b) lost alternative
+    "/new-business/submit-to-underwriting",
+    "/payments/42/execute", "/payment/execute",                    # section + act verb
+])
+def test_redteam_act_shaped_paths_are_refused(href):
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. Pack v1 refused it; if v2 does not, this fix opened "
+        f"a hole rather than closing one."
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "/x?action=underwrite", "/x?step=underwrite", "/x?do=remit",
+    "/x?pay=1", "/x?action=pay", "/x?underwrite=1",
+])
+def test_redteam_query_borne_acts_are_refused(href):
+    """Both positions: the verb as a param VALUE, and as a param KEY."""
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. url_query coverage was lost once already when these "
+        f"rules narrowed — this is the assertion that notices."
+    )
+
+
+def test_the_route_layer_backstop_actually_lists_these_verbs():
+    """The assumption that cost the hole, now checked instead of assumed.
+
+    The first cut of R7' justified dropping url_query on the grounds that
+    rp.get.action_mutation would still catch query-borne verbs at the request
+    layer. It would not have: its verb list contained neither `underwrite` nor
+    `remit`. Asserting the backstop's CONTENTS is the difference between a
+    backstop and a belief in one.
+    """
+    rule = next(r for r in _PACK.mutation_signal_get_rules
+                if r.id == "rp.get.action_mutation")
+    for verb in ("underwrite", "remit", "pay", "transfer", "disburse"):
+        assert verb in rule.match, (
+            f"rp.get.action_mutation does not list {verb!r}, so a query-borne "
+            f"{verb} has no request-layer backstop."
+        )
+
+
+def test_the_label_rules_no_longer_match_urls():
+    """The other half of the split, asserted on the pack rather than inferred."""
+    by_id = {r.id: r for r in _PACK.irreversible_verbs}
+    for rule_id in ("rp.verb.pay", "rp.verb.underwrite"):
+        assert tuple(by_id[rule_id].applies_to) == ("button_name",), (
+            f"{rule_id} matches a URL again — its vocabulary contains section "
+            f"nouns, so this is the over-block returning."
+        )
+
+
+# ── FINDING B, from the red-team's RE-verification of the fix for findings 1-3 ──
+# The first repair of finding 1 widened the act segments with `[-._][a-z0-9-]*`
+# — verb followed by ANYTHING. That closed `/pay-now` and simultaneously
+# reopened the R7 class in miniature: a read-only section whose name is a verb
+# plus a hyphenated qualifier was refused as an act. Fail-closed, so a coverage
+# loss rather than a safety hole, but `/remittance-advice` and `/payout-history`
+# are ordinary pages in a carrier billing console.
+#
+# The fix is the same discipline as everywhere else in this pack: ENUMERATE. An
+# act qualifier (`-now`, `-confirm`, `-submit`, `-execute`, `-process`,
+# `-enroll`) or an endpoint extension (`.php`, `.aspx`, …) is an act; an
+# arbitrary noun is a section. A regex cannot tell "pay-NOW" from
+# "payout-HISTORY" structurally, so the vocabulary is listed rather than guessed.
+
+@pytest.mark.parametrize("href", [
+    "/remittance-advice", "/remittance-report", "/remittance-detail/42",
+    "/remit-advice", "/remit-summary",
+    "/payout-history", "/repay-plan", "/prepay-calculator", "/autopay-settings",
+    "/underwrite-checklist",
+])
+def test_a_verb_named_section_with_a_qualifier_is_still_navigation(href):
+    """Finding B: these read; they do not act."""
+    assert _link_danger(href) is False, (
+        f"{href} is refused. A verb followed by a NOUN is a section — this is the "
+        f"R7 over-block class returning through the suffix alternation."
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "/pay-now", "/pay.php", "/remit-now", "/autopay-enroll",
+    "/pay-confirm", "/underwrite-submit",
+    # The red-team's closing attack. `capture` was in the payments-noun commit
+    # list (`/payments/42/capture` refused) but NOT in the bare-verb qualifier
+    # list, so `/pay-capture` fell through — an inconsistency inside one rule,
+    # not a judgement call. It was the ONLY one of {authorize, capture, charge}
+    # to fall through, because rp.verb.charge and rp.verb.authorize still catch
+    # the other two by  on the path; capture has no sibling rule to land on.
+    "/pay-capture", "/payout-capture", "/underwrite-capture",
+    # Money-movement qualifiers from the same sweep.
+    "/remit-send", "/payout-send", "/payout-release", "/pay-initiate",
+])
+def test_a_verb_with_an_ACT_qualifier_is_still_refused(href):
+    """The other side of Finding B's fix: narrowing the suffix must not undo the
+    original finding-1 repair."""
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. `-now`/`.php`/`-enroll` mark the act, and losing "
+        f"them re-opens the under-block the red-team found first."
+    )
+
+
+@pytest.mark.parametrize("href", ["/pay-bill", "/pay-invoice", "/pay-premium"])
+def test_a_page_you_pay_FROM_is_not_the_act_of_paying(href):
+    """The boundary of the act-qualifier list, stated so it is not widened by
+    reflex. `/pay-bill` is the FORM you pay a bill on; a GET there commits
+    nothing, and refusing it would seal the funnel exactly as the section
+    over-block did. `-capture`/`-send`/`-release` move money; `-bill`/`-invoice`/
+    `-premium` name the thing being paid. The red-team raised these separately
+    and did NOT flag them, for this reason.
+    """
+    assert _link_danger(href) is False
+
+
+# ── THE POLARITY, and the WALK case that forced it ─────────────────────────
+# The red-team's fourth round found 18 more under-blocks (refund, void, reverse,
+# chargeback, settle, redeem, cash, issue …) and then made the argument that
+# mattered more than the list: enumerating ACT qualifiers with default-ALLOW is
+# FAIL-OPEN, and this rule is load-bearing in WALK.
+#
+# `classify_request` in Phase.WALK gates a MUTATING request on exactly one thing
+# once the disposable attestation is present — `classify_action_verb(name, url)`.
+# There is no network-guard second opinion on that path (the mutation-signal
+# rules only adjudicate reads). So an un-enumerated money verb in a URL, with a
+# benign button label, was a silent allowed mutation on a blanket-attested walk —
+# the one phase with no human in the loop.
+#
+# The vocabulary is open AND section-colliding on both ends (`/refunds` is a
+# browse page, `/payments/42/refund` is a commit), so no list can be complete.
+# The fix is therefore the POLARITY, not a seventh qualifier: `<money-verb>-<x>`
+# now REFUSES unless `<x>` is an enumerated SECTION noun. A miss is now a visible
+# over-block — a crawl cannot reach a page — instead of a silent payment.
+
+from app.guard import Phase, classify_request  # noqa: E402
+
+
+@pytest.mark.parametrize("href", [
+    "/pay-refund", "/payments/42/refund",
+    "/pay-void", "/payments/42/void",
+    "/pay-reverse", "/payments/42/reversal",
+    "/pay-chargeback", "/payments/42/chargeback",
+    "/pay-settle", "/payments/42/settle",
+    "/pay-redeem", "/payments/42/cash", "/payments/42/issue",
+])
+def test_an_unenumerated_money_verb_is_refused_by_default(href):
+    """Fail-CLOSED. None of these verbs is on any allow list; that is the point."""
+    assert _link_danger(href) is True, (
+        f"{href} is allowed. The qualifier list can never be complete, so an "
+        f"unknown qualifier after a money verb must REFUSE, not pass."
+    )
+
+
+@pytest.mark.parametrize("url", [
+    "https://app.example/payments/42/refund",
+    "https://app.example/pay-void",
+    "https://app.example/payments/42/chargeback",
+])
+def test_a_blanket_attested_WALK_mutation_is_refused_on_a_money_url(url):
+    """THE CASE THAT FORCED THE POLARITY.
+
+    Everything here is set to its most permissive: the walk is attested, the
+    button carries a wholly benign name, and the method mutates. The URL is the
+    only signal — and in WALK it is the only gate there is.
+    """
+    decision = classify_request(
+        "POST", url, Phase.WALK, _PACK, is_login_domain=False,
+        action_button_name="Save Draft", walk_attested=True)
+    assert not decision.allow, (
+        f"a blanket-attested WALK mutation to {url} is ALLOWED with a benign "
+        f"button name. classify_action_verb is the only danger gate on this path, "
+        f"so this is a silent money mutation with no human in the loop."
+    )
+
+
+def test_a_benign_WALK_mutation_is_still_allowed():
+    """The control: a fail-closed gate that refuses everything proves nothing."""
+    decision = classify_request(
+        "POST", "https://app.example/apply/lifestyle", Phase.WALK, _PACK,
+        is_login_domain=False, action_button_name="Save Draft", walk_attested=True)
+    assert decision.allow, "WALK now refuses an ordinary draft save — over-corrected"
+
+
+def test_the_three_vocabularies_that_must_agree_do_not_drift():
+    """The red-team's structural point, made mechanical.
+
+    This defect class appeared three times: two lists inside one rule
+    disagreeing, then the pay rule and the underwrite rule disagreeing with each
+    other. Each time it was found a round later by someone else. The section
+    vocabulary is now shared by all three positions, so assert that rather than
+    trusting it.
+    """
+    by_id = {r.id: r for r in _PACK.irreversible_verbs}
+    pay = by_id["rp.verb.pay_path"].match
+    uw = by_id["rp.verb.underwrite_path"].match
+    for noun in ("history", "advice", "summary", "settings", "bill", "invoice"):
+        assert noun in pay, f"pay_path lost the section noun {noun!r}"
+        assert noun in uw, f"underwrite_path lost the section noun {noun!r}"
+    # and both must still be destination-only
+    for rule_id in ("rp.verb.pay_path", "rp.verb.underwrite_path"):
+        assert "button_name" not in by_id[rule_id].applies_to
+
+
+# ── R7(6): "loud AND cheap" is true for a leaf and FALSE for a funnel ───────
+# The inversion above made an unknown qualifier refuse, on the argument that an
+# over-block is cheap because it is visible. The red-team's fifth round showed
+# that argument holds for a leaf page and fails for a funnel ENTRANCE:
+#
+#     /payments/new   is the direct analog of
+#     /underwriting/new-business/new-application
+#
+# — a REST create FORM, the exact shape whose over-block sealed the summit funnel
+# and started this whole line of work. Re-sealing it from the fail-CLOSED side is
+# the same catastrophe with the opposite sign.
+#
+# The reconciliation: ACTS are a CLOSEABLE set — domain-bounded, ~25 verbs.
+# SECTIONS are UNBOUNDED — every noun plus new/edit/view/review/print/pdf and
+# every status word. The inversion had moved from enumerating the closeable set
+# (silent misses) to enumerating the uncloseable one (loud misses). So the
+# payments-noun branch now requires a KNOWN COMMIT VERB, and only the small
+# bare-verb surface keeps default-refuse.
+
+@pytest.mark.parametrize("href", [
+    # funnel entrances and pre-commit navigation — a GET here commits nothing
+    "/payments/new", "/payment/new", "/payments/create",
+    "/payments/42/edit", "/payments/42/view", "/payments/42/review",
+    "/pay-review", "/payout-review",
+    # ordinary billing-console status filters and artefacts
+    "/payments/pending", "/payments/failed", "/payments/completed",
+    "/payments/declined", "/payments/scheduled", "/payments/processing",
+    "/payments/reconciliation",
+    "/payments/42/receipt", "/payments/42/print", "/payments/42/pdf",
+])
+def test_a_funnel_entrance_is_not_sealed_by_the_inverted_polarity(href):
+    """The over-block that is NOT cheap. `/payments/new` unreachable drops a
+    funnel from every advance tier — the R1/R2 failure, re-created from the
+    fail-closed side."""
+    assert _link_danger(href) is False, (
+        f"{href} is refused. A create/edit/review FORM is navigation; sealing it "
+        f"is the exact defect this whole line of work exists to remove."
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "/payments/42/refund", "/payments/42/void", "/payments/42/reverse",
+    "/payments/42/chargeback", "/payments/42/settle", "/payments/42/capture",
+    "/payments/42/execute", "/payments/42/authorize", "/payments/42/disburse",
+])
+def test_the_closeable_act_set_still_refuses_under_a_payments_noun(href):
+    """The other side: narrowing branch 2 to known commit verbs must not have
+    re-opened the money mutations the inversion was introduced to close."""
+    assert _link_danger(href) is True
+
+
+# ── R7(7): the two branches must not run OPPOSITE polarities ───────────────
+# Round 6, and the red-team was correcting its own round-5 advice. Making
+# branch 2 "require a known commit verb" turned it FAIL-OPEN while branch 1
+# stayed FAIL-CLOSED, so the same money verb got opposite verdicts by URL shape:
+#
+#     /pay-debit            REFUSED      (branch 1, default-refuse)
+#     /payments/42/debit    ALLOWED      (branch 2, not on the commit list)
+#
+# debit and payoff are unambiguous money movement with no sibling rule, so this
+# was the round-4 fail-open hole back in miniature — WALK-crossable with a benign
+# label. Branch 2 is now fail-closed again, sharing branch 1's section
+# vocabulary; the funnel-seal that motivated the split is handled by the section
+# list instead, which is where it belonged.
+#
+# The old drift test could not see this: it diffed the section vocabulary across
+# the pay and underwrite RULES, but branch 1 and branch 2 shared no vocabulary to
+# diff — one carried a section list, the other a commit list. This one compares
+# VERDICTS, so it cannot be blinded that way.
+
+@pytest.mark.parametrize("verb", [
+    "debit", "payoff", "fund", "collect", "allocate", "credit", "adjust",
+    "apply", "ach", "refund", "void", "settle", "capture", "execute",
+    "receipt", "review", "edit", "summary", "history",
+])
+def test_both_url_shapes_agree_about_the_same_word(verb):
+    """One word, two shapes, one verdict — whatever that verdict is.
+
+    Deliberately asserts AGREEMENT rather than danger: some of these are acts and
+    some are sections, and the property under test is that the pack does not
+    change its mind based on whether the verb follows a hyphen or a path
+    separator.
+    """
+    bare = _link_danger(f"/pay-{verb}")
+    noun = _link_danger(f"/payments/42/{verb}")
+    assert bare == noun, (
+        f"/pay-{verb} is {bare} but /payments/42/{verb} is {noun}. The two "
+        f"branches are running opposite polarities, so the same money verb is "
+        f"refused in one URL shape and allowed in the other."
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "/payments/42/debit", "/payments/42/payoff", "/payments/42/fund",
+    "/payments/42/collect", "/payments/42/allocate",
+])
+def test_a_money_verb_absent_from_every_list_is_still_refused(href):
+    """The point of one unified fail-closed polarity: a verb nobody enumerated
+    still refuses. None of these appears on any list in the pack."""
+    assert _link_danger(href) is True

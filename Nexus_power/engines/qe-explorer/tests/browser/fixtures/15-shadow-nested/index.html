@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 15 — nested shadow roots and id collisions</title></head>
+<body>
+  <main>
+    <h1>Beneficiary</h1>
+
+    <!-- ═══ THE DECOY ══════════════════════════════════════════════════════
+         A light-DOM control whose id is the SAME as one inside the shadow
+         root below. Resolving shadow names against the host document would
+         name the shadow control "Outer Account Number" - a wrong but entirely
+         plausible name, which is worse than an empty one: it binds to the
+         wrong field at replay instead of failing loudly. -->
+    <label for="account">Outer Account Number</label>
+    <input id="account" class="outer" name="outer_account" type="text">
+
+    <!-- An outer label pointing at an id that exists ONLY inside a shadow
+         root. It must name nothing - an id reference does not cross INTO a
+         shadow tree any more than it crosses out of one. -->
+    <label for="deep-field">Outer Label For A Shadow Id</label>
+
+    <beneficiary-panel id="panel"></beneficiary-panel>
+  </main>
+
+  <script>
+    // Level 2 (the inner root) — defined first so the outer can use it.
+    class InnerPanel extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({ mode: "open" });
+        root.innerHTML = [
+          // label[for] resolved two shadow boundaries deep.
+          '<label for="deep-field">Deep Nested Field</label>',
+          '<input id="deep-field" class="deep" name="deep" type="text" required>',
+          // aria-labelledby resolved two boundaries deep, multi-block, so this
+          // also proves the CAP-03 accessible-text fix survives shadow scoping.
+          '<div id="d1">Trust</div><div id="d2">Registered name</div>',
+          '<input id="deep-aria" class="deeparia" aria-labelledby="d1 d2" type="text">'
+        ].join("");
+      }
+    }
+    customElements.define("inner-panel", InnerPanel);
+
+    // Level 1 (the outer root).
+    class BeneficiaryPanel extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({ mode: "open" });
+        root.innerHTML = [
+          // SAME id as the light-DOM control above. Must take the SHADOW label.
+          '<label for="account">Inner Account Number</label>',
+          '<input id="account" class="inner" name="inner_account" type="text">',
+          // Two labels for one control: the FIRST in document order wins, and
+          // both must be found inside this root rather than in the document.
+          '<label for="share">Share Percentage</label>',
+          '<label for="share">Ignored Second Label</label>',
+          '<input id="share" class="pct" type="number" min="0" max="100">',
+          // and the nested host
+          '<inner-panel></inner-panel>'
+        ].join("");
+      }
+    }
+    customElements.define("beneficiary-panel", BeneficiaryPanel);
+  </script>
+</body>
+</html>

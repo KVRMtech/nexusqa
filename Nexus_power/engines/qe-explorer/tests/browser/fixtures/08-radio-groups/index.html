@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture 08 — choice groups</title></head>
+<body>
+  <main>
+    <h1>Product selection</h1>
+
+    <!-- SUBJECT A + B: TWO forms each using name="product". Same attribute, two
+         DIFFERENT questions. group_key must be scoped by the owning form, or the
+         crawler would force one option across both and believe it had answered
+         two questions with one click. -->
+    <form id="term-form">
+      <fieldset>
+        <legend>Term product</legend>
+        <label><input type="radio" name="product" value="t10"> Term 10</label>
+        <label><input type="radio" name="product" value="t20" checked> Term 20</label>
+      </fieldset>
+    </form>
+
+    <form id="whole-form">
+      <fieldset>
+        <legend>Whole life product</legend>
+        <label><input type="radio" name="product" value="w1"> Whole Life</label>
+        <label><input type="radio" name="product" value="w2"> Universal Life</label>
+      </fieldset>
+    </form>
+
+    <!-- SUBJECT C: an ARIA card set - nameless, not inputs at all. Grouping comes
+         from the ancestor role=radiogroup, keyed by its id. This is how a design
+         system renders "choose a plan" as clickable cards. -->
+    <div role="radiogroup" id="plan-group" aria-label="Choose a plan">
+      <div role="radio" aria-checked="false" tabindex="0">Bronze</div>
+      <div role="radio" aria-checked="true" tabindex="-1">Silver</div>
+      <div role="radio" aria-checked="false" tabindex="-1">Gold</div>
+    </div>
+
+    <!-- SUBJECT D: a CHECKBOX GROUP sharing one name. "Pick at least one of
+         four" is ONE question; recording it as four independent yes/no questions
+         describes a form the application does not have. -->
+    <form id="conditions-form">
+      <fieldset>
+        <legend>Health conditions</legend>
+        <label><input type="checkbox" name="conditions[]" value="diabetes"> Diabetes</label>
+        <label><input type="checkbox" name="conditions[]" value="asthma"> Asthma</label>
+        <label><input type="checkbox" name="conditions[]" value="cardiac"> Cardiac</label>
+        <label><input type="checkbox" name="conditions[]" value="none" checked> None of these</label>
+      </fieldset>
+    </form>
+
+    <!-- SUBJECT E: two UNRELATED checkboxes side by side. No shared name, no
+         fieldset, no role=group. They must stay UNGROUPED (group_key "") -
+         merging them on mere proximity would answer one and silently drop the
+         other from the residue. -->
+    <label><input type="checkbox" id="remember" name="remember"> Remember me</label>
+    <label><input type="checkbox" id="newsletter" name="newsletter"> Subscribe to newsletter</label>
+
+    <!-- SUBJECT F: an ARIA card set nested SEVERAL levels below its radiogroup -
+         the layout wrappers a real design system emits. The grouping ancestor is
+         not the parent, so finding it requires actually walking up rather than
+         checking one level. Same question, same key, regardless of how much
+         presentational markup sits in between. -->
+    <div role="radiogroup" id="tier-group" aria-label="Service tier">
+      <div class="row">
+        <div class="col">
+          <div class="card-body">
+            <div role="radio" id="tier-basic" aria-checked="false" tabindex="0">Basic</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card-body">
+            <div role="radio" id="tier-plus" aria-checked="false" tabindex="-1">Plus</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUBJECT H: THE QUESTION, IN THE APPLICATION'S OWN WORDS (M2.1).
+         group_key answers "which question", and says nothing about what the
+         question IS. The four rungs below are the only ways a page DECLARES
+         that, and each is isolated here so a regression in one cannot hide
+         behind another. Nothing is ever read from mere proximity: a question
+         inferred from layout is a question the application never asked. -->
+
+    <!-- H1: aria-labelledby, the standard markup for a questionnaire question
+         rendered as a title + helper-text pair. Two BLOCK children, so the
+         rendered name is "A B" and not "AB". -->
+    <div role="radiogroup" id="tobacco-group" aria-labelledby="tob-q tob-help">
+      <div id="tob-q">Have you used tobacco in the last 12 months?</div>
+      <div id="tob-help">Include cigarettes, vaping and nicotine replacement.</div>
+      <div role="radio" aria-checked="false" tabindex="0">Yes</div>
+      <div role="radio" aria-checked="false" tabindex="-1">No</div>
+    </div>
+
+    <!-- H2: a heading inside a role=group - how a design system that cannot use
+         <legend> states the same thing. -->
+    <div role="group" id="cover-group">
+      <h2>How much cover do you need?</h2>
+      <label><input type="radio" name="cover" value="low"> Up to $250,000</label>
+      <label><input type="radio" name="cover" value="high"> More than $250,000</label>
+    </div>
+
+    <!-- H3: a DECLARED question the page words NOWHERE. No legend, no
+         aria-label, no aria-labelledby, no heading. The only honest answer is
+         an empty label - the catalogue then reports it UNVERIFIED rather than
+         inventing wording, and the question is still identified by its
+         container. -->
+    <fieldset id="unworded-group">
+      <label><input type="radio" name="unworded" value="a"> Option A</label>
+      <label><input type="radio" name="unworded" value="b"> Option B</label>
+    </fieldset>
+
+    <!-- H4: a <legend> that is EMPTY. The element that exists to state the
+         question is present and says nothing, which is a different fact from
+         having no legend at all - and it must not be reported as wording. The
+         read breaks out rather than walking on to a later legend, because a
+         second legend in one fieldset captions nothing this browser recognises.
+         -->
+    <fieldset id="empty-legend-group">
+      <legend></legend>
+      <label><input type="radio" name="emptylg" value="a"> Choice A</label>
+      <label><input type="radio" name="emptylg" value="b"> Choice B</label>
+    </fieldset>
+
+    <!-- SUBJECT G: a role=radio with NO name attribute and NO declared grouping
+         ancestor anywhere. There is nothing to group it BY, so it must come back
+         ungrouped. Inventing a key here - by proximity, by document order, by
+         anything - would assert a question the application never asked. -->
+    <div role="radio" id="orphan-choice" aria-checked="false" tabindex="0">Standalone option</div>
+  </main>
+</body>
+</html>

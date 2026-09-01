@@ -1,0 +1,66 @@
+{
+  "auth-service": {
+    "pid": 31128,
+    "port": 8000
+  },
+  "shield": {
+    "pid": 28344,
+    "port": 8001
+  },
+  "ears": {
+    "pid": 16792,
+    "port": 8002
+  },
+  "eyes": {
+    "pid": 30064,
+    "port": 8003
+  },
+  "heart": {
+    "pid": 32108,
+    "port": 8004
+  },
+  "backbone": {
+    "pid": 11724,
+    "port": 8005
+  },
+  "nerves": {
+    "pid": 32416,
+    "port": 8006
+  },
+  "legs": {
+    "pid": 10016,
+    "port": 8007
+  },
+  "hands": {
+    "pid": 24668,
+    "port": 8008
+  },
+  "spine": {
+    "pid": 31540,
+    "port": 8009
+  },
+  "mouth": {
+    "pid": 27528,
+    "port": 8010
+  },
+  "brain": {
+    "pid": 29068,
+    "port": 8011
+  },
+  "gateway": {
+    "pid": 5548,
+    "port": 8080
+  },
+  "platform-api": {
+    "pid": 8816,
+    "port": 8091
+  },
+  "orchestrator": {
+    "pid": 31912,
+    "port": 8100
+  },
+  "qa-orchestrator": {
+    "pid": 31968,
+    "port": 8092
+  }
+}
