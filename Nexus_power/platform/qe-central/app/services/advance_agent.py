@@ -157,7 +157,7 @@ def _build_prompt(
 
 async def pick_advance(
     *, tenant_id: str, controls: list[dict],
-    page_title: str, page_url: str,
+    page_title: str, page_url: str, app_id: str = "", crawl_id: str = "",
 ) -> AdvanceDecision:
     """Ask the agent which control advances the flow.
 
@@ -226,6 +226,9 @@ async def pick_advance(
     usage = (_usage.as_dict()
              if _usage is not None and getattr(_usage, "reported", False)
              else {})
+    from .llm_cost import record_llm_usage
+    await record_llm_usage(tenant_id=tenant_id, app_id=app_id,
+                           crawl_id=crawl_id, task="pick_advance", usage=usage)
 
     def _decided(status: str, index: int | None = None) -> AdvanceDecision:
         return AdvanceDecision(status=status, index=index, signature=signature,

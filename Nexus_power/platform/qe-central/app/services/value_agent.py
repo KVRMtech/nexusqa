@@ -122,7 +122,8 @@ def clamp_to_options(value: str, options: Sequence[str]) -> Optional[str]:
 async def pick_value(*, tenant_id: str, name: str, semantic_type: str = "",
                      kind: str = "", options: Sequence[str] = (),
                      constraints: str = "", section: str = "",
-                     page_title: str = "", rejection: str = "") -> ValueDecision:
+                     page_title: str = "", rejection: str = "", app_id: str = "",
+                     crawl_id: str = "") -> ValueDecision:
     """One field, one value, through the guarded wire. Never raises."""
     if semantic_type in _CREDENTIAL_TYPES or kind == "password":
         return ValueDecision(status=STATUS_NONE)
@@ -147,6 +148,11 @@ async def pick_value(*, tenant_id: str, name: str, semantic_type: str = "",
     usage = (_usage.as_dict()
              if _usage is not None and getattr(_usage, "reported", False)
              else {})
+    # The response relay is also metered by the explorer, but Prometheus is not
+    # a ledger. Persist this individual call at the only server-side LLM wire.
+    from .llm_cost import record_llm_usage
+    await record_llm_usage(tenant_id=tenant_id, app_id=app_id,
+                           crawl_id=crawl_id, task="field_value", usage=usage)
 
     if not getattr(result, "ok", False):
         logger.info("qec.value_agent.unavailable detail=%s",
