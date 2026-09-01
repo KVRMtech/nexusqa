@@ -126,3 +126,48 @@ def test_a_text_field_still_reports_its_typed_value():
     }
     snap, _ = _form_snapshot([field])
     assert snap["First name"] == "Ada"
+
+
+# ── distinct controls must not collapse onto one declared container label ───
+
+def test_three_fields_under_one_heading_stay_three_questions():
+    """THE SECOND HALF OF THE SAME DEFECT, bisected to ``16e300a``.
+
+    ``question_name_of`` applied a container's declared question label to EVERY
+    control inside it, not only to the members of a choice. Three separate text
+    fields sharing one ``<h3>`` therefore produced ONE row, and the other two
+    questions vanished — from the snapshot, from ``form_snapshot_signals``, and
+    so from the field ledger and the SEED REQUEST the client receives.
+
+    Measured on the real golden: ``manifest_10-save-draft-wizard`` lost the
+    dom_id-located fields ``term``, ``notes`` and ``face-amount``.
+
+    A choice is several controls asking ONE question. Three text inputs are
+    three questions that happen to sit under one heading. Only the first case
+    may borrow the container's wording.
+    """
+    def field(name, ident):
+        return {"kind": "text", "name": name, "question_label": "Coverage",
+                "value_committed": "", "id": ident}
+    snap, signals = _form_snapshot([
+        field("Term", "term"), field("Notes", "notes"),
+        field("Face amount", "face-amount")])
+    assert len(snap) == 3, f"three fields collapsed to {len(snap)} row(s): {snap}"
+    assert set(snap) == {"Term", "Notes", "Face amount"}, snap
+    assert len(signals) == 3, (
+        f"the signals the seed request is built from lost entries: {list(signals)}")
+
+
+def test_a_choice_under_the_same_heading_still_collapses():
+    """The control that keeps the fix honest.
+
+    If distinct controls stop borrowing the container label, a RADIO GROUP must
+    still collapse — otherwise this fix simply reinstates the 25-questions-on-
+    two-keys bug that ``16e300a`` set out to solve.
+    """
+    snap, _ = _form_snapshot([
+        _member("Term 10", False, question="Coverage"),
+        _member("Term 20", True, question="Coverage")])
+    assert list(snap) == ["Coverage"], (
+        f"a radio group must remain ONE question: {snap}")
+    assert snap["Coverage"] == "Term 20"

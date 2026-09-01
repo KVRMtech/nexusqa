@@ -173,10 +173,70 @@
     "displayed_values": [],
     "first_seen_ms": "<normalized:first_seen_ms>",
     "form_snapshot": {
-      "Coverage": "Reviewed on intake."
+      "Face Amount": "250000",
+      "Notes": "",
+      "Term": "20",
+      "Underwriter Disclosure": "Reviewed on intake."
     },
     "form_snapshot_signals": {
-      "Coverage": {
+      "Face Amount": {
+        "locator": {
+          "bindable": false,
+          "role": "spinbutton",
+          "strategy": "dom_id",
+          "value": "face-amount",
+          "verified": true
+        },
+        "max": "2000000",
+        "min": "25000",
+        "options": [
+          "Face Amount",
+          "Term",
+          "Notes",
+          "Underwriter Disclosure"
+        ],
+        "options_total": 4,
+        "required": true,
+        "step": "1000",
+        "type": "text"
+      },
+      "Notes": {
+        "locator": {
+          "bindable": false,
+          "role": "textbox",
+          "strategy": "dom_id",
+          "value": "notes",
+          "verified": true
+        },
+        "maxlength": "500",
+        "options": [
+          "Face Amount",
+          "Term",
+          "Notes",
+          "Underwriter Disclosure"
+        ],
+        "options_total": 4,
+        "required": false,
+        "type": "text"
+      },
+      "Term": {
+        "locator": {
+          "bindable": false,
+          "role": "combobox",
+          "strategy": "dom_id",
+          "value": "term",
+          "verified": true
+        },
+        "options": [
+          "Select term length",
+          "10 years",
+          "20 years"
+        ],
+        "options_total": 3,
+        "required": true,
+        "type": "select"
+      },
+      "Underwriter Disclosure": {
         "locator": {
           "bindable": false,
           "role": "textbox",

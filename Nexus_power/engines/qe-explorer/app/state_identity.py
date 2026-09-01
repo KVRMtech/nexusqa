@@ -520,6 +520,38 @@ def _form_snapshot(controls: Sequence[dict[str, Any]]) -> tuple[dict[str, str], 
     #: order. Accumulated rather than overwritten, which is what makes the row
     #: independent of the order the members arrive in.
     group_answers: dict[str, list[str]] = {}
+    #: Labels that more than one DISTINCT non-choice control would land on.
+    #
+    # `question_name_of` rightly lets a badly-named field borrow its container's
+    # wording: a text input whose accessible name is "condition" is better
+    # recorded as "Which condition were you diagnosed with?". That holds while
+    # ONE control sits under the label. It stops holding the moment several do —
+    # three text inputs under one <h3> are three questions that share a heading,
+    # not one question asked three times, and collapsing them deleted two.
+    #
+    # MEASURED on manifest_10-save-draft-wizard (bisected to 16e300a): `term`,
+    # `notes` and `face-amount` all resolved to one label, so the snapshot and
+    # `form_snapshot_signals` kept one row and the other two questions vanished
+    # — out of the state identity, out of the field ledger, and out of the SEED
+    # REQUEST the client receives. Silent, because a collapsed key is
+    # indistinguishable from a page that only asked once.
+    #
+    # Collision is a property of the SET, which is why it is decided here and
+    # not in `question_name_of` — that function sees one control at a time and
+    # cannot know whether it is alone under its heading. Choice members are
+    # excluded: a group SHOULD collapse, that is the whole point of it.
+    _by_label: dict[str, set[str]] = {}
+    for _c in controls:
+        if form_signal_for(_c) is None:
+            continue
+        _k = str(_c.get("kind") or "").strip().lower()
+        if _k == "radio" or (_k == "checkbox" and str(_c.get("group_id") or "").strip()):
+            continue
+        _lab = question_name_of(_c)
+        if _lab:
+            _by_label.setdefault(_lab, set()).add(str(_c.get("name") or ""))
+    contested = {lab for lab, owners in _by_label.items() if len(owners) > 1}
+
     for control in controls:
         signal = form_signal_for(control)
         if signal is None:
@@ -544,6 +576,11 @@ def _form_snapshot(controls: Sequence[dict[str, Any]]) -> tuple[dict[str, str], 
         # Two radios of one question share a key deliberately: one question is
         # one row, and its value is whichever option the form actually holds.
         label = question_name_of(control)
+        # A contested label is not this control's identity — it is a heading
+        # several controls share. Fall back to the control's own name, which is
+        # what it was recorded under before container wording existed.
+        if label in contested:
+            label = str(control.get("name") or "").strip() or label
         if not label:
             continue
         secret = _is_password(control)
