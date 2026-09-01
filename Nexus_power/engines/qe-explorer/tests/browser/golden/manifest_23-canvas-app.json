@@ -86,7 +86,7 @@
     "stats": {
       "actions": 0,
       "elapsed_ms": "<normalized:elapsed_ms>",
-      "requests": 1,
+      "requests": 2,
       "states": 1
     },
     "stop_reason": "budget_max_states",

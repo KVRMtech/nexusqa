@@ -361,7 +361,7 @@
         "discovered_via": "Open Details",
         "key": "127.0.0.1/21-new-tab-adoption/details.html",
         "parent_fingerprint": "<hash>",
-        "priority": 0,
+        "priority": -1,
         "url": "http://127.0.0.1:<port>/21-new-tab-adoption/details.html"
       },
       {

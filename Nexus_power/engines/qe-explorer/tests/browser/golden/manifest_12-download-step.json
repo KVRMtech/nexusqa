@@ -264,26 +264,26 @@
     "frontier": [
       {
         "depth": 1,
-        "discovered_via": "Download Schedule",
-        "key": "127.0.0.1/documents/schedule.pdf",
-        "parent_fingerprint": "<hash>",
-        "priority": 0,
-        "url": "http://127.0.0.1:<port>/documents/schedule.pdf"
-      },
-      {
-        "depth": 1,
         "discovered_via": "Download Policy Document",
         "key": "127.0.0.1/12-download-step/policy.pdf",
         "parent_fingerprint": "<hash>",
-        "priority": 0,
+        "priority": -1,
         "url": "http://127.0.0.1:<port>/12-download-step/policy.pdf"
+      },
+      {
+        "depth": 1,
+        "discovered_via": "Download Schedule",
+        "key": "127.0.0.1/documents/schedule.pdf",
+        "parent_fingerprint": "<hash>",
+        "priority": 1,
+        "url": "http://127.0.0.1:<port>/documents/schedule.pdf"
       },
       {
         "depth": 1,
         "discovered_via": "Claims",
         "key": "127.0.0.1/12-download-step/index.html#/claims",
         "parent_fingerprint": "<hash>",
-        "priority": 0,
+        "priority": -1,
         "url": "http://127.0.0.1:<port>/12-download-step/index.html#/claims"
       }
     ],

@@ -213,7 +213,7 @@
         "discovered_via": "Download Sales Packet",
         "key": "127.0.0.1/20-download-artifact/sales-packet.pdf",
         "parent_fingerprint": "<hash>",
-        "priority": 0,
+        "priority": -1,
         "url": "http://127.0.0.1:<port>/20-download-artifact/sales-packet.pdf"
       },
       {
@@ -221,7 +221,7 @@
         "discovered_via": "Claims",
         "key": "127.0.0.1/20-download-artifact/claims.html",
         "parent_fingerprint": "<hash>",
-        "priority": 0,
+        "priority": -1,
         "url": "http://127.0.0.1:<port>/20-download-artifact/claims.html"
       }
     ],

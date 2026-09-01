@@ -32,10 +32,10 @@
     "displayed_values": [],
     "first_seen_ms": "<normalized:first_seen_ms>",
     "form_snapshot": {
-      "Alcohol No": "false",
-      "Alcohol Yes": "false",
-      "Tobacco No": "false",
-      "Tobacco Yes": "false"
+      "Alcohol No": "",
+      "Alcohol Yes": "",
+      "Tobacco No": "",
+      "Tobacco Yes": ""
     },
     "form_snapshot_signals": {
       "Alcohol No": {
@@ -47,8 +47,11 @@
           "value": "Alcohol No",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Alcohol Yes",
+          "Alcohol No"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
@@ -61,8 +64,11 @@
           "value": "Alcohol Yes",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Alcohol Yes",
+          "Alcohol No"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
@@ -75,8 +81,11 @@
           "value": "Tobacco No",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Tobacco Yes",
+          "Tobacco No"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
@@ -89,8 +98,11 @@
           "value": "Tobacco Yes",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Tobacco Yes",
+          "Tobacco No"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       }

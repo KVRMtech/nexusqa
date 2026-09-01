@@ -68,11 +68,227 @@
     "displayed_values": [],
     "first_seen_ms": "<normalized:first_seen_ms>",
     "form_snapshot": {
-      "No": "false",
-      "Yes": "false"
+      "Are you currently pregnant?": "",
+      "Do you currently use recreational drugs?": "",
+      "Do you engage in private aviation?": "",
+      "Do you engage in scuba diving?": "",
+      "Do you have a diagnosis of cancer?": "",
+      "Do you have a diagnosis of diabetes?": "",
+      "Do you have a family history of heart disease?": "",
+      "Do you hold a commercial driving licence?": "",
+      "Do you participate in motorsport?": "",
+      "Have you been advised to have a medical test not yet completed?": "",
+      "Have you been hospitalised in the last 5 years?": "",
+      "Have you been prescribed medication for blood pressure?": "",
+      "Have you been treated for a mental health condition?": "",
+      "Have you consumed more than 14 units of alcohol per week?": "",
+      "Have you ever been declined life insurance?": "",
+      "Have you had a moving violation in the last 3 years?": "",
+      "Have you had a stroke or heart attack?": "",
+      "Have you had a surgical procedure in the last 2 years?": "",
+      "Have you travelled outside the country in the last 12 months?": "",
+      "Have you used tobacco in the last 12 months?": ""
     },
     "form_snapshot_signals": {
-      "No": {
+      "Are you currently pregnant?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Are you currently pregnant? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 15,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you currently use recreational drugs?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you currently use recreational drugs? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 10,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you engage in private aviation?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you engage in private aviation? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 6,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you engage in scuba diving?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you engage in scuba diving? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 5,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you have a diagnosis of cancer?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you have a diagnosis of cancer? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 13,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you have a diagnosis of diabetes?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you have a diagnosis of diabetes? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 2,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you have a family history of heart disease?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you have a family history of heart disease? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 8,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you hold a commercial driving licence?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you hold a commercial driving licence? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 16,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Do you participate in motorsport?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Do you participate in motorsport? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 18,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you been advised to have a medical test not yet completed?": {
         "locator": {
           "anchor": {
             "kind": "group",
@@ -86,27 +302,231 @@
           "value": "No",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
-      "Yes": {
+      "Have you been hospitalised in the last 5 years?": {
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you been advised to have a medical test not yet completed? Yes No"
+            "label": "Have you been hospitalised in the last 5 years? Yes No"
           },
           "bindable": true,
           "group_id": "<hash>",
-          "match_index": 19,
+          "match_index": 1,
           "role": "radio",
           "strategy": "accessible_name",
-          "value": "Yes",
+          "value": "No",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you been prescribed medication for blood pressure?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you been prescribed medication for blood pressure? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 3,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you been treated for a mental health condition?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you been treated for a mental health condition? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 12,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you consumed more than 14 units of alcohol per week?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you consumed more than 14 units of alcohol per week? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 11,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you ever been declined life insurance?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you ever been declined life insurance? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 4,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you had a moving violation in the last 3 years?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you had a moving violation in the last 3 years? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 17,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you had a stroke or heart attack?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you had a stroke or heart attack? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 14,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you had a surgical procedure in the last 2 years?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you had a surgical procedure in the last 2 years? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 9,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you travelled outside the country in the last 12 months?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you travelled outside the country in the last 12 months? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 7,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
+      },
+      "Have you used tobacco in the last 12 months?": {
+        "locator": {
+          "anchor": {
+            "kind": "group",
+            "label": "Have you used tobacco in the last 12 months? Yes No"
+          },
+          "bindable": true,
+          "group_id": "<hash>",
+          "match_index": 0,
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "No",
+          "verified": true
+        },
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       }
