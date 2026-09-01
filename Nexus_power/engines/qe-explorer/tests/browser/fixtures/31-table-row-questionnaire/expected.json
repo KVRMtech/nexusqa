@@ -10,7 +10,7 @@
   "exact_control_count": 12,
   "expect_controls": [
     {
-      "why": "CASE A - the row IS the question, and <th scope=row> is the DOM's own way of saying so. question_key is derived from the WORDING, not the position: a row inserted above this one must not re-identify it.",
+      "why": "CASE A - the row IS the question, and <th scope=row> is the DOM's own way of saying so. question_key is derived from the WORDING, not the position: a row inserted above this one must not re-identify it. filter_scope stays 'table', not 'thead'/'grid', so is_filter_control leaves it alone - a question row silently reclassified as a list filter would drop the question from the catalogue entirely.",
       "where": {
         "testid": "a-tobacco-yes"
       },
@@ -18,7 +18,8 @@
         "name": "Yes",
         "question_label": "Have you used tobacco in the last 12 months?",
         "question_label_source": "row-label",
-        "question_key": "q:qrow:have you used tobacco in the last 12 months?"
+        "question_key": "q:qrow:have you used tobacco in the last 12 months?",
+        "filter_scope": "table"
       }
     },
     {
@@ -56,13 +57,14 @@
       }
     },
     {
-      "why": "CONTROL, CASE C - a <thead> filter row holds two controls and a label cell, so it satisfies every rule except the one that matters: it is not a question.",
+      "why": "CONTROL, CASE C - a <thead> filter row holds two controls and a label cell, so it satisfies every rule except the one that matters: it is not a question. filter_scope 'thead' is what makes is_filter_control true here, which is why these two controls do not become a question however well the row is shaped.",
       "where": {
         "testid": "c-filter-name"
       },
       "fields": {
         "question_label": "",
-        "question_key": ""
+        "question_key": "",
+        "filter_scope": "thead"
       }
     },
     {
