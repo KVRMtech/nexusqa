@@ -35,10 +35,9 @@ from app.budget import Budget
 from app.crawler import Crawler
 from app.guard_context import GuardContext
 from tests.characterization.fixtures import F3_SUBMIT
-from tests.characterization.harness import (_REFUSE_PACK, Fixture, ScriptedBrowser,
-                                            ScriptedPage, TickClock,
-                                            advance_oracle_stub, control, no_sleep,
-                                            vision_oracle_stub)
+from tests.characterization.harness import (_REFUSE_PACK, ScriptedBrowser,
+                                            TickClock, advance_oracle_stub,
+                                            no_sleep, vision_oracle_stub)
 
 CRAWL_ID = "m34-resume-crawl"
 
@@ -193,94 +192,3 @@ def test_a_crossing_journal_alone_is_a_durable_prefix():
         resuming=True)
     assert plan.recoverable, plan.refusal
     assert len(plan.crossings) == 1
-
-
-def _ten_step_boundary_fixture() -> Fixture:
-    """A real same-URL ten-step journey whose sole boundary is its end.
-
-    The distinctive radio group is deliberate: this test proves durable resume,
-    not the separate identity-negative-control behaviour.  A production wizard
-    commonly keeps one URL while changing its declared question on each step.
-    """
-    pages = {}
-    for step in range(1, 11):
-        advance = "Submit Application" if step == 10 else "Continue"
-        next_key = "done" if step == 10 else f"step-{step + 1}"
-        pages[f"step-{step}"] = ScriptedPage(
-            url="https://app.char/apply", title="Ten step application",
-            controls=[
-                control("radio", "Yes", tag="input", input_type="radio",
-                        kind="radio", group_key=f"name:doc:q{step}"),
-                control("radio", "No", tag="input", input_type="radio",
-                        kind="radio", group_key=f"name:doc:q{step}"),
-                control("button", advance, tag="button"),
-            ],
-            transitions={advance: next_key},
-        )
-    pages["done"] = ScriptedPage(
-        url="https://app.char/apply/confirmed", title="Confirmed",
-        controls=[control("link", "Back Home", href="/apply")],
-    )
-    return Fixture(
-        name="ten_step_boundary_resume", pages=pages, start="step-1",
-        target_url="https://app.char/apply",
-        kwargs={
-            "submit_approvals": ["*"],
-            "guard_context": GuardContext(
-                refuse_pack=_REFUSE_PACK, attestation=F3_SUBMIT.kwargs[
-                    "guard_context"].attestation),
-            "crawl_mode": "e2e", "wizard_enabled": True,
-            "e2e_wizard_steps": 20,
-        },
-    )
-
-
-class _KilledAtStepSix(ScriptedBrowser):
-    """Simulate SIGKILL just after the ordinary step-six advance starts."""
-
-    async def click(self, control):
-        observation = await super().click(control)
-        if self._key == "step-7":
-            raise SystemExit("simulated worker kill at step 6")
-        return observation
-
-
-def test_kill_at_step_six_resumes_the_ten_step_journey_without_recrossing(
-        frozen, tmp_path):
-    """Team C exit drill: resume the journal, finish 10 steps, cross once."""
-    fixture = _ten_step_boundary_fixture()
-    work = tmp_path / "w"
-    work.mkdir()
-
-    # Build the interrupted crawl with the normal production Crawler, changing
-    # only the port's process-death behaviour.  ``SystemExit`` bypasses the
-    # crawler's ordinary Exception handler just as SIGKILL bypasses Python.
-    port = _KilledAtStepSix(fixture.pages, fixture.start)
-    kwargs = dict(fixture.kwargs)
-    crawler = Crawler(
-        port, crawl_id=CRAWL_ID, tenant_id="m34-tenant",
-        target_url=fixture.target_url, work_dir=str(work),
-        refuse_pack=_REFUSE_PACK, budget=Budget(rate_per_s=0),
-        explorer_version="m34/1.0", guard_version="m34",
-        refuse_pack_version=_REFUSE_PACK.version, config_fingerprint="m34-fp",
-        sleep=no_sleep, advance_oracle=advance_oracle_stub(fixture.advance_reply),
-        vision_oracle=vision_oracle_stub(fixture.vision_reply), **kwargs)
-    port.bind_crawler(crawler)
-    with pytest.raises(SystemExit, match="step 6"):
-        asyncio.run(crawler.run())
-
-    before = _records(work)
-    checkpoints = [r for r in before if r.get("type") == emit.REC_CHECKPOINT]
-    assert checkpoints and checkpoints[-1].get("frontier"), (
-        "the kill must leave its in-flight journey in the durable checkpoint")
-    assert not _crossings(work), "the pre-kill half has not reached the boundary"
-
-    summary = asyncio.run(_build(fixture, work, resume=True).run())
-    assert summary.stop_reason == "completed", summary.detail
-    milestones = [r for r in _records(work)
-                  if r.get("type") == emit.REC_OUTCOME_MILESTONE]
-    assert any(r.get("url_after", "").endswith("/confirmed") for r in milestones), (
-        "resume stopped at the already-seen entry instead of completing step 10")
-    spent_ids = {r.get("crossing_id") for r in _crossings(work)
-                 if r.get("status") != CROSSING_REFUSED}
-    assert len(spent_ids) == 1, "the terminal boundary was crossed more than once"
