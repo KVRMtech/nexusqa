@@ -8,10 +8,10 @@ and back to qe-central (the HMAC-signed completion callback) — never the
 DB, never the factory, never the internet directly. It holds NO DB creds
 and NO KMS — only the per-fleet HMAC token.
 
-Live-crawl artifact handoff: with env.storageBackend=local the explorer's
-crawl output is on a pod-local emptyDir; sharing it with qe-central on k8s
-needs an RWX volume or (recommended) an object-storage backend. Live
-dispatch is OFF by default (env.explorerDispatchEnabled=false).
+Live-crawl artifact handoff: with env.storageBackend=local the explorer and
+qe-central mount the same durable crawl PVC. Multi-node installs need an
+RWX-capable storage class (or use the recommended object-storage backend).
+Live dispatch is OFF by default (env.explorerDispatchEnabled=false).
 =================================================================
 */}}
 {{- if .Values.qeExplorer.enabled }}
@@ -112,8 +112,13 @@ spec:
               mountPath: /dev/shm
       volumes:
         - name: work
+          {{- if eq .Values.qeExplorer.persistence.work.mode "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-crawl
+          {{- else }}
           emptyDir:
-            sizeLimit: 5Gi
+            sizeLimit: {{ .Values.qeExplorer.persistence.work.size }}
+          {{- end }}
         - name: dshm
           emptyDir:
             medium: Memory

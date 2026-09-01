@@ -27,7 +27,9 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # Persistent LOCAL backup dir (always written) + OPTIONAL offsite GCS bucket. When
 # GCS_BACKUP_BUCKET is empty the backup is local-only; when set, the local dump is
-# ALSO copied to GCS (a failed copy is non-fatal — the local dump is the primary).
+# ALSO copied to GCS. A configured off-host target is a durability requirement:
+# a failed copy makes the run fail and therefore does not refresh the success
+# freshness metric as though an off-host backup existed.
 LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$HOME/db_backups}"
 GCS_BACKUP_BUCKET="${GCS_BACKUP_BUCKET:-}"
 BACKUP_RETENTION="${BACKUP_RETENTION:-14}"   # keep newest N local dumps per db
@@ -74,14 +76,16 @@ backup() {
     sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
     echo "   $db dump = ${sz} bytes -> $out"
     [ "$sz" -gt 1000 ] || { echo "DUMP_TOO_SMALL:$db (refusing to keep a suspect backup)"; rm -f "$out"; exit 1; }
-    # Offsite copy (best-effort): a GCS failure NEVER fails the backup — the local
-    # dump is the guaranteed artifact; GCS is the durability copy.
-    if [ -n "$GCS_BACKUP_BUCKET" ] && command -v gsutil >/dev/null 2>&1; then
-      if gsutil cp "$out" "$GCS_BACKUP_BUCKET/${db}/${db}_${STAMP}.dump" >/dev/null 2>&1; then
-        echo "   copied $db to $GCS_BACKUP_BUCKET"
-      else
-        echo "   GCS_COPY_FAILED:$db (local dump retained; offsite copy skipped)"
+    # An explicitly configured GCS destination is the off-host system of
+    # record. Do not report a local-only run as a successful production backup.
+    if [ -n "$GCS_BACKUP_BUCKET" ]; then
+      command -v gsutil >/dev/null 2>&1 || {
+        echo "GCS_COPY_UNAVAILABLE:$db (gsutil is required for $GCS_BACKUP_BUCKET)"; exit 1;
+      }
+      if ! gsutil cp "$out" "$GCS_BACKUP_BUCKET/${db}/${db}_${STAMP}.dump" >/dev/null 2>&1; then
+        echo "GCS_COPY_FAILED:$db (local dump retained; off-host backup failed)"; exit 1
       fi
+      echo "   copied $db to $GCS_BACKUP_BUCKET"
     fi
     # Retention: keep the newest N local dumps per db.
     ls -1t "$LOCAL_BACKUP_DIR/${db}_"*.dump 2>/dev/null | tail -n +"$((BACKUP_RETENTION+1))" | xargs -r rm -f
@@ -118,10 +122,26 @@ drill_one() {
   local db="$1" drill
   drill=$(printf 'verdict_restore_drill_%s_%s' "$db" "$STAMP" | tr 'A-Z' 'a-z')
   echo "-- restore-drill: $db --"
-  _run pg_dump -U "$PG_USER" -d "$db" -Fc > "$WORK/drill_${db}.dump" || { echo "DRILL_DUMP_FAIL:$db"; return 1; }
+  local dump="$WORK/drill_${db}.dump" latest
+  if [ -n "$GCS_BACKUP_BUCKET" ]; then
+    command -v gsutil >/dev/null 2>&1 || { echo "DRILL_GCS_UNAVAILABLE:$db"; return 1; }
+    latest=$(gsutil ls "$GCS_BACKUP_BUCKET/${db}/${db}_"*.dump 2>/dev/null | sort | tail -n 1)
+    [ -n "$latest" ] || { echo "DRILL_GCS_DUMP_MISSING:$db"; return 1; }
+    echo "   restoring off-host copy: $latest"
+    gsutil cp "$latest" "$dump" >/dev/null 2>&1 || { echo "DRILL_GCS_COPY_FAIL:$db"; return 1; }
+  else
+    # Development/offline drill: use the newest retained local dump. A fresh
+    # dump is only the compatibility fallback when no local backup exists.
+    latest=$(ls -1t "$LOCAL_BACKUP_DIR/${db}_"*.dump 2>/dev/null | head -n 1)
+    if [ -n "$latest" ]; then
+      cp "$latest" "$dump" || { echo "DRILL_LOCAL_COPY_FAIL:$db"; return 1; }
+    else
+      _run pg_dump -U "$PG_USER" -d "$db" -Fc > "$dump" || { echo "DRILL_DUMP_FAIL:$db"; return 1; }
+    fi
+  fi
   _run psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
   _run psql -U "$PG_USER" -d postgres -c "CREATE DATABASE ${drill};" >/dev/null 2>&1 || { echo "DRILL_CREATE_FAIL:$db"; return 1; }
-  _run_i pg_restore -U "$PG_USER" -d "${drill}" --no-owner < "$WORK/drill_${db}.dump" 2>&1 | tail -3
+  _run_i pg_restore -U "$PG_USER" -d "${drill}" --no-owner < "$dump" 2>&1 | tail -3
 
   local rc=0
   # (1) alembic head must match — the restore preserved the schema revision.

@@ -94,9 +94,9 @@ kek:
   # gcp_kms/aws_kms this volume is inert. mode:
   #   secret  — a pre-created K8s Secret holding the dev key (kek.secret.name/.key)
   #   pvc     — a persistent volume the operator seeds once
-  #   emptyDir — EPHEMERAL (a new random key each restart)
+  #   emptyDir — EPHEMERAL (a new random key each restart; CI-only)
   persistence:
-    mode: emptyDir
+    mode: pvc
     size: 64Mi
     secret:
       name: ""
@@ -170,13 +170,12 @@ qeCentral:
   persistence:
     # The KEK dir (mode handled by .kek.persistence); the crawl handoff volume.
     crawl:
-      mode: emptyDir   # emptyDir | pvc
+      mode: pvc        # durable local crawl evidence
       size: 5Gi
     # Shared frame storage (co-read with the factory/eyes). For local backend on
-    # a single node, an RWX PVC or a hostPath is needed to truly share; default
-    # emptyDir keeps qe-central self-contained (frames it writes stay local).
+    # a single node, an RWX PVC or a hostPath is needed to truly share.
     frames:
-      mode: emptyDir
+      mode: pvc
       size: 10Gi
 
 # ── qe-explorer (the QUARANTINED browser container — design §1.1) ────────────
@@ -199,17 +198,24 @@ qeExplorer:
     limits:
       cpu: "2"
       memory: "2Gi"
+  persistence:
+    work:
+      mode: pvc        # shared with qe-central when storageBackend=local
+      size: 5Gi
 
 # ── egress-proxy (squid — the SINGLE NAT hop, HARD host allowlist) ───────────
 egressProxy:
   enabled: true
   image: "ubuntu/squid:latest"
   port: 3128
-  # STATIC per-tenant allowlist (registrable domains, one per line). EMPTY ⇒
-  # fail-closed: squid denies ALL real egress until a domain is set. On-prem's
-  # single onboarded target app makes this the recommended, most-auditable
-  # posture (vs. the compose per-crawl dynamic allowlist).
+  # Per-crawl fences are written at dispatch and selected by the browser's
+  # crawl-id proxy login. `allowedDomains` remains only for compatible values
+  # files; it is not consulted by the per-crawl squid configuration.
   allowedDomains: []
+  persistence:
+    mode: pvc          # pvc | emptyDir (emptyDir is CI-only)
+    size: 1Gi
+    accessMode: ReadWriteOnce
   # Cluster pod/service CIDRs the proxy must NEVER reach (defense-in-depth so an
   # egress rule can't re-open a path to the DB / other pods). Set to the
   # cluster's real CIDRs on-prem.

@@ -13,12 +13,12 @@ Full runbook: `QECentral/docs/ONPREM_INSTALL.md` (at the repo root, beside
 
 | Template | Resource(s) | Notes |
 |---|---|---|
-| `qe-central.yaml` | Deployment + Service (+ optional HPA/PVCs) | control plane + substrate writer; `/health`, `/metrics`, `/api/v1/qec/*` on 8093 |
-| `qe-explorer.yaml` | Deployment + Service | the **quarantined** browser; internal-only; `/dev/shm` for Chromium |
-| `egress-proxy.yaml` | Deployment + Service + 2 ConfigMaps | squid — single NAT hop with a **fail-closed host allowlist** |
+| `qe-central.yaml` | Deployment + Service + PVCs | control plane + substrate writer; durable KEK, crawl/frame evidence and fence handoff |
+| `qe-explorer.yaml` | Deployment + Service | the **quarantined** browser; durable shared crawl handoff; `/dev/shm` remains ephemeral |
+| `egress-proxy.yaml` | Deployment + Service + ConfigMap | squid — single NAT hop with a **fail-closed per-crawl host fence** |
 | `repo-intel.yaml` | Deployment + Service (+ optional PVC) | OFF the critical path; disabled by default |
 | `verdict-portal.yaml` | Deployment + Service + nginx ConfigMap | Command Center SPA; proxies the API to the in-cluster qe-central |
-| `postgres.yaml` | StatefulSet + Service + init ConfigMap | **dedicated qecentral DB**; RLS-safe `qec` role (NOSUPERUSER/NOBYPASSRLS); skip with `postgres.enabled=false` for an external DB |
+| `postgres.yaml` | StatefulSet + Service + init ConfigMap + PVC | **dedicated qecentral DB** on a durable claim; skip with `postgres.enabled=false` for an external DB |
 | `networkpolicy.yaml` | NetworkPolicies | enforces the §1.1 isolation invariants (explorer reaches only the proxy + its callback, **never the DB**) |
 | `servicemonitor.yaml` | ServiceMonitor(s) | Prometheus Operator scrape of the `qec_*` metrics |
 | `secret.yaml` / `external-secret.yaml` | Secret **or** ExternalSecret | never plaintext; ESO syncs from the client's KMS/Vault |
@@ -40,7 +40,7 @@ Full runbook: `QECentral/docs/ONPREM_INSTALL.md` (at the repo root, beside
 | `externalSecrets.enabled` | `false` | source every credential from KMS/Vault (recommended) |
 | `monitoring.serviceMonitor.enabled` | `false` | Prometheus Operator scrape |
 | `migrations.enabled` | `true` | run the schema migration as a hook |
-| `egressProxy.allowedDomains` | `[]` | **empty ⇒ fail-closed** (denies all real egress) |
+| `egressProxy.persistence.mode` | `pvc` | persistent shared per-crawl fence files; set an RWX-capable class for multi-node installs |
 
 Overlays: `values-onprem.yaml` (regulated cluster, KMS/Vault, isolation ON) and
 `values-airgapped.yaml` (private registry, no internet).
@@ -48,6 +48,20 @@ Overlays: `values-onprem.yaml` (regulated cluster, KMS/Vault, isolation ON) and
 Every new capability is **opt-in with defaults that preserve today's behavior**;
 the two DSNs are composed in the pods with the DB password injected from the
 Secret via `$(VAR)` expansion, so no credential is ever written to a ConfigMap.
+
+## Durable state
+
+The default chart has no stateful `emptyDir` paths: Postgres, the development
+KEK, local crawl/frame evidence, and the qe-central↔squid fence handoff are all
+PVC-backed. `/tmp`, Squid cache/runtime data and Chromium `/dev/shm` remain
+ephemeral by design. `qeCentral.persistence.crawl` and
+`qeExplorer.persistence.work` name the same claim and must stay aligned. On a
+multi-node cluster, choose an RWX-capable storage class for shared evidence and
+fence volumes; the CI kind profile is intentionally single-node.
+
+`values-kind.yaml` plus `ci/kind-config.yaml` are the CI profile: it installs
+the chart, lets the post-install migration hook run, writes a sentinel row,
+restarts the Postgres pod, and reads the row back.
 
 ## Linting (CI)
 

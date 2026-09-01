@@ -45,6 +45,7 @@ data:
   QEC_EXPLORER_URL: {{ include "verdict.serviceUrl" (dict "root" . "component" "qe-explorer" "port" .Values.qeExplorer.port) | quote }}
   QEC_CRAWL_STORAGE_ROOT: "/work"
   QEC_EGRESS_ALLOWLIST_PATH: "/qec/egress-allowlist/allowed_domains.txt"
+  QEC_EGRESS_SQUID_ROOT: "/etc/squid/allowlist"
 
   # ── REFUSE harness (default OFF) ──
   QE_HARNESS_ENABLED: {{ .Values.env.harnessEnabled | quote }}

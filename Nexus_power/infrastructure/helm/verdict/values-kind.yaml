@@ -1,0 +1,31 @@
+# CI-only overlay for the chart's persistence proof.  Images are built from the
+# checkout and loaded into kind by deploy-validation.yml; this profile avoids
+# external factory, browser, portal and proxy dependencies while exercising the
+# chart-managed Postgres, durable KEK/crawl PVCs and the migrations hook.
+global:
+  image:
+    registry: ""
+    repository: "nexus-qa"
+    tag: "kind"
+    pullPolicy: Never
+
+env:
+  nexusEnv: development
+
+qeExplorer:
+  enabled: false
+egressProxy:
+  enabled: false
+repoIntel:
+  enabled: false
+portal:
+  enabled: false
+networkPolicies:
+  enabled: false
+ingress:
+  enabled: false
+monitoring:
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false

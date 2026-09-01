@@ -1,0 +1,7 @@
+# Single-node kind is intentional: ReadWriteOnce PVCs are mounted by the
+# qe-central and squid pods on the same node. Production multi-node installs
+# must set an RWX storage class/access mode for shared crawl/frame/fence paths.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane

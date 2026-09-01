@@ -72,6 +72,23 @@ spec:
     requests:
       storage: {{ .Values.qeCentral.persistence.frames.size }}
 {{- end }}
+{{- if and .Values.egressProxy.enabled (eq .Values.egressProxy.persistence.mode "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-egress-allowlist
+  labels:
+    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
+spec:
+  accessModes: [{{ .Values.egressProxy.persistence.accessMode | quote }}]
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.egressProxy.persistence.size }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -213,8 +230,13 @@ spec:
             sizeLimit: {{ .Values.qeCentral.persistence.frames.size }}
           {{- end }}
         - name: egress-allowlist
+          {{- if and .Values.egressProxy.enabled (eq .Values.egressProxy.persistence.mode "pvc") }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-egress-allowlist
+          {{- else }}
           emptyDir:
-            sizeLimit: 8Mi
+            sizeLimit: {{ .Values.egressProxy.persistence.size }}
+          {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi

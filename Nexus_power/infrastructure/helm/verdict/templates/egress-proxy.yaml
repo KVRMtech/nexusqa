@@ -1,14 +1,14 @@
 {{/*
 =================================================================
-egress-proxy (squid) — the SINGLE NAT hop with a HARD host allowlist
+egress-proxy (squid) — the SINGLE NAT hop with a HARD PER-CRAWL host fence
 (design §1.1). The quarantined explorer's ONLY route outward is this
 proxy; squid enforces the destination-HOST allowlist (the explorer's
 in-browser guard enforces the METHOD). An EMPTY allowlist DENIES ALL real
 egress — fail-closed by construction.
 
-On-prem posture: a STATIC per-tenant allowlist (egressProxy.allowedDomains)
-is the recommended, most-auditable form — the single onboarded target app's
-registrable domain(s), nothing else.
+The same persistent volume is mounted read/write by qe-central at
+/qec/egress-allowlist and by squid at /etc/squid/allowlist. qe-central writes
+one fence per crawl; squid selects it using the browser context's proxy login.
 =================================================================
 */}}
 {{- if .Values.egressProxy.enabled }}
@@ -23,8 +23,15 @@ metadata:
     {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
 data:
   squid.conf: |
-    # VKPower Verdict egress proxy — HARD host allowlist, fail-closed.
-    acl allowed_domains dstdomain "/etc/squid/allowlist/allowed_domains.txt"
+    # VKPower Verdict egress proxy — HARD per-crawl fence, fail-closed.
+    # `basic_fake_auth` accepts any password: the authenticated username is the
+    # crawl identity, not a security secret. A missing identity gets a 407.
+    auth_param basic program /usr/lib/squid/basic_fake_auth
+    auth_param basic children 5 startup=1 idle=1
+    auth_param basic realm qec-egress-fence
+    auth_param basic credentialsttl 1 minute
+    auth_param basic casesensitive on
+    acl fenced_crawl proxy_auth REQUIRED
 
     acl SSL_ports port 443
     acl Safe_ports port 80
@@ -35,8 +42,10 @@ data:
     http_access deny !Safe_ports
     http_access deny CONNECT !SSL_ports
 
-    # The ONLY allow rule: allowlisted destination domains (HTTP + HTTPS CONNECT).
-    http_access allow allowed_domains
+    # Require an identity, then apply qe-central's generated ACL pair for every
+    # live crawl. An empty crawls.conf permits nothing.
+    http_access deny !fenced_crawl
+    include /etc/squid/allowlist/crawls.conf
 
     # Fail-closed default — deny everything else (the nexus stack, metadata
     # endpoints, the wider internet).
@@ -60,26 +69,8 @@ data:
     access_log stdio:/dev/stdout squid
     cache_log /dev/stderr
 
-    # Deterministic, quick-to-fail DNS on blocked hosts.
-    dns_v4_first on
+    negative_dns_ttl 1 seconds
     pid_filename /tmp/squid.pid
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ $fullname }}-egress-allowlist
-  labels:
-    {{- include "verdict.componentLabels" (dict "root" $root "component" "egress-proxy") | nindent 4 }}
-data:
-  allowed_domains.txt: |
-    {{- if .Values.egressProxy.allowedDomains }}
-    {{- range .Values.egressProxy.allowedDomains }}
-    {{ . }}
-    {{- end }}
-    {{- else }}
-    # fail-closed default — no real host until egressProxy.allowedDomains is set
-    .qec-egress-denied.invalid
-    {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -97,10 +88,7 @@ spec:
       labels:
         {{- include "verdict.componentSelectorLabels" (dict "root" $root "component" "egress-proxy") | nindent 8 }}
       annotations:
-        # Restart squid when its config/allowlist inputs change. Hash the egressProxy
-        # values — NOT the whole template file, which contains this Deployment and would
-        # self-include → infinite recursion.
-        checksum/allowlist: {{ .Values.egressProxy | toYaml | sha256sum }}
+        checksum/config: {{ .Values.egressProxy | toYaml | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "verdict.fullname" .) }}
       {{- include "verdict.podSpecCommon" $root | nindent 6 }}
@@ -110,7 +98,20 @@ spec:
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
           args:
-            - exec squid -N -f /etc/squid/squid.conf -d 1
+            - >-
+              mkdir -p /etc/squid/allowlist/crawls &&
+              { [ -f /etc/squid/allowlist/crawls.conf ] ||
+                printf '%s\n' '# empty per-crawl fence set — deny all real egress'
+                  > /etc/squid/allowlist/crawls.conf; } &&
+              { [ -f /etc/squid/allowlist/reload.stamp ] ||
+                echo boot > /etc/squid/allowlist/reload.stamp; } &&
+              { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
+              { S=/etc/squid/allowlist/reload.stamp; L=$(cat "$S" 2>/dev/null); while :; do
+                  C=$(cat "$S" 2>/dev/null || echo 0);
+                  [ "$C" != "$L" ] && { L=$C;
+                    kill -HUP 1 2>/dev/null || squid -k reconfigure 2>/dev/null || true; };
+                  sleep 1; done & } &&
+              exec squid -N -f /etc/squid/squid.conf -d 1
           ports:
             - name: proxy
               containerPort: {{ .Values.egressProxy.port }}
@@ -130,7 +131,6 @@ spec:
               readOnly: true
             - name: allowlist
               mountPath: /etc/squid/allowlist
-              readOnly: true
             - name: run
               mountPath: /var/run
             - name: spool
@@ -142,8 +142,13 @@ spec:
           configMap:
             name: {{ $fullname }}-egress-proxy-conf
         - name: allowlist
-          configMap:
-            name: {{ $fullname }}-egress-allowlist
+          {{- if eq .Values.egressProxy.persistence.mode "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-egress-allowlist
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.egressProxy.persistence.size }}
+          {{- end }}
         - name: run
           emptyDir:
             sizeLimit: 32Mi
