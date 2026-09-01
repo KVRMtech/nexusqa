@@ -208,7 +208,14 @@ def test_r3_the_owning_tenant_still_works(bound, monkeypatch):
 
     seen = {}
 
-    async def fake_pick(*, tenant_id, controls, page_title, page_url):
+    # app_id/crawl_id arrive from the route since internal.py began passing the
+    # BOUND app and crawl through to the agent. The double must accept what the
+    # route actually sends or it raises TypeError at kwarg binding and the route
+    # 500s before this body runs — which reads as a broken security property
+    # rather than as a stale double. Defaulted, so the assertions below are
+    # unchanged and this stays a test of R3 tenant binding, not of the new args.
+    async def fake_pick(*, tenant_id, controls, page_title, page_url,
+                        app_id="", crawl_id=""):
         seen["tenant_id"] = tenant_id
         return type("D", (), {"index": 0, "status": "picked", "signature": "s",
                               "usage": None})()
@@ -232,7 +239,14 @@ def test_r3_the_service_receives_the_bound_tenant_not_the_body_one(bound, monkey
 
     seen = {}
 
-    async def fake_pick(*, tenant_id, controls, page_title, page_url):
+    # app_id/crawl_id arrive from the route since internal.py began passing the
+    # BOUND app and crawl through to the agent. The double must accept what the
+    # route actually sends or it raises TypeError at kwarg binding and the route
+    # 500s before this body runs — which reads as a broken security property
+    # rather than as a stale double. Defaulted, so the assertions below are
+    # unchanged and this stays a test of R3 tenant binding, not of the new args.
+    async def fake_pick(*, tenant_id, controls, page_title, page_url,
+                        app_id="", crawl_id=""):
         seen["tenant_id"] = tenant_id
         return type("D", (), {"index": None, "status": "none", "signature": "",
                               "usage": None})()
@@ -265,4 +279,4 @@ def test_r3_every_internal_handler_routes_through_the_one_authenticator():
         assert "_authenticate_internal" in src, f"{name} bypasses the internal gate"
     complete = inspect.getsource(internal.complete_crawl)
     assert "_bind_crawl" in complete
-    assert 'scope=f"complete:{crawl_id}"' in complete
+    assert 'tenant_scope("complete", tenant_for_scope, crawl_id)' in complete

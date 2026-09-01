@@ -18,9 +18,8 @@ with::
 
     sig = HMAC-SHA256(key, b"v2\\n{kid}\\n{ts}\\n{nonce}\\n{scope}\\n{sha256(body)}")
 
-``scope`` binds the signature to the logical operation (e.g. the crawl id on a
-completion callback), so a valid signature for one crawl cannot authenticate a
-call about another.
+``scope`` binds the signature to the logical operation, tenant, and crawl.  A
+valid signature for one tenant/crawl cannot authenticate a call about another.
 
 VERIFICATION (all five, fail-closed, in order)
 ==============================================
@@ -91,6 +90,25 @@ def key_id(secret: str) -> str:
 
 def body_hash(body: bytes | None) -> str:
     return hashlib.sha256(body or b"").hexdigest()
+
+
+def tenant_scope(operation: str, tenant_id: str, crawl_id: str) -> str:
+    """Return the one canonical tenant-bound callback scope.
+
+    Tenant identity is already verified against the exploration row by the
+    receiving service, but it must also be signed.  Otherwise a future endpoint
+    that accidentally treats the body claim as authority could turn a fleet-wide
+    token into cross-tenant authority.  Reject incomplete identities before a
+    signature is emitted: an empty component is a weaker protocol, not a useful
+    fallback.
+    """
+    values = tuple(str(value or "").strip() for value in
+                   (operation, tenant_id, crawl_id))
+    if not all(values):
+        raise SignatureError("missing_tenant_scope_identity")
+    if any("\n" in value or "\r" in value for value in values):
+        raise SignatureError("invalid_tenant_scope_identity")
+    return ":".join(values)
 
 
 @dataclass(frozen=True)
@@ -363,5 +381,6 @@ __all__ = [
     "key_id",
     "parse_envelope",
     "sign",
+    "tenant_scope",
     "verify",
 ]

@@ -136,6 +136,19 @@ def test_r7_a_signature_for_one_crawl_cannot_authenticate_another():
     assert exc.value.reason == "bad_signature"
 
 
+def test_r7_a_signature_for_one_tenant_cannot_authenticate_another():
+    """Team F R4: a fleet token is never cross-tenant callback authority."""
+    ring, nonces = _ring(), NonceStore()
+    scoped = hmac_auth.tenant_scope("complete", "tenant-a", "aaaa")
+    header = hmac_auth.sign(BODY, keyring=ring, scope=scoped)
+    with pytest.raises(SignatureError) as exc:
+        hmac_auth.verify(
+            BODY, header, keyring=ring, nonces=nonces,
+            scope=hmac_auth.tenant_scope("complete", "tenant-b", "aaaa"),
+        )
+    assert exc.value.reason == "bad_signature"
+
+
 def test_r7_a_wrong_key_is_rejected():
     nonces = NonceStore()
     header = hmac_auth.sign(BODY, keyring=KeyRing(current=K2), scope=SCOPE)

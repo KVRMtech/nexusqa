@@ -45,6 +45,8 @@ from typing import Any, Optional, Sequence
 
 import httpx
 
+from .hmac_auth import tenant_scope
+
 logger = logging.getLogger(__name__)
 
 MODE_CENTRAL = "central"
@@ -90,12 +92,18 @@ class LLMDataAgent:
     """Sync value provider. Built once per crawl; never raises; None on failure."""
 
     def __init__(self, *, mode: str = MODE_CENTRAL, settings: Any = None,
-                 crawl_id: str = "", model: str = "", max_calls: int = 150,
+                 crawl_id: str = "", tenant_id: str = "",
+                 model: str = "", max_calls: int = 150,
                  breaker_threshold: int = 3, timeout_s: float = 10.0,
                  transport: Optional[httpx.BaseTransport] = None) -> None:
         self.mode = mode if mode in (MODE_CENTRAL, MODE_DIRECT) else MODE_CENTRAL
         self.settings = settings
         self.crawl_id = crawl_id
+        #: The tenant this crawl belongs to. Part of the SIGNING SCOPE for
+        #: /internal/pick-value since the tenant-scoped HMAC migration —
+        #: see _ask_central. Defaulted so every existing test double that
+        #: constructs this agent without one keeps working.
+        self.tenant_id = tenant_id
         self.model = model or os.environ.get("QEC_DATA_LLM_MODEL", "gpt-4o-mini")
         self.max_calls = max_calls
         self.breaker_threshold = breaker_threshold
@@ -154,6 +162,9 @@ class LLMDataAgent:
             return None
         body = {
             "crawl_id": self.crawl_id,
+            # BOTH identities travel, because both are inside the signature
+            # scope on the far side (internal._authenticate_internal).
+            "tenant_id": self.tenant_id,
             "name": str(field_ctx.get("name") or ""),
             "semantic_type": str(field_ctx.get("semantic_type") or ""),
             "kind": str(field_ctx.get("kind") or ""),
@@ -168,8 +179,17 @@ class LLMDataAgent:
         # Signing INSIDE the guarded path: with no fleet secret configured this
         # raises, the caller counts a failure, and the crawl continues — the
         # exact degradation the advance oracle already lives by.
+        # THE SEAM THIS CLOSES. qe-central's /internal/pick-value routes
+        # through _authenticate_internal, which computes
+        # `tenant_scope("pick-value", claimed_tenant, crawl_id)`. The five
+        # signers in main.py were migrated to that shape; this one was not,
+        # so it kept signing the old `pick-value:<crawl_id>` and every value
+        # consultation would have been refused 401 the moment the migration
+        # landed. Left behind because this agent had no tenant to sign with;
+        # it does now.
         signature = settings.sign_payload(
-            payload, scope=f"pick-value:{self.crawl_id}")
+            payload,
+            scope=tenant_scope("pick-value", self.tenant_id, self.crawl_id))
         self.calls += 1
         resp = self._client.post(
             settings.callback_url.rstrip("/") + "/internal/pick-value",

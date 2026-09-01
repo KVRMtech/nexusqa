@@ -59,6 +59,7 @@ from ..clients.manifest_mapper import (
     map_manifest_records_to_bundle,
 )
 from ..clients.refusal_messages import client_refusal_message
+from ..security.hmac_auth import SignatureError, tenant_scope
 from ..db import tenant_scoped_qec_session, utc_now
 from ..db.models import ClientAppEnvironmentRow, ClientAppRow, QEExplorationRow
 from ..storage import object_store
@@ -527,7 +528,7 @@ async def _authenticate_internal(
 
       1. the v2 signature verifies over THIS body, under a live key, within the
          clock-skew window, with a nonce that has not been used, and scoped to
-         ``{endpoint}:{crawl_id}``;
+         ``{endpoint}:{tenant_id}:{crawl_id}``;
       2. ``crawl_id`` resolves — server-side, under the claimed tenant's RLS
          scope — to a real exploration owned by that tenant;
       3. the body's ``tenant_id`` matches the ROW's tenant.
@@ -546,11 +547,16 @@ async def _authenticate_internal(
         body = {}
     crawl_id = str(body.get("crawl_id") or "").strip()
 
-    # The scope is derived from the BODY's crawl id, and the signature covers
-    # the body — so a caller cannot rewrite the crawl id without invalidating
-    # its own signature, and cannot reuse a signature made for another crawl.
+    # Both identities are covered by the signature before either can influence
+    # lookup.  The following RLS lookup then proves the tenant claim against the
+    # owning row, so a body claim is never authority on its own.
+    claimed_tenant = str(body.get("tenant_id") or "").strip()
+    try:
+        scope = tenant_scope(endpoint, claimed_tenant, crawl_id)
+    except SignatureError:
+        scope = ""
     if not phase1_settings.verify_signature(
-        raw, signature, scope=f"{endpoint}:{crawl_id}",
+        raw, signature, scope=scope,
     ):
         _audit_refusal(endpoint, reason="bad_or_replayed_signature",
                        crawl_id=crawl_id or "(absent)",
@@ -561,7 +567,6 @@ async def _authenticate_internal(
         _audit_refusal(endpoint, reason="missing_crawl_id")
         raise HTTPException(status_code=400, detail="crawl_id is required")
 
-    claimed_tenant = str(body.get("tenant_id") or "").strip()
     binding = await _bind_crawl(crawl_id, claimed_tenant)
     if binding is None:
         _audit_refusal(endpoint, reason="crawl_not_owned_by_claimed_tenant",
@@ -614,6 +619,8 @@ async def pick_advance(request: Request) -> dict:
         controls=controls,
         page_title=body.get("page_title", ""),
         page_url=body.get("page_url", ""),
+        app_id=binding.app_id,
+        crawl_id=str(body.get("crawl_id") or ""),
     )
     # ``usage`` relays the provider-REPORTED token cost of this consultation back
     # to the explorer, which folds it into the crawl's spend record (M0.6 /
@@ -656,6 +663,8 @@ async def pick_value(request: Request) -> dict:
         section=str(body.get("section") or "")[:200],
         page_title=str(body.get("page_title") or "")[:200],
         rejection=str(body.get("rejection") or "")[:400],
+        app_id=binding.app_id,
+        crawl_id=str(body.get("crawl_id") or ""),
     )
     return {"value": decision.value, "status": decision.status,
             "usage": decision.usage}
@@ -943,8 +952,19 @@ async def complete_crawl(crawl_id: str, request: Request) -> dict:
     # bound to this crawl id.
     raw = await request.body()
     signature = request.headers.get(SIGNATURE_HEADER, "")
+    try:
+        untrusted = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        untrusted = {}
+    tenant_for_scope = str(
+        untrusted.get("tenant_id") if isinstance(untrusted, dict) else ""
+    ).strip()
+    try:
+        callback_scope = tenant_scope("complete", tenant_for_scope, crawl_id)
+    except SignatureError:
+        callback_scope = ""
     if not phase1_settings.verify_signature(
-        raw, signature, scope=f"complete:{crawl_id}",
+        raw, signature, scope=callback_scope,
     ):
         _audit_refusal("complete", reason="bad_stale_or_replayed_signature",
                        crawl_id=crawl_id, has_signature=bool(signature))

@@ -48,7 +48,10 @@ from .attest import AttestReason, verify_provisioning_proof
 from . import vision_gate
 from .guard import Attestation, GuardRule, RefusePack, load_refuse_pack
 from .walk_persist import WalkAuthorization
+from .hmac_auth import tenant_scope
 from .inventory_js import INVENTORY_JS_VERSION
+from . import allowlist_gate
+from .host_policy import HostPolicyError
 from .playwright_port import (_ACTION_TIMEOUT_MS, _LAUNCH_ARGS,
                               PlaywrightBrowserPort, context_defaults,
                               install_capture_hooks)
@@ -590,6 +593,43 @@ async def explore(req: ExploreRequest, _: None = Depends(require_token)) -> dict
     pack: RefusePack = app.state.refuse_pack
     jobs: JobManager = app.state.jobs
 
+    # ── Team F · R3: THE FENCE MUST BE A FENCE, checked HERE, before a slot ──
+    # ``allowed_hosts`` is this browser's crawl scope and ``idp_domains`` is the
+    # guard's AUTH-phase POST rule. Both arrive from qe-central, which already
+    # validates them — but the fleet token proves the caller is *a* qe-central,
+    # not that its copy of the policy is current or that it was not coerced.
+    # The same policy (``app/host_policy.py``, byte-identical to qe-central's)
+    # runs again in the process that holds the browser. Refused with the
+    # entry and reason named, before ``jobs.accept`` so no capacity is spent.
+    for _field, _values in (("allowed_hosts", req.allowed_hosts),
+                            ("idp_domains", req.idp_domains)):
+        try:
+            allowlist_gate.validate_dispatch_allowlist(_values, field=_field)
+        except HostPolicyError as exc:
+            metrics.record_dispatch(outcome="rejected")
+            crawl_context.emit(
+                crawl_context.EV_CRAWL_REFUSED,
+                reason="unsafe_allowlist", status_code=422,
+                refused_crawl_id=crawl_context.sanitize_id(req.crawl_id),
+            )
+            logger.error(
+                "qec.explorer.unsafe_allowlist_refused crawl_id=%s field=%s "
+                "entry=%s reason=%s", req.crawl_id, _field, exc.entry, exc.reason)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "refused": True,
+                    "reason": allowlist_gate.REASON,
+                    "field": _field,
+                    "entry": exc.entry,
+                    "message": (
+                        f"{_field} entry {exc.entry!r} is not a fence: "
+                        f"{exc.reason}. The explorer refuses to start a browser "
+                        "whose egress scope it cannot see is bounded."
+                    ),
+                },
+            )
+
     budget = Budget.from_dict(req.budgets)
     answer_key = AnswerKey.from_payload(req.answer_key)
     credentials = Credentials.from_payload(req.credentials)
@@ -909,7 +949,7 @@ def _make_advance_oracle(
             # unsignable consultation must degrade to the honest `unavailable`
             # the crawler already handles — never crash a running crawl.
             signature = settings.sign_payload(
-                payload, scope=f"pick-advance:{crawl_id}")
+                payload, scope=tenant_scope("pick-advance", tenant_id, crawl_id))
             resp = await http_client.post(
                 url, content=payload,
                 headers=crawl_context.crawl_headers({
@@ -1030,7 +1070,7 @@ def _make_medic_oracle(
         failure_reason = "bad_body"
         try:
             signature = settings.sign_payload(
-                payload, scope=f"operate-control:{crawl_id}")
+                payload, scope=tenant_scope("operate-control", tenant_id, crawl_id))
             resp = await http_client.post(
                 url, content=payload,
                 headers=crawl_context.crawl_headers({
@@ -1139,7 +1179,7 @@ def _make_vision_oracle(
         failure_reason = "bad_body"
         try:
             signature = settings.sign_payload(
-                payload, scope=f"perceive-controls:{crawl_id}")
+                payload, scope=tenant_scope("perceive-controls", tenant_id, crawl_id))
             resp = await http_client.post(
                 url, content=payload,
                 headers=crawl_context.crawl_headers({
@@ -1255,7 +1295,7 @@ def _make_vision_medic_oracle(
         failure_reason = "bad_body"
         try:
             signature = settings.sign_payload(
-                payload, scope=f"vision-operate:{crawl_id}")
+                payload, scope=tenant_scope("vision-operate", tenant_id, crawl_id))
             resp = await http_client.post(
                 url, content=payload,
                 headers=crawl_context.crawl_headers({
@@ -1316,6 +1356,11 @@ async def _run_job(
     job: Optional[_Job] = None
     summary: Optional[CrawlSummary] = None
     error = ""
+    # Kept outside the Playwright block so the terminal finally can destroy a
+    # partially-built context too.  A browser process normally tears contexts
+    # down on exit, but an explicit close makes the no-residue boundary hold on
+    # exceptions and future changes that reuse the process.
+    context: Any | None = None
     # Bind the crawl identity ONCE, at the top of the task. Every log line and
     # lifecycle event emitted from here on — including ones raised deep inside
     # the crawler or an oracle callback — carries it without being threaded
@@ -1629,6 +1674,12 @@ async def _run_job(
         if job is not None:
             job.error = error
     finally:
+        if context is not None:
+            try:
+                await context.close()
+            except Exception:
+                logger.warning("qec.explorer.context_close_failed crawl_id=%s",
+                               req.crawl_id, exc_info=True)
         jobs.finish(req.crawl_id, job)
         # TERMINAL TELEMETRY — in the finally, so no crawl outcome can skip it.
         _record_crawl_terminal(
@@ -1836,8 +1887,6 @@ def _record_completion(req: ExploreRequest, summary: Optional[CrawlSummary],
     crashed task by its own bookkeeping; every failure below is logged loudly
     and the delivery still gets attempted with the body in hand.
 
-
-
     The body carries the manifest path (on the shared volume), the adjudicated
     verdict, and the in-memory ``storage_state`` (the ONLY channel a captured
     session leaves the container).  Signed with the shared secret so qe-central
@@ -1995,7 +2044,10 @@ async def _deliver_completion(crawl_id: str, body: dict[str, Any], *,
             # Signing inside the guard: with no fleet secret configured this
             # raises, and an unsignable callback must be reported honestly rather
             # than propagate out of a job that has already finished its work.
-            signature = settings.sign_payload(payload, scope=f"complete:{crawl_id}")
+            signature = settings.sign_payload(
+                payload,
+                scope=tenant_scope("complete", str(body.get("tenant_id") or ""), crawl_id),
+            )
             resp = await client.post(
                 url, content=payload,
                 headers={"Content-Type": "application/json",

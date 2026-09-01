@@ -1296,6 +1296,7 @@ class DiscoveryMixin:
         # developer's bench and refuses itself unless QEC_DATA_LLM_DIRECT=true.
         self._llm_agent = LLMDataAgent(
             settings=settings, crawl_id=str(getattr(self, "crawl_id", "") or ""),
+            tenant_id=str(getattr(self, "tenant_id", "") or ""),
             model=getattr(settings, "data_llm_model", ""),
             max_calls=int(getattr(settings, "data_llm_max_calls", 150)))
         logger.info("qec.llm_data.enabled mode=%s model=%s cap=%d",

@@ -33,6 +33,7 @@ SDK = ROOT / "sdk/nexus-sdk"
 
 TOKEN = "cross-service-fleet-token-2f9c41ab"
 CRAWL = "a" * 32
+TENANT = "t1"
 BODY = json.dumps({"crawl_id": CRAWL, "tenant_id": "t1", "stop_reason": "completed"},
                   sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -56,8 +57,9 @@ def explorer_signature() -> str:
 import sys
 sys.path.insert(0, r"{EXPLORER}")
 from app.config import Settings
+from app.hmac_auth import tenant_scope
 s = Settings(explorer_token="{TOKEN}")
-print(s.sign_payload({BODY!r}, scope="complete:{CRAWL}"))
+print(s.sign_payload({BODY!r}, scope=tenant_scope("complete", "{TENANT}", "{CRAWL}")))
 ''')
     return out.strip()
 
@@ -70,15 +72,17 @@ import sys
 sys.path.insert(0, r"{CENTRAL}")
 sys.path.insert(0, r"{SDK}")
 from app.clients.config import Phase1Settings
+from app.security.hmac_auth import tenant_scope
 s = Phase1Settings(explorer_token="{TOKEN}")
 sig = {explorer_signature!r}
-print("accepted_once=%s" % s.verify_signature({BODY!r}, sig, scope="complete:{CRAWL}"))
-print("replay_refused=%s" % (not s.verify_signature({BODY!r}, sig, scope="complete:{CRAWL}")))
-print("rescope_refused=%s" % (not s.verify_signature({BODY!r}, sig, scope="complete:bbbb")))
-print("tamper_refused=%s" % (not s.verify_signature({BODY + b" "!r}, sig, scope="complete:{CRAWL}")))
+scope = tenant_scope("complete", "{TENANT}", "{CRAWL}")
+print("accepted_once=%s" % s.verify_signature({BODY!r}, sig, scope=scope))
+print("replay_refused=%s" % (not s.verify_signature({BODY!r}, sig, scope=scope)))
+print("rescope_refused=%s" % (not s.verify_signature({BODY!r}, sig, scope=tenant_scope("complete", "t2", "{CRAWL}"))))
+print("tamper_refused=%s" % (not s.verify_signature({BODY + b" "!r}, sig, scope=scope)))
 print("wrong_key_refused=%s" % (
     not Phase1Settings(explorer_token="a-different-fleet-secret").verify_signature(
-        {BODY!r}, sig, scope="complete:{CRAWL}")))
+        {BODY!r}, sig, scope=scope)))
 ''')
     return dict(
         (line.split("=", 1)[0], line.split("=", 1)[1] == "True")

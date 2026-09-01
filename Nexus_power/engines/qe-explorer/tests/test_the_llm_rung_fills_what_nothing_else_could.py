@@ -212,13 +212,22 @@ def test_central_mode_posts_a_signed_request_and_takes_the_answer(monkeypatch):
         return httpx.Response(200, json={"value": "No", "status": "answered",
                                          "usage": {}})
 
-    a = LLMDataAgent(settings=_Settings(), crawl_id="c-9",
+    # A TENANT IS NOW PART OF THE SIGNATURE SCOPE. qe-central's
+    # /internal/pick-value verifies tenant_scope("pick-value", tenant, crawl),
+    # and tenant_scope FAILS CLOSED on an empty component — so an agent with no
+    # tenant cannot sign at all and the consultation degrades to None. That is
+    # the correct behaviour and it is pinned separately below; here we supply
+    # one, because this test is about the happy path.
+    a = LLMDataAgent(settings=_Settings(), crawl_id="c-9", tenant_id="t-1",
                      transport=httpx.MockTransport(handler))
     got = a.value_for(name="Do you smoke?", semantic_type="choice", kind="radio",
                       options=["Yes", "No"])
     assert got == "No"
     assert seen["url"].endswith("/internal/pick-value")
-    assert seen["scope"] == "pick-value:c-9"
+    # The migrated scope: operation + tenant + crawl, not operation + crawl.
+    from app.hmac_auth import tenant_scope
+    assert seen["scope"] == tenant_scope("pick-value", "t-1", "c-9")
+    assert seen["body"]["tenant_id"] == "t-1"
     assert seen["sig"] == "sig-abc" and seen["tok"] == "tok-1"
     assert seen["body"]["options"] == ["Yes", "No"]
 
@@ -257,3 +266,30 @@ def test_no_module_but_this_one_may_even_name_a_model_host():
             if host in text:
                 offenders.append(f"{py.name}: {host}")
     assert offenders == [], offenders
+
+
+def test_a_value_consultation_without_a_tenant_declines_rather_than_signing_weakly():
+    """THE CONTROL for the tenant-scoped migration.
+
+    `tenant_scope` fails closed on an empty component rather than emitting a
+    weaker `pick-value::c-9`. So an agent constructed without a tenant cannot
+    sign, and must DECLINE — not fall back to the old scope, and not send an
+    unsigned request. Without this test the happy-path assertion above would
+    also pass against an implementation that silently signed weakly.
+    """
+    class _Settings:
+        callback_url = "http://qe-central:8000"
+        explorer_token = "tok-1"
+
+        def sign_payload(self, payload, *, scope=""):   # pragma: no cover
+            raise AssertionError(
+                "sign_payload was reached with an unsignable tenant; the scope "
+                f"would have been {scope!r}")
+
+    def handler(request):                      # pragma: no cover - must not run
+        raise AssertionError("a request was sent without a signable tenant")
+
+    a = LLMDataAgent(settings=_Settings(), crawl_id="c-9", tenant_id="",
+                     transport=httpx.MockTransport(handler))
+    assert a.value_for(name="Do you smoke?", semantic_type="choice",
+                       kind="radio", options=["Yes", "No"]) is None
