@@ -172,6 +172,7 @@ sequence is in ``docs/A11_KEY_CUSTODY.md``.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
@@ -188,7 +189,7 @@ from ..db.attestation_models import (
     PUBLISHABLE_KEY_STATES,
     AttestationIssuerKeyRow,
 )
-from .signing import SIG_ALG, generate_keypair, public_key_of, sign_payload
+from .signing import SIG_ALG, canonical_bytes, generate_keypair, public_key_of, sign_payload
 from .walk_attestation import key_id
 
 logger = logging.getLogger(__name__)
@@ -264,11 +265,14 @@ class Signer:
     lifetime.
     """
 
-    __slots__ = ("_private_key_b64", "kid", "public_key", "issuer", "_closed")
+    __slots__ = ("_private_key_b64", "_native", "kid", "public_key", "issuer", "_closed")
 
-    def __init__(self, private_key_b64: str, *, kid: str, public_key: str,
-                 issuer: str) -> None:
+    def __init__(self, private_key_b64: str = "", *, kid: str, public_key: str,
+                 issuer: str, native: Any | None = None) -> None:
+        if not private_key_b64 and native is None:
+            raise KeyCustodyError("signer has neither an encrypted nor KMS-native key")
         self._private_key_b64 = private_key_b64
+        self._native = native
         self.kid = kid
         self.public_key = public_key
         self.issuer = issuer
@@ -294,7 +298,11 @@ class Signer:
             "claims": payload,
             "alg": SIG_ALG,
             "kid": self.kid,
-            "signature": sign_payload(self._private_key_b64, payload),
+            "signature": (
+                self._native.sign(canonical_bytes(payload))
+                if self._native is not None
+                else sign_payload(self._private_key_b64, payload)
+            ),
         }
 
     def close(self) -> None:
@@ -306,6 +314,7 @@ class Signer:
         memory disclosure safe, and the module docstring says so.
         """
         self._private_key_b64 = ""
+        self._native = None
         self._closed = True
 
     def identity(self) -> IssuerPublicKey:
@@ -350,6 +359,7 @@ class _ActiveKey:
     public_key: str
     issuer: str
     sealed: bytes
+    native_key_version: str = ""
 
 
 async def _active_key_row(session: AsyncSession) -> _ActiveKey:
@@ -362,8 +372,11 @@ async def _active_key_row(session: AsyncSession) -> _ActiveKey:
             "no ACTIVE attestation issuer key — the platform has no root of "
             "trust configured, so no provisioning proof can be issued and walk "
             "persistence stays off (fail-closed)")
-    return _ActiveKey(kid=row.kid, public_key=row.public_key,
-                      issuer=row.issuer, sealed=bytes(row.sealed_private_key))
+    return _ActiveKey(
+        kid=row.kid, public_key=row.public_key, issuer=row.issuer,
+        sealed=bytes(row.sealed_private_key or b""),
+        native_key_version=str((row.meta or {}).get("kms_key_version") or ""),
+    )
 
 
 class active_signer:
@@ -382,17 +395,31 @@ class active_signer:
     __slots__ = ("_session", "_envelope", "_signer")
 
     def __init__(self, session: AsyncSession, envelope: Any) -> None:
-        if envelope is None:
-            raise KeyCustodyError(
-                "no EnvelopeService — the issuer key can only be unsealed "
-                "through KMS, so with no envelope service there is nothing to "
-                "sign with (fail-closed)")
         self._session = session
         self._envelope = envelope
         self._signer: Optional[Signer] = None
 
     async def __aenter__(self) -> Signer:
         key = await _active_key_row(self._session)
+        if key.native_key_version:
+            from .kms_ed25519 import GcpEd25519Signer, NativeKmsError
+            try:
+                native = GcpEd25519Signer(key.native_key_version)
+                public_key = native.public_key_b64()
+            except NativeKmsError as exc:
+                raise KeyCustodyError("native KMS issuer signer unavailable") from exc
+            if public_key != key.public_key or key_id(public_key) != key.kid:
+                raise KeyCustodyError(
+                    "native KMS issuer key does not match its published database identity"
+                )
+            self._signer = Signer(kid=key.kid, public_key=key.public_key,
+                                  issuer=key.issuer, native=native)
+            return self._signer
+        if self._envelope is None:
+            raise KeyCustodyError(
+                "no EnvelopeService — the issuer key can only be unsealed "
+                "through KMS, so with no envelope service there is nothing to "
+                "sign with (fail-closed)")
         private_key_b64 = await _unseal(self._envelope, key.sealed)
         # DEFENCE IN DEPTH: prove the unsealed private half really is the half
         # of the published public key before signing anything with it. A row
@@ -441,13 +468,42 @@ async def generate_issuer_key(
     transaction, so the fleet is never in a state where two different keys are
     both legitimately signing.
     """
-    from nexus_sdk.security.envelope import EnvelopeBlob  # noqa: F401 (contract)
-
     issuer = (issuer or "").strip()
     if not issuer:
         raise KeyCustodyError(
             "issuer name is required — it is bound into every claim this key "
             "signs and must equal the explorer fleet's QEC_ATTESTATION_ISSUER")
+    native_key_version = os.environ.get("NEXUS_ATTESTATION_GCP_KEY_VERSION", "").strip()
+    if native_key_version:
+        from .kms_ed25519 import GcpEd25519Signer, NativeKmsError
+        try:
+            public_key_b64 = GcpEd25519Signer(native_key_version).public_key_b64()
+        except NativeKmsError as exc:
+            raise KeyCustodyError("could not read native KMS issuer key") from exc
+        kid = key_id(public_key_b64)
+        row = AttestationIssuerKeyRow(
+            kid=kid, public_key=public_key_b64, issuer=issuer,
+            sealed_private_key=b"", kek_provider="gcp_kms_native",
+            kek_id=native_key_version[:500], status=KEY_ACTIVE,
+            created_by=str(created_by or "")[:200],
+            meta={**dict(meta or {}), "kms_key_version": native_key_version,
+                  "custody": "gcp_kms_native_ec_sign_ed25519"},
+        )
+        session.add(row)
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            raise KeyCustodyError(
+                "an ACTIVE issuer key already exists — rotate it before replacing it"
+            ) from exc
+        logger.warning(
+            "qec.attest.native_issuer_key_registered kid=%s issuer=%s kms_key=%s by=%s",
+            kid, issuer, native_key_version, row.created_by,
+        )
+        return IssuerPublicKey(kid=kid, public_key=public_key_b64, issuer=issuer,
+                               status=KEY_ACTIVE, created_at=row.created_at)
+
+    from nexus_sdk.security.envelope import EnvelopeBlob  # noqa: F401 (contract)
     if envelope is None:
         raise KeyCustodyError(
             "no EnvelopeService — refusing to generate an issuer key that "
