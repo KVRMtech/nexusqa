@@ -708,6 +708,16 @@ async def explore_status(
                     "lifecycle": JOB_CREATED}
         terminal = jobs.finished_view(crawl_id)
         if terminal is not None:
+            # F10 — WAS THIS CRAWL'S COMPLETION EVER ACCEPTED? Read from the
+            # durable files at request time, not from a flag captured when the
+            # job finished: delivery happens after terminalisation and may be
+            # completed much later by the sweeper, so a value frozen into the
+            # terminal view would report every recovered crawl as still lost.
+            #
+            # This is the honest half of "the crawl finished": a caller that
+            # sees a summary and no `callback_pending` knows only that the crawl
+            # ended, which is precisely the ambiguity a dropped callback lives in.
+            terminal["callback_pending"] = _callback_pending(crawl_id)
             return terminal
         raise HTTPException(status_code=404, detail="unknown crawl_id")
     progress = job.crawler.progress()
@@ -1626,8 +1636,23 @@ async def _run_job(
             telemetry=telemetry,
             duration_seconds=max(0.0, time.monotonic() - started_at),
         )
+        # ── F10 · THE COMPLETION RECORD IS WRITTEN HERE, NOT AFTER ──────────
+        # In the finally for the same reason the telemetry is: no crawl outcome
+        # may skip it. The outcome that used to skip it is CANCELLATION —
+        # ``asyncio.CancelledError`` is not an ``Exception``, so the handler
+        # above never caught one and the callback statement that used to live
+        # below this block was simply never reached. The crawl's manifest stayed
+        # on the volume, complete and permanently unreferenced, because both
+        # recovery legs key on the record that was never written.
+        #
+        # SYNCHRONOUS, and awaited nowhere: a cancelled task raises again at its
+        # next await, so a finally that awaited would be cut short by the very
+        # event this exists to survive. Delivery — which does await — stays
+        # OUTSIDE, where being skipped costs a notification the sweeper repeats,
+        # not the evidence itself.
+        completion_body = _record_completion(req, summary, error, telemetry)
 
-    await _fire_callback(req, summary, error, telemetry)
+    await _deliver_completion(req.crawl_id, completion_body)
 
 
 def _record_crawl_terminal(
@@ -1775,6 +1800,44 @@ async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
                          telemetry: Optional["_CrawlTelemetry"] = None) -> None:
     """Record this crawl's completion DURABLY, then deliver it (M1.7 / T-GW-02).
 
+    Kept as the one-call form for callers that are not the job's terminal path.
+    ``_run_job`` deliberately does NOT use it: it records inside its ``finally``
+    (synchronously — see :func:`_record_completion`) and delivers afterwards, so
+    a cancellation cannot land between the two halves.
+    """
+    body = _record_completion(req, summary, error, telemetry)
+    await _deliver_completion(req.crawl_id, body)
+
+
+def _record_completion(req: ExploreRequest, summary: Optional[CrawlSummary],
+                       error: str,
+                       telemetry: Optional["_CrawlTelemetry"] = None) -> dict[str, Any]:
+    """Make this crawl's terminal state DURABLE and return the callback body.
+
+    SYNCHRONOUS ON PURPOSE, and that is the whole of F10.  This function is
+    called from ``_run_job``'s terminal ``finally``, which a cancelled task
+    reaches — but a task that is being cancelled raises ``CancelledError`` again
+    at its next AWAIT, so a ``finally`` that awaited the delivery would be cut
+    short by exactly the event it exists to survive.  There is no await here:
+    the FACT that the crawl ended is committed to disk with plain blocking
+    writes, and the POST that announces it is a notification the sweeper and the
+    qe-central reaper can both repeat.
+
+    Before this split, ``await _fire_callback(...)`` sat OUTSIDE the try/finally.
+    ``asyncio.CancelledError`` does not inherit from ``Exception``, so the
+    handler above never saw one and the callback was skipped entirely: no
+    completion record was written at all, which left the crawl's complete
+    manifest on the volume with nothing that would ever point at it again.
+    Neither recovery leg could help, because both key on the record that was
+    never written.  A rolling deploy, a pod eviction and a `docker stop` all
+    produce exactly that cancellation.
+
+    Never raises.  A crawl that has already ended must not be turned into a
+    crashed task by its own bookkeeping; every failure below is logged loudly
+    and the delivery still gets attempted with the body in hand.
+
+
+
     The body carries the manifest path (on the shared volume), the adjudicated
     verdict, and the in-memory ``storage_state`` (the ONLY channel a captured
     session leaves the container).  Signed with the shared secret so qe-central
@@ -1870,12 +1933,33 @@ async def _fire_callback(req: ExploreRequest, summary: Optional[CrawlSummary],
     # A no-op on the filesystem backend (single-node), so this cannot regress an
     # existing install. Never raises: a storage incident must not become a lost
     # crawl, so the outcome rides on the callback body where an operator sees it.
-    publish = evidence_publisher.publish_crawl_evidence(
-        settings.work_dir, req.crawl_id, req.tenant_id)
-    if publish.get("published") or publish.get("error"):
-        body["evidence_store"] = publish
+    try:
+        publish = evidence_publisher.publish_crawl_evidence(
+            settings.work_dir, req.crawl_id, req.tenant_id)
+        if publish.get("published") or publish.get("error"):
+            body["evidence_store"] = publish
+    except Exception:  # pragma: no cover — documented never to raise; belt too
+        logger.warning("qec.explorer.evidence_publish_failed crawl_id=%s",
+                       req.crawl_id, exc_info=True)
+    return body
 
-    await _deliver_completion(req.crawl_id, body)
+
+def _callback_pending(crawl_id: str) -> bool:
+    """Has this crawl reached a terminal state that qe-central has NOT accepted?
+
+    Answered from the DURABLE FILES rather than from an in-memory flag, so it
+    survives the process that produced it — which is the only version of this
+    question worth asking, because the interesting case is a crawl whose worker
+    is gone.
+
+    ``False`` for a crawl id with no completion record at all: ``pending`` means
+    "recorded and not yet acknowledged", and reporting an unknown or still-
+    running id as pending would make every id look like a lost crawl.
+    """
+    try:
+        return completion_manifest.is_orphaned(settings.work_dir, crawl_id)
+    except OSError:  # pragma: no cover — an unreadable volume is not a verdict
+        return False
 
 
 async def _deliver_completion(crawl_id: str, body: dict[str, Any], *,
