@@ -92,6 +92,48 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # ── 3. Restore the source tree ──────────────────────────────────────────────
+#
+# REMEMBER THE BRANCH FIRST. `git checkout <sha>` leaves a DETACHED HEAD, and the
+# VM's deploy step is a plain `git pull` — which on a detached HEAD dies with
+# "You are not currently on a branch". So the rollback silently disarms the next
+# deploy: the very deploy that carries the fix for whatever caused the rollback.
+#
+# MEASURED, not theorised (2026-09-01): a golden-gate rollback ran on verdict-box,
+# and the following deploy stopped dead at [3/4] with exactly that message. The
+# box had to be repaired by hand before anything could ship. A rollback that
+# leaves the source tree unable to RECEIVE the fix turns one bad build into an
+# outage that no deploy can end.
+#
+# Restored from an EXIT trap rather than at the end of the happy path, because
+# the case that needs it most is the FAILING one — `exit 1` with a mixed fleet is
+# precisely when an operator is about to push a correction.
+ROLLBACK_BRANCH="$(git -C "$SRC" symbolic-ref --short -q HEAD || true)"
+if [ -n "$ROLLBACK_BRANCH" ]; then
+  say "source branch   : $ROLLBACK_BRANCH (restored on exit)"
+else
+  say "source branch   : (already detached before this rollback)"
+fi
+
+restore_branch() {
+  # Runs on EVERY exit path. Touches HEAD only — the CONTAINERS keep running the
+  # green build swapped in below; this just moves the checkout off a bare sha.
+  # Deliberately does not call exit: a bash EXIT trap that does not exit
+  # preserves the script's real status, and this must never mask a rollback
+  # failure with a success.
+  [ -n "${ROLLBACK_BRANCH:-}" ] || return 0
+  git -C "$SRC" rev-parse --verify -q "HEAD" >/dev/null 2>&1 || return 0
+  if git -C "$SRC" symbolic-ref -q HEAD >/dev/null 2>&1; then return 0; fi
+  if git -C "$SRC" checkout -q "$ROLLBACK_BRANCH" 2>/dev/null; then
+    say "source tree back on $ROLLBACK_BRANCH — the next deploy can pull."
+  else
+    say "WARNING: could not return the source tree to $ROLLBACK_BRANCH."
+    say "  The fleet state above still stands, but the NEXT DEPLOY WILL FAIL at"
+    say "  'git pull' with: You are not currently on a branch."
+    say "  Repair by hand:  cd $SRC && git checkout $ROLLBACK_BRANCH"
+  fi
+}
+trap restore_branch EXIT
+
 if ! git -C "$SRC" checkout -q "$GREEN"; then
   say "ROLLBACK FAILED — could not check out $GREEN. The fleet is on the rejected build."
   exit 1
