@@ -166,8 +166,7 @@ from .guard import (
     same_registrable_domain,
 )
 from .fill_engine.validation import signals_for_control
-from .inventory import (build_inventory, carry_earned_annotations,
-                        form_signal_for, question_identity)
+from .inventory import (build_inventory, carry_earned_annotations, form_signal_for, question_identity, question_name_of)
 
 logger = logging.getLogger("app.crawler")
 
@@ -258,7 +257,23 @@ def _radio_unblock_groups(
             continue                     # already answered — not a declined question
         # The fill declined this question if ANY of its answers is in the
         # residue: forms.py appends every member of a group it could not answer.
+        #
+        # MATCH ON EITHER NAME, because the residue has been keyed both ways and
+        # this test failed CLOSED and SILENTLY when it changed. The docstring
+        # above states the original premise — "the residue the fill declined
+        # therefore contains ANSWER labels" — and aee5214 made forms.py file
+        # those rows under `question_name_of` instead, so the residue began
+        # carrying "Have you used tobacco in the last 12 months?" where this
+        # comparison expected "Yes". No group ever matched again, this function
+        # returned empty, the unblock experiment gave up before it ran, and the
+        # walk stopped at the gate it exists to open — reported only as
+        # `deepest_flow_terminal: no_advance`, with nothing naming the cause.
+        #
+        # Accepting either key makes the matcher independent of which name the
+        # residue happens to carry, so the next change to that decision cannot
+        # silently disarm the experiment a third time.
         if not any(_norm_label(m.get("name")) in declined
+                   or _norm_label(question_name_of(m)) in declined
                    for m in members if str(m.get("name") or "").strip()):
             continue
         answerable = [
@@ -2055,7 +2070,24 @@ class WalkerMixin:
             if c.get("disabled") or c.get("danger"):
                 continue
             name = str(c.get("name") or "").strip()
-            if not name or _norm_label(name) not in declined:
+            # MATCH ON THE KEY THE LIST WAS BUILT WITH. `declined` comes from
+            # `fill.unfilled_fields`, and forms.py files those rows under
+            # `question_name_of` — the QUESTION ("Do you smoke?") since aee5214,
+            # not the member's own option label ("Yes"). Comparing the option
+            # against a set of questions matched nothing, so this experiment
+            # found no candidate on any radio group and the walk stopped at the
+            # gate it exists to open (`deepest_flow_terminal: no_advance`).
+            #
+            # `name` stays the OPTION — it is what gets answered, logged and
+            # reported as the unblocking field. Only the membership test moves.
+            # Either key, for the reason spelled out in _radio_unblock_groups:
+            # `declined` is built from `fill.unfilled_fields`, which forms.py
+            # files under `question_name_of`, while `name` here is the control's
+            # own label. They are the same string for most controls and differ
+            # exactly where a question was declared.
+            recorded = question_name_of(c) or name
+            if not name or not (_norm_label(name) in declined
+                                or _norm_label(recorded) in declined):
                 continue
             # Already on: answering it again would change nothing and the app has
             # plainly not accepted it as sufficient.
@@ -2335,6 +2367,11 @@ class WalkerMixin:
         # checkbox, because a checkbox has no siblings.
         answered = {_norm_label(pick_name)}
         answered.update(_norm_label(n) for n in sibling_names if n)
+        # …and the key the row is actually FILED under, or the answered question
+        # stays on the seed request the client receives. Additive: when the two
+        # names are the same string (every non-grouped control) this adds
+        # nothing and no existing behaviour moves.
+        answered.add(_norm_label(question_name_of(pick) or pick_name))
         unfilled = getattr(fill, "unfilled_fields", None)
         if isinstance(unfilled, list):
             unfilled[:] = [n for n in unfilled if _norm_label(n) not in answered]

@@ -640,7 +640,8 @@ def _seed_near_miss(recalled: Mapping[str, str], label: str) -> str:
 
 def resolve_field(control: Mapping[str, Any], kind: str, name: str,
                   answer_key: "AnswerKey", identity: Identity,
-                  *, recalled: Optional[Mapping[str, str]] = None,
+                  *, record_name: Optional[str] = None,
+                  recalled: Optional[Mapping[str, str]] = None,
                   journey_values: Optional[Mapping[str, str]] = None,
                   priors: Optional[Mapping[str, Any]] = None,
                   data_mode: str = field_values.DATA_MODE_USER,
@@ -679,7 +680,15 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
     sig = field_signature.compute(control, kind=kind)
     verdict = field_semantics.classify(sig, priors=priors)
     entry = {
-        "name": name,
+        # THE LEDGER ASKS ABOUT THE QUESTION; EVERY RUNG BELOW ANSWERS AN
+        # OPTION. Those are two different strings for a radio member -- "Do you
+        # smoke?" and "Yes" -- and collapsing them into one parameter is the
+        # defect this keyword exists to make impossible. ``name`` stays the
+        # control's OWN accessible name, which is what rungs 0-4 compare and
+        # return; ``record_name`` is what the row is filed under. Absent, the
+        # two are the same string and nothing moves -- which is why every
+        # existing caller and all 30-odd tests are unaffected.
+        "name": record_name or name,
         "signature": sig["signature"],
         "semantic_type": verdict["type"],
         "basis": verdict["basis"],
@@ -928,12 +937,20 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
         # every box: on a health-conditions question that means answering "all
         # of them", inventing a medical history for a synthetic applicant out of
         # nothing but the order the fill happened to iterate in.
-        # THE MEMBER'S OWN LABEL, not the question. Since the ledger began
-        # naming rows by their question (aee5214), ``name`` here is "Do you
-        # smoke?" — which never equals "Yes", so this comparison marked EVERY
-        # radio member a sibling and no radio question could be answered at all
-        # (measured: filled_by_kind showed selects only). The answer picks a
-        # MEMBER, and membership is decided by the member's own option label.
+        # THE MEMBER'S OWN LABEL, not the question. The answer picks a MEMBER,
+        # and membership is decided by the member's own option label.
+        #
+        # HISTORY, kept because it is the argument for the boundary fix. When
+        # aee5214 pointed the caller's single ``name`` at the question, ``name``
+        # here became "Do you smoke?" — which never equals "Yes", so this
+        # comparison marked EVERY radio member a sibling and no radio question
+        # could be answered at all (measured: filled_by_kind showed selects
+        # only). This site was then repaired in isolation while rung 0 above was
+        # left comparing the same wrong string, and stayed broken. ``name`` is
+        # the member's own label again (see the two names at the call site), so
+        # this local is now belt-and-braces rather than load-bearing — kept
+        # because reading the member off the record is the honest way to say
+        # what membership means.
         member_label = str(control.get("name") or "")
         if kind in ("radio", "checkbox") and group_id and _norm(member_label) != _norm(str(generated)):
             entry.update(provenance=PROV_GROUP_SIBLING, filled=False)
@@ -1067,11 +1084,33 @@ async def fill_form_phase_a(
 
     for control in controls:
         kind = _norm(control.get("kind"))
-        # THE LEDGER ASKS ABOUT THE QUESTION, NOT THE ANSWER. See
-        # inventory.question_name_of: for a radio, `name` is the OPTION, so a
-        # 25-question health page produced a seed request asking the client for
-        # two fields called "Yes" and "No". A button keeps its own name.
+        # TWO NAMES, BECAUSE A RADIO MEMBER HAS TWO, AND THEY ARE NOT
+        # INTERCHANGEABLE.
+        #
+        #   name          the QUESTION -- "Do you smoke?" (inventory.question_name_of)
+        #                 What the row is FILED under. aee5214 introduced this
+        #                 because a 25-question health page was producing a seed
+        #                 request asking the client for two fields called "Yes"
+        #                 and "No".
+        #   control_name  the control's OWN accessible name -- "Yes"
+        #                 What the fill ANSWERS WITH. Every resolution rung
+        #                 compares or returns it: rung 0 matches the forced
+        #                 option (`normalize_option(name) == forced`), rung 4
+        #                 matches the synthesized answer against the member.
+        #
+        # aee5214 pointed the single `name` at the question, which silently
+        # rewired the answering rungs too: a question never equals an option, so
+        # every radio member fell through as a non-answer and NO radio question
+        # could be answered at all. Its own commit message recorded the symptom
+        # -- `qec.forms.phase_a filled=0 ... unfilled=50`, "the filler does not
+        # ANSWER radio questions" -- as a standing crawler limitation rather
+        # than as its own effect.
+        #
+        # Fixed HERE, at the boundary, and deliberately not rung by rung: rung 4
+        # was already patched in isolation (see PROV_GROUP_SIBLING below) while
+        # rung 0 stayed broken, which is the argument against per-site repair.
         name = question_name_of(control)
+        control_name = str(control.get("name") or "")
         # A LIST FILTER IS NOT A FIELD THE CLIENT MUST ANSWER. It is
         # catalogued like any control, but it never joins
         # `unfilled_fields` -- the list that becomes the seed request --
@@ -1094,7 +1133,7 @@ async def fill_form_phase_a(
             # attach as a grounded 'upload' action.  The substrate carries the
             # 'upload' verb (schema.ACTION_VERBS) and the factory generates+compiles
             # a real setInputFiles step from it (founder-approved rung).
-            if not _norm(name):
+            if not _norm(control_name):
                 continue
             upload_action = await _upload_seed(port, control, clock, phase=phase, state_id=state_id)
             if upload_action is not None:
@@ -1108,10 +1147,11 @@ async def fill_form_phase_a(
             continue
         if kind not in FILLABLE_KINDS or _is_password(control) or control.get("disabled"):
             continue
-        if not _norm(name):
+        if not _norm(control_name):
             logger.info("qec.forms.skip_nameless_field kind=%s", kind)
             continue
-        decision = resolve_field(control, kind, name, answer_key, identity,
+        decision = resolve_field(control, kind, control_name, answer_key, identity,
+                                 record_name=name,
                                  recalled=recalled, journey_values=journey_values,
                                  priors=priors, data_mode=data_mode,
                                  choice_overrides=choice_overrides, llm=llm,
