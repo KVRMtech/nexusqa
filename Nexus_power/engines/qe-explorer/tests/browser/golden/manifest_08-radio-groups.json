@@ -138,88 +138,22 @@
     "displayed_values": [],
     "first_seen_ms": "<normalized:first_seen_ms>",
     "form_snapshot": {
-      "Asthma": "false",
-      "Basic": "false",
-      "Bronze": "false",
-      "Cardiac": "false",
-      "Choice A": "false",
-      "Choice B": "false",
-      "Diabetes": "false",
-      "Gold": "false",
-      "More than $250,000": "false",
-      "No": "false",
-      "None of these": "true",
-      "Option A": "false",
-      "Option B": "false",
-      "Plus": "false",
+      "Choice A": "",
+      "Choice B": "",
+      "Choose a plan": "Silver",
+      "Have you used tobacco in the last 12 months? Include cigarettes, vaping and nicotine replacement.": "",
+      "Health conditions": "None of these",
+      "How much cover do you need?": "",
+      "Option A": "",
+      "Option B": "",
       "Remember me": "false",
-      "Silver": "true",
-      "Standalone option": "false",
+      "Service tier": "",
+      "Standalone option": "",
       "Subscribe to newsletter": "false",
-      "Term 10": "false",
-      "Term 20": "true",
-      "Universal Life": "false",
-      "Up to $250,000": "false",
-      "Whole Life": "false",
-      "Yes": "false"
+      "Term product": "Term 20",
+      "Whole life product": ""
     },
     "form_snapshot_signals": {
-      "Asthma": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "checkbox",
-          "strategy": "accessible_name",
-          "value": "Asthma",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "checkbox"
-      },
-      "Basic": {
-        "locator": {
-          "bindable": false,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "dom_id",
-          "value": "tier-basic",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "Bronze": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "accessible_name",
-          "value": "Bronze",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "Cardiac": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "checkbox",
-          "strategy": "accessible_name",
-          "value": "Cardiac",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "checkbox"
-      },
       "Choice A": {
         "locator": {
           "bindable": true,
@@ -229,8 +163,11 @@
           "value": "Choice A",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Choice A",
+          "Choice B"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
@@ -243,26 +180,15 @@
           "value": "Choice B",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Choice A",
+          "Choice B"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
-      "Diabetes": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "checkbox",
-          "strategy": "accessible_name",
-          "value": "Diabetes",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "checkbox"
-      },
-      "Gold": {
+      "Choose a plan": {
         "locator": {
           "bindable": true,
           "group_id": "<hash>",
@@ -271,26 +197,16 @@
           "value": "Gold",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Bronze",
+          "Silver",
+          "Gold"
+        ],
+        "options_total": 3,
         "required": false,
         "type": "radio"
       },
-      "More than $250,000": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "accessible_name",
-          "value": "More than $250,000",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "No": {
+      "Have you used tobacco in the last 12 months? Include cigarettes, vaping and nicotine replacement.": {
         "locator": {
           "bindable": true,
           "group_id": "<hash>",
@@ -299,12 +215,15 @@
           "value": "No",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
-      "None of these": {
+      "Health conditions": {
         "locator": {
           "bindable": true,
           "group_id": "<hash>",
@@ -313,10 +232,32 @@
           "value": "None of these",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Diabetes",
+          "Asthma",
+          "Cardiac",
+          "None of these"
+        ],
+        "options_total": 4,
         "required": false,
         "type": "checkbox"
+      },
+      "How much cover do you need?": {
+        "locator": {
+          "bindable": true,
+          "group_id": "<hash>",
+          "role": "radio",
+          "strategy": "accessible_name",
+          "value": "More than $250,000",
+          "verified": true
+        },
+        "options": [
+          "Up to $250,000",
+          "More than $250,000"
+        ],
+        "options_total": 2,
+        "required": false,
+        "type": "radio"
       },
       "Option A": {
         "locator": {
@@ -327,8 +268,11 @@
           "value": "Option A",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Option A",
+          "Option B"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
@@ -341,22 +285,11 @@
           "value": "Option B",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "Plus": {
-        "locator": {
-          "bindable": false,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "dom_id",
-          "value": "tier-plus",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Option A",
+          "Option B"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
@@ -373,17 +306,20 @@
         "required": false,
         "type": "checkbox"
       },
-      "Silver": {
+      "Service tier": {
         "locator": {
-          "bindable": true,
+          "bindable": false,
           "group_id": "<hash>",
           "role": "radio",
-          "strategy": "accessible_name",
-          "value": "Silver",
+          "strategy": "dom_id",
+          "value": "tier-plus",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Basic",
+          "Plus"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
@@ -413,21 +349,7 @@
         "required": false,
         "type": "checkbox"
       },
-      "Term 10": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "accessible_name",
-          "value": "Term 10",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "Term 20": {
+      "Term product": {
         "locator": {
           "bindable": true,
           "group_id": "<hash>",
@@ -436,12 +358,15 @@
           "value": "Term 20",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Term 10",
+          "Term 20"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       },
-      "Universal Life": {
+      "Whole life product": {
         "locator": {
           "bindable": true,
           "group_id": "<hash>",
@@ -450,50 +375,11 @@
           "value": "Universal Life",
           "verified": true
         },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "Up to $250,000": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "accessible_name",
-          "value": "Up to $250,000",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "Whole Life": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "accessible_name",
-          "value": "Whole Life",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
-        "required": false,
-        "type": "radio"
-      },
-      "Yes": {
-        "locator": {
-          "bindable": true,
-          "group_id": "<hash>",
-          "role": "radio",
-          "strategy": "accessible_name",
-          "value": "Yes",
-          "verified": true
-        },
-        "options": [],
-        "options_total": 0,
+        "options": [
+          "Whole Life",
+          "Universal Life"
+        ],
+        "options_total": 2,
         "required": false,
         "type": "radio"
       }
