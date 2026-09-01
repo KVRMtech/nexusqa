@@ -5,6 +5,7 @@
 #   bash scripts/gate0_require_ci_lanes.sh              # DRY RUN (default)
 #   bash scripts/gate0_require_ci_lanes.sh --apply      # actually change protection
 #   bash scripts/gate0_require_ci_lanes.sh --verify     # print current state and exit
+#   bash scripts/gate0_require_ci_lanes.sh --audit-runs [since]  # H1: run-coverage audit
 #
 # WHY A SCRIPT AND NOT A CLICK-PATH. Branch protection is the one part of this
 # programme with no diff and no review. A README step gets done from memory,
@@ -92,6 +93,106 @@ command -v gh >/dev/null || { echo "FATAL: gh not on PATH" >&2; exit 2; }
 gh api "repos/${GATE0_REPO:-KVRMtech/nexusqa}" --jq .full_name >/dev/null 2>&1 || {
   echo "FATAL: gh cannot read ${GATE0_REPO:-KVRMtech/nexusqa} — check 'gh auth status'" >&2
   exit 2; }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# H1 / --audit-runs — DOES EVERY TRUNK COMMIT ACTUALLY HAVE A CI RUN?
+#
+#   bash scripts/gate0_require_ci_lanes.sh --audit-runs              # last 50
+#   bash scripts/gate0_require_ci_lanes.sh --audit-runs 2026-08-24   # since a date
+#
+# Team H's exit criterion is "every trunk commit has a CI run", and that is a
+# MEASUREMENT, not a setting. Nothing in this repository could take it before
+# this mode existed, so the claim could only ever have been asserted.
+#
+# TWO STRUCTURAL FACTS THIS MODE EXISTS TO EXPOSE, both measured 2026-08-31:
+#
+#   1. A push of N commits fires ONE workflow run, on the tip. GitHub does not
+#      run per commit. So a session that commits fifteen times and pushes once
+#      has tested one tree and left fourteen unexamined.
+#
+#   2. ci.yml sets `concurrency: cancel-in-progress: true`, so a push that
+#      lands while the previous build is running KILLS it. Of the last 100
+#      ci.yml runs on trunk: 53 cancelled, 18 failure, 21 success.
+#
+#   Net effect on the real repository: 826 commits on trunk, 92 with a run of
+#   any kind, and 21 with a SUCCESSFUL one. Roughly 2.5%.
+#
+# A cancelled run counts as NO run here, deliberately — a suite that was killed
+# mid-flight has not adjudicated anything. That is the same rule the deploy gate
+# in scripts/require_green_ci.ps1 applies, and the two must not diverge.
+#
+# One API call, not one per commit: the full run list is fetched once and
+# intersected with `git rev-list`, so auditing 800 commits costs the same as 5.
+if [ "$MODE" = "--audit-runs" ]; then
+  TRUNK="${GATE0_TRUNK:-feat/qec-dynamic-catalog-p0-p6}"
+  TRUNK_REF="${GATE0_TRUNK_REF:-origin-https/$TRUNK}"
+  export GATE0_WF="${GATE0_AUDIT_WORKFLOW:-Nexus QA CI}"
+  SINCE="${2:-}"
+
+  echo "== CI RUN COVERAGE AUDIT"
+  echo "   repo      : $REPO"
+  echo "   trunk     : $TRUNK   (local ref: $TRUNK_REF)"
+  echo "   workflow  : $GATE0_WF"
+
+  git rev-parse --verify "$TRUNK_REF^{commit}" >/dev/null 2>&1 || {
+    echo "FATAL: '$TRUNK_REF' is not a ref in this clone. git fetch first," >&2
+    echo "or set GATE0_TRUNK_REF to the ref that mirrors the remote trunk." >&2
+    exit 2; }
+
+  if [ -n "$SINCE" ]; then
+    echo "   window    : commits since $SINCE"
+    mapfile -t COMMITS < <(git rev-list --since="$SINCE" "$TRUNK_REF")
+  else
+    N="${GATE0_AUDIT_N:-50}"
+    echo "   window    : most recent $N commits"
+    mapfile -t COMMITS < <(git rev-list -n "$N" "$TRUNK_REF")
+  fi
+  echo "   commits   : ${#COMMITS[@]}"
+  echo
+
+  if [ "${#COMMITS[@]}" -eq 0 ]; then
+    echo "No commits in the window — nothing to audit."; exit 0
+  fi
+
+  # SUCCESS ONLY. This filter is what makes a cancelled or failed run count as
+  # an absence rather than as coverage.
+  GREEN="$(gh run list --repo "$REPO" --branch "$TRUNK" --limit 1000 \
+             --json headSha,conclusion,workflowName 2>/dev/null \
+           | python -c '
+import json,sys,os
+wf=os.environ["GATE0_WF"]
+try: runs=json.load(sys.stdin)
+except Exception: runs=[]
+print("\n".join(sorted({r["headSha"] for r in runs
+                        if r.get("workflowName")==wf and r.get("conclusion")=="success"})))
+')" || { echo "FATAL: could not read runs from $REPO" >&2; exit 2; }
+
+  covered=0; missing=0
+  for c in "${COMMITS[@]}"; do
+    if printf '%s\n' "$GREEN" | grep -qxF "$c"; then
+      covered=$((covered+1))
+      printf '  ok      %s  %s\n' "${c:0:12}" "$(git log -1 --format=%s "$c" | cut -c1-58)"
+    else
+      missing=$((missing+1))
+      printf '  NO RUN  %s  %s\n' "${c:0:12}" "$(git log -1 --format=%s "$c" | cut -c1-58)"
+    fi
+  done
+
+  echo
+  echo "-- ${covered}/${#COMMITS[@]} commits have a SUCCESSFUL '$GATE0_WF' run"
+  if [ "$missing" -eq 0 ]; then
+    echo "AUDIT PASSED — every commit in the window was tested green."
+    exit 0
+  fi
+  echo "AUDIT FAILED — ${missing} commit(s) in the window were never tested green." >&2
+  echo "" >&2
+  echo "This is a property of how the work reached the remote, not a bug in this" >&2
+  echo "script: intermediate commits of a multi-commit push are never built, and" >&2
+  echo "cancel-in-progress kills the run when the next push lands. Closing it needs" >&2
+  echo "one of — push per commit, drop cancel-in-progress on trunk, or state plainly" >&2
+  echo "that the tested unit is the pushed TIP and not the commit." >&2
+  exit 1
+fi
 
 echo "== repository : $REPO"
 echo "== branch     : $BRANCH"

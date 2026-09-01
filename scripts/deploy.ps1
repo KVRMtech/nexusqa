@@ -4,6 +4,12 @@
 #   .\scripts\deploy.ps1 qe-central             # deploy only qe-central
 #   .\scripts\deploy.ps1 platform-api           # deploy only platform-api
 #   .\scripts\deploy.ps1 -PushOnly              # just push, don't deploy to VM
+#
+# Exit codes:
+#   0  deployed and gated green
+#   1  a step failed (push, VM deploy, or the golden crawl gate rolled back)
+#   2  UNVERIFIED - the fleet carries this build but no gate reached a verdict
+#   3  REFUSED BY THE CI GATE - nothing was pushed, nothing was deployed
 
 param(
     [switch]$PushOnly,
@@ -34,7 +40,15 @@ $VM_PROJECT  = "project-8d85a07a-396c-40aa-9b6"
 $VM_USER     = "srika"
 $VM_SRC      = "/home/$VM_USER/nexus-src"
 $REMOTE      = "mine"
-$BRANCH      = "develop"
+# Overridable the same way scripts/gate0_require_ci_lanes.sh takes GATE0_BRANCH.
+# It exists so the CI gate's refusal can be PROVEN against a named commit
+# without moving `develop`, which nine concurrent sessions share -- and so a
+# deliberate non-default-branch deploy is an explicit act rather than an edit to
+# this file. Unset, it is exactly the previous behaviour.
+$BRANCH      = if ($env:NEXUS_DEPLOY_BRANCH) { $env:NEXUS_DEPLOY_BRANCH } else { "develop" }
+if ($env:NEXUS_DEPLOY_BRANCH) {
+    Write-Host "NEXUS_DEPLOY_BRANCH is set - deploying '$BRANCH', NOT develop." -ForegroundColor Yellow
+}
 
 $QEC_COMPOSE  = "docker-compose.qec.yml"
 $MAIN_COMPOSE = "docker-compose.yml"
@@ -91,6 +105,72 @@ if (-not $Services -or $Services.Count -eq 0) {
 # closed the incident while two containers kept serving the rejected build.
 $DeployInventory = @($ValidServices | Where-Object { $_ -in $Services })
 Write-Host "Deployment inventory (rollback set): $($DeployInventory -join ', ')" -ForegroundColor Cyan
+
+# -- H1: THE CI GATE -- NOTHING DEPLOYS WITHOUT A GREEN RUN ON ORIGIN --------
+# This runs BEFORE the push, on purpose. The old order was
+#
+#     push to `mine`  ->  VM `git pull`  ->  build  ->  swap  ->  golden crawl
+#
+# and CI appeared nowhere in it. `mine` is the remote the VM pulls from and it
+# has no Actions; `origin` is where CI runs and the deploy never asked it
+# anything. Measured on 2026-08-31: 826 commits on trunk, 21 with a successful
+# `Nexus QA CI` run. The golden crawl gate below is a good gate but it fires
+# AFTER the fleet has already swapped -- it detects a bad build by serving it.
+#
+# Gating before the push means a commit CI has not passed never reaches the
+# deploy remote at all, so there is nothing for the VM to pull even by accident.
+# It also covers -PushOnly, which otherwise put an unverified sha one `git pull`
+# away from the fleet.
+#
+# THERE IS DELIBERATELY NO BYPASS FLAG. `-NoGate` skips the golden CRAWL gate
+# and always has; it does not skip this one. A switch that lets a red commit
+# deploy is a switch that will be used on exactly the deploy that most needs the
+# gate, which is the reasoning already written above `-NoGate`. If an override
+# is ever wanted it should be added as a deliberate decision with its own
+# record, not inherited from this line.
+Write-Host "`n[0/4] CI gate - has origin already passed this commit?" -ForegroundColor Blue
+Set-Location $PSScriptRoot\..
+
+$ErrorActionPreference = "Continue"
+$deployShaRaw = (& git rev-parse --verify "$BRANCH^{commit}")
+$revExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($revExit -ne 0) {
+    Write-Host "Cannot resolve '$BRANCH' to a commit. Nothing was pushed or deployed." -ForegroundColor Red
+    exit 3
+}
+$DeploySha = "$deployShaRaw".Trim()
+
+# Built with Join-Path, not string concatenation. This line shipped once as
+# "$PSScriptRoot" + CR + "equire_green_ci.ps1": a single backslash before an
+# `r` was read as an escape by the tool that wrote it, and a later text-mode
+# read of this CRLF file then promoted that CR into a real line break. Both
+# halves of that are CLAUDE.md section 3. Join-Path removes the backslash from
+# the source entirely, so the class of accident cannot recur here.
+$GateScript = Join-Path $PSScriptRoot "require_green_ci.ps1"
+
+# FAIL CLOSED ON A MISSING GATE. While the path above was corrupted, PowerShell
+# raised CommandNotFound -- and $LASTEXITCODE stayed 0. The deploy aborted on an
+# unhandled exception while still reporting SUCCESS to whoever called it. A gate
+# that cannot be found must REFUSE rather than evaporate: a check that is absent
+# is indistinguishable from a check that passed, which is the single failure
+# mode this whole script exists to remove.
+if (-not (Test-Path $GateScript)) {
+    Write-Host "DEPLOY REFUSED - the CI gate script is missing:" -ForegroundColor Red
+    Write-Host "  $GateScript" -ForegroundColor Red
+    Write-Host "A deploy does not proceed past a gate that is not there." -ForegroundColor Red
+    exit 3
+}
+
+& $GateScript -Sha $DeploySha -Explain
+$ciExit = $LASTEXITCODE
+if ($ciExit -ne 0) {
+    Write-Host "`nDEPLOY REFUSED BY THE CI GATE (require_green_ci exit $ciExit)." -ForegroundColor Red
+    Write-Host "No push to '$REMOTE'. No pull on the VM. No build. No swap." -ForegroundColor Green
+    Write-Host "The fleet is exactly as it was before this command ran." -ForegroundColor Green
+    exit 3
+}
+Write-Host "CI gate passed for $DeploySha - proceeding to push." -ForegroundColor Green
 
 # Step 1: Push
 Write-Host "`n[1/4] Pushing to $REMOTE/$BRANCH..." -ForegroundColor Blue

@@ -2,6 +2,10 @@
 
 **Status: A1 and A2 CLOSED. A3 and A4 in measurement. A5 blocked on repository access.**
 
+> **2026-08-31 — Team H / H1 appended as §9.** A5's stated blocker (no push
+> access) no longer exists; see the correction row below. The deploy now refuses
+> a commit CI has not passed, proven by refusal rather than by configuration.
+
 The tree freeze that §0 asked for arrived on its own: by 12:18 no other squad had
 written for twenty minutes and no competing `pytest` process was running. That
 window was all A1 ever needed. `git status` now reports **working tree clean**, and
@@ -15,6 +19,8 @@ reproducibility gap.
 | A3 | Resolve the browser failures permanently | **MOSTLY DONE** — 2 failures measured (not 10), both root-caused and fixed, one guarded; whole-suite repetition and parallel not proven |
 | A4 | Record a crawl-wide performance baseline | **INSTRUMENT DELIVERED + RUN; baseline NOT committed** — no quiet machine; the run found a reproducible 61 s stall |
 | A5 | Require *both* CI lanes before merge | **BLOCKED ON ACCESS** — script and workflow fixes delivered; the push that would let any lane report is denied to this machine |
+| A5 · *correction 2026-08-31* | — | **THE ACCESS BLOCK IS GONE.** The `gh` token now reports `admin: true` on `KVRMtech/nexusqa` and pushes have been landing over the `origin-https` remote since 2026-08-27. §5's "Step 1 is the gate" no longer holds; steps 2–5 of that handover are unblocked and still not done |
+| H1 | Nothing deploys without a green CI run | **BUILT AND DEMONSTRATED** — §9. `deploy.ps1` refuses a red sha before it pushes (three live refusals + a positive control); reconciliation and bootstrap-trigger removal NOT done |
 
 ---
 
@@ -795,3 +801,225 @@ Three things are needed, and none of them is engineering:
 
 Given (1), A1, A2 and A5 close in a single sitting. A3's whole-suite repetition
 closes with them. A4 closes with (2).
+
+---
+
+## §9 · H1 — the deploy gate (Team H · CI & Release Engineering)
+
+**Status: the deploy gate is BUILT and its refusal is DEMONSTRATED. The history
+reconciliation and the bootstrap-trigger removal are NOT done — they are blocked
+on the decision recorded in `BRANCH_RECONCILIATION_SCOPE.md` §3.**
+
+### §9.1 · The finding: CI and the deploy had no connection at all
+
+There are two remotes, and until now only one of them was ever asked anything:
+
+```
+laptop -- git push --> mine (Venkatareddy2012/nexus-power-snapshot) -- git pull --> VM
+laptop -- git push --> origin (KVRMtech/nexusqa) --> GitHub Actions runs HERE
+```
+
+`deploy.ps1` pushed to `mine` and the VM pulled from `mine`. `mine` has no
+Actions. Nothing in the deploy path consulted `origin`, and `gh run list`
+appeared nowhere in the repository. The golden crawl gate is a good gate, but it
+runs *after* the swap — it detects a bad build by serving it to clients first.
+
+Measured on the real repository, 2026-08-31:
+
+| | |
+|---|---|
+| commits on trunk (`feat/qec-dynamic-catalog-p0-p6`) at origin | **826** |
+| …with a `Nexus QA CI` run of any conclusion | **92** |
+| …with a **successful** `Nexus QA CI` run | **21** (2.5%) |
+| last 100 ci.yml runs on trunk | **53 cancelled, 18 failure, 21 success** |
+| local commits ahead of origin at session start | **68** (all dated 2026-08-31) |
+
+Those 68 were pushed as the first act of this work (`d5130e4..ed5c489`) — the
+first time that day's output was compiled by anything other than a laptop.
+
+### §9.2 · Built
+
+* **`scripts/require_green_ci.ps1`** — adjudicates one sha. Exit 0 green, 1 red,
+  2 never-ran, 3 still-running, 4 unknowable. **Every non-zero code is a
+  refusal**; there is no "could not tell, carry on" path.
+* **`scripts/deploy.ps1`** — a new `[0/4]` stage calls it **before the push**, so
+  a commit CI has not passed never reaches the deploy remote at all. This also
+  covers `-PushOnly`, which previously left an unverified sha one `git pull`
+  away from the fleet. New exit code **3 = refused, nothing pushed, nothing
+  deployed**. `NEXUS_DEPLOY_BRANCH` was added (same shape as `GATE0_BRANCH`) so
+  the refusal can be proven against a named commit without moving `develop`,
+  which nine concurrent sessions share.
+* **`scripts/gate0_require_ci_lanes.sh --audit-runs [since]`** — the instrument
+  for this gate's own exit criterion. One API call, intersected with
+  `git rev-list`; a cancelled run counts as *no* run.
+
+There is deliberately **no bypass flag**. `-NoGate` skips the golden *crawl*
+gate and always did; it does not skip this one.
+
+### §9.3 · Why the gate does not trust "`gh run list` said success"
+
+Four workflows fire per push and they are not comparable: `Nexus QA CI` ~30 min,
+`Browser Test Harness` ~60 min, `M0.5 Security Gate` ~45 s, `A11 Attestation
+Certification` ~50 s. `Nexus QA CI` also runs under `cancel-in-progress: true`,
+so the next push kills it.
+
+On commit `36adb1f` the honest picture was:
+
+```
+M0.5 Security Gate              success   (42s)
+A11 Attestation Certification   success   (1m0s)
+Nexus QA CI                     CANCELLED (1m31s)   <-- the actual suite
+```
+
+A gate written as `gh run list --commit <sha> | grep success` **passes that
+commit** — it would report green on precisely the commits whose suite never
+finished. The gate therefore demands a verdict from each *named gating
+workflow*, and treats `cancelled` as red rather than as absent.
+
+### §9.4 · The refusal, demonstrated
+
+Configuration is not evidence. Three runs of the **real** `deploy.ps1`:
+
+**Proof A — a real commit whose suite genuinely failed** (`2b7604c`, "R7(7): the
+two branches were running opposite polarities", 2026-08-23). Not a synthetic
+red: `ci.yml` has no `workflow_dispatch` and fires only on four named branches,
+so a scratch branch cannot be made to go red. A real historical failure is the
+stronger artefact anyway.
+
+```
+[0/4] CI gate - has origin already passed this commit?
+
+== CI GATE ===============================================
+   repo     : KVRMtech/nexusqa
+   commit   : 2b7604ccad565f690585b3054016eed581425273
+   requires : Nexus QA CI + M0.5 Security Gate == success
+
+-- every run on this commit (4):
+     Browser Test Harness (M0.2)      completed    failure
+     Nexus QA CI                      completed    failure
+     M0.5 Security Gate               completed    success
+     A11 Attestation Certification    completed    success
+
+   Nexus QA CI                      FAILURE
+        https://github.com/KVRMtech/nexusqa/actions/runs/32648665802
+   M0.5 Security Gate               success
+
+DEPLOY REFUSED - this commit has not passed CI.
+   * Nexus QA CI concluded failure
+
+NOTHING WAS PUSHED AND NOTHING WAS DEPLOYED. The fleet is untouched.
+
+DEPLOY REFUSED BY THE CI GATE (require_green_ci exit 1).
+No push to 'mine'. No pull on the VM. No build. No swap.
+>>> deploy.ps1 EXITCODE = 3
+```
+
+Note the two green workflows in that transcript: this is the §9.3 trap caught in
+the act, on a genuinely failed commit.
+
+**Proof B — the commit `deploy.ps1` would have shipped today**, with no override
+at all (`develop` @ `a07cb59`):
+
+```
+   commit   : a07cb5919317226b835aa4b6a363fab2e77f6f55
+REFUSED (2) - this commit has NO CI run of any kind.
+Nothing has ever built or tested a07cb5919317226b835aa4b6a363fab2e77f6f55.
+>>> deploy.ps1 EXITCODE = 3
+```
+
+The branch the deploy script points at by default has **never been tested by
+anything**. That was true before this gate existed, and nothing said so.
+
+**Proof C — the falsification control: the gate script itself removed.** An
+absent check is indistinguishable from a passing one, so its absence must
+refuse. Run with `GIT_SSH_COMMAND=false` as a safety net, so no push could reach
+a remote even if the guard failed:
+
+```
+[0/4] CI gate - has origin already passed this commit?
+DEPLOY REFUSED - the CI gate script is missing:
+  C:\Users\srika\nexusqa\scripts\require_green_ci.ps1
+A deploy does not proceed past a gate that is not there.
+>>> deploy.ps1 EXITCODE = 3
+```
+
+`[1/4] Pushing…` never printed in any of the three.
+
+**Positive control — the gate can also say yes** (`d5130e4`, all workflows
+green). Without it the three refusals above would prove only that the script
+always refuses:
+
+```
+   Nexus QA CI                      success
+   M0.5 Security Gate               success
+CI GATE PASSED - every gating workflow is green on d5130e4843ff...
+>>> EXITCODE=0
+```
+
+### §9.5 · Three defects found in this gate *while building it*
+
+Recorded because each one would have shipped a gate that looked like it worked.
+
+1. **The gate green-washed a red commit.** `ConvertFrom-Json` does not enumerate
+   an array down the pipeline in PowerShell 5.1 — it emits the whole `Object[]`
+   as one item. `$latest.conclusion` therefore returned *every* conclusion, and
+   `@("success","success","cancelled") -eq "success"` is PowerShell's filter
+   operator, which returns two matches: a non-empty, therefore **true**, value.
+   The gate reported GREEN on `36adb1f`, whose suite was cancelled. Found only
+   because a **known-red commit was used as a control** rather than a run of
+   known-green ones.
+2. **`gh run list --commit <short-sha>` returns `[]` and exit 0.** It silently
+   matches nothing — no error, no warning. Here that failed closed, but it would
+   have refused every legitimate deploy while printing "this commit has NO CI
+   run" about a fully green commit. The gate now resolves to a full
+   40-character sha first.
+3. **A missing gate script reported success.** The invocation path was corrupted
+   to `"$PSScriptRoot" + CR + "equire_green_ci.ps1"`; PowerShell raised
+   CommandNotFound and left `$LASTEXITCODE` at **0**, so the deploy aborted on an
+   unhandled exception while telling its caller it had succeeded. Two halves of
+   CLAUDE.md §3 in one line: a lone backslash read as an escape by the writing
+   tool, then a later *text-mode* read of this CRLF file promoting that CR into
+   a real line break. Fixed with `Join-Path` (no backslash in the source at all)
+   plus the explicit `Test-Path` refusal that Proof C exercises.
+
+### §9.6 · The exit criterion, measured rather than asserted
+
+```
+$ bash scripts/gate0_require_ci_lanes.sh --audit-runs 2026-08-20
+   commits   : 238
+-- 17/238 commits have a SUCCESSFUL 'Nexus QA CI' run
+AUDIT FAILED — 221 commit(s) in the window were never tested green.
+(exit 1)
+```
+
+**"Every trunk commit has a CI run" is not reachable under the current trigger
+design, and that is structural rather than a backlog.** A push of N commits
+fires **one** run, on the tip — GitHub does not build per commit — and
+`cancel-in-progress: true` kills that one when the next push lands. Pushing the
+68-commit backlog produced exactly one run, not 68.
+
+Closing it requires a decision, not more work: push per commit, drop
+`cancel-in-progress` on trunk, or state plainly that **the tested unit is the
+pushed tip, not the commit**. The third is honest and nearly free, and is the
+recommendation. Until one is taken the audit will keep failing, correctly.
+
+### §9.7 · What is NOT claimed
+
+* **The reconciliation of `origin/develop` is NOT done.** It remains
+  `BRANCH_RECONCILIATION_SCOPE.md` §3's open owner decision. New evidence for
+  that conversation, measured 2026-08-31: `origin/develop` is a single commit
+  `ba4fd8f` dated **2026-04-14**, and **no branch on the remote shares any
+  history with it** — all five working branches return an empty `merge-base`.
+  It has zero dependents, so replacing it destroys no one's work.
+* **The bootstrap `push:` trigger in `ci.yml` is NOT removed.** Removing it
+  before pull requests can be opened would stop CI running on the working branch
+  altogether. It is the last step of this chain, not the first.
+* **`deploy.ps1`'s green path was NOT executed live.** Running it to completion
+  means deploying. The pass verdict is proven at the `require_green_ci.ps1`
+  level (positive control, §9.4); `deploy.ps1`'s propagation of exit 0 is
+  proven by inspection only.
+* **The required-contexts set was NOT changed.** `--apply` was not run;
+  protection on `develop` still carries the same 18 contexts, and A5's three
+  lanes remain advisory.
+* **Nothing was deployed to the VM in this session.** The fleet still runs
+  whatever it ran before.
