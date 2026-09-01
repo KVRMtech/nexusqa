@@ -839,6 +839,15 @@ export interface JourneyRunnable {
   display_name: string;
 }
 
+/** Server-evaluated priority evidence. The portal displays it but never ranks locally. */
+export interface JourneyCriticality {
+  band: 'P0' | 'P1' | 'P2' | 'P3';
+  evidence: unknown[];
+  registry_version: string;
+  classifier: string;
+  subject: string;
+}
+
 export interface JourneyRunView {
   journey_run_id: string;
   status: 'dispatched' | 'running' | 'passed' | 'failed' | 'timed_out' | 'error' | 'blocked';
@@ -917,6 +926,9 @@ export interface JourneySummary {
   branch_coverage: boolean;
   runnable: JourneyRunnable;
   last_run: JourneyRunView | null;
+  /** One-based server rank; absent only for an older QE Central response. */
+  rank?: number;
+  criticality?: JourneyCriticality;
 }
 
 export interface JourneyListResponse {
@@ -926,6 +938,10 @@ export interface JourneyListResponse {
   journeys_found: number;
   runs: { runnable: number; run_green: number; run_red: number; never_run: number };
   branch_coverage: boolean;
+  /** Ranked head selected by QE Central over the complete journey set. */
+  top_n?: number;
+  top_journeys?: string[];
+  ranking?: { deterministic: boolean; key: string[]; classifier: string };
 }
 
 export interface JourneyNode {

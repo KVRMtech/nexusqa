@@ -60,6 +60,13 @@ const BRANCH_LABEL: Record<JourneyBranch['status'], string> = {
   blocked: 'blocked',
 };
 
+const CRITICALITY_TONE: Record<'P0' | 'P1' | 'P2' | 'P3', 'crit' | 'warn' | 'teal' | 'neutral'> = {
+  P0: 'crit',
+  P1: 'warn',
+  P2: 'teal',
+  P3: 'neutral',
+};
+
 function Terminal({ terminal }: { terminal: string }) {
   const copy = TERMINAL_COPY[terminal] ?? { label: terminal, tone: 'neutral' as const };
   return (
@@ -448,6 +455,7 @@ export default function Journeys({ appId }: { appId: string }) {
   if (state.isLoading) return <SkeletonRows rows={4} />;
   if (state.isError) return <ErrorState error={state.error} onRetry={state.reload} />;
   const data = state.data!;
+  const topN = Math.min(data.top_n ?? 0, data.journeys.length);
 
   const act = async (label: string, run: () => Promise<unknown>) => {
     setBusyAction(label);
@@ -472,6 +480,11 @@ export default function Journeys({ appId }: { appId: string }) {
           {data.branch_coverage && (
             <Pill tone="teal" size="sm">
               <ShieldCheck size={12} aria-hidden /> branch coverage earned
+            </Pill>
+          )}
+          {topN > 0 && (
+            <Pill tone="neutral" size="sm" variant="outline">
+              <Flag size={12} aria-hidden /> Top {topN} ranked by criticality
             </Pill>
           )}
         </div>
@@ -536,6 +549,16 @@ export default function Journeys({ appId }: { appId: string }) {
                     {j.name_source === 'operator' ? 'named by you'
                       : j.name_source === 'agent' ? 'agent-proposed' : 'auto title'}
                   </Pill>
+                  {j.criticality && (
+                    <Pill tone={CRITICALITY_TONE[j.criticality.band]} size="sm">
+                      {j.criticality.band} criticality
+                    </Pill>
+                  )}
+                  {j.rank !== undefined && j.rank <= topN && (
+                    <Pill tone="neutral" size="sm" variant="outline">
+                      <Flag size={12} aria-hidden /> priority #{j.rank}
+                    </Pill>
+                  )}
                   {j.branch_coverage
                     ? <Pill tone="teal" size="sm"><ShieldCheck size={12} aria-hidden /> branch coverage earned</Pill>
                     : <Pill tone="neutral" size="sm" variant="outline"><CircleDashed size={12} aria-hidden /> branches remain</Pill>}
