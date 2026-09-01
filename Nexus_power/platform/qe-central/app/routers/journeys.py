@@ -57,6 +57,7 @@ from ..services.catalog import (
     apply_provenance,
     catalog_summary,
 )
+from ..services import journey_evidence
 from ..services.journey_fold import BRANCH_BLOCKED, BRANCH_DISCOVERED, BRANCH_WALKED
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,25 @@ def _run_view(run: JourneyRunRow | None) -> dict | None:
     }
 
 
+def _compiles_on_its_own_walk(walked: list[str], walk_labels: list[str]) -> bool:
+    """Does this journey hold enough of its own evidence to BE a specification?
+
+    One definition, read by both runnable views and by the compile-first branch
+    in each, because three copies of "deep enough to compile" is how the batched
+    and unbatched paths would come to disagree about which journeys are runnable
+    — silently, since both answers look reasonable.
+    """
+    return bool(walk_labels) or len(set(walked)) >= journey_case_linker.MIN_JOURNEY_PAGES
+
+
+def _direct_view(tenant_id: str, journey_id: str) -> dict:
+    """The runnable verdict for a journey compiled from its OWN walk."""
+    return {"ok": True,
+            "test_case_id": journey_spec.test_id_for(tenant_id, journey_id),
+            "display_name": "Verify journey end to end", "reason": "",
+            "provenance": "journey_direct"}
+
+
 async def _runnable_view(
     session, *, tenant_id: str, app_id: str, journey_id: str,
     artifact_id: str, paths_completed: int,
@@ -143,22 +163,42 @@ async def _runnable_view(
     if not artifact_id:
         return {"ok": False, "test_case_id": "", "display_name": "",
                 "reason": "no crawl artifact promoted for this app yet"}
+    # COMPILATION FIRST (Tier 2, settings.journey_compile_first). A journey's
+    # own completed walk IS its specification: the entry URL, the ordered
+    # states, the control that advanced each one, the endpoints those advances
+    # called. An ADOPTED case is a different artifact that merely happens to
+    # walk the same pages in the same order, and the tightest-fit tie-break
+    # exists precisely because it can assert things this journey never claimed.
+    # So the journey's own evidence is preferred wherever it is sufficient, and
+    # adoption becomes the fallback for a walk too shallow to compile.
+    # Read at most ONCE per call, whichever precedence is in force: the
+    # compile-first branch and the no-adopted-case fallback below both need it,
+    # and querying twice for one answer is how a hot endpoint quietly doubles
+    # its round trips.
+    signature: tuple[list[str], list[str]] | None = None
+
+    async def _signature() -> tuple[list[str], list[str]]:
+        nonlocal signature
+        if signature is None:
+            signature = await journey_case_linker.journey_walk_signature(
+                session, tenant_id=tenant_id, app_id=app_id, journey_id=journey_id)
+        return signature
+
+    if settings.journey_compile_first:
+        walked, labels = await _signature()
+        if _compiles_on_its_own_walk(walked, labels):
+            return _direct_view(tenant_id, journey_id)
     adopted = await journey_case_linker.runnable_case(
         session, tenant_id=tenant_id, app_id=app_id,
         journey_id=journey_id, artifact_id=artifact_id)
     if adopted is None:
-        direct_walked, direct_labels = await journey_case_linker.journey_walk_signature(
-            session, tenant_id=tenant_id, app_id=app_id, journey_id=journey_id)
-        if direct_labels or len(set(direct_walked)) >= journey_case_linker.MIN_JOURNEY_PAGES:
-            return {"ok": True,
-                    "test_case_id": journey_spec.test_id_for(tenant_id, journey_id),
-                    "display_name": "Verify journey end to end", "reason": "",
-                    "provenance": "journey_direct"}
+        direct_walked, direct_labels = await _signature()
+        if _compiles_on_its_own_walk(direct_walked, direct_labels):
+            return _direct_view(tenant_id, journey_id)
         # Distinguish "too shallow to be a journey" from "no script matches" —
         # they need different remedies, and a single-page walk must never
         # borrow a script that walks somewhere else.
-        walked, walk_labels = await journey_case_linker.journey_walk_signature(
-            session, tenant_id=tenant_id, app_id=app_id, journey_id=journey_id)
+        walked, walk_labels = await _signature()
         if not walk_labels and len(set(walked)) < journey_case_linker.MIN_JOURNEY_PAGES:
             return {"ok": False, "test_case_id": "", "display_name": "",
                     "reason": ("this walk never advanced past its first page, "
@@ -244,54 +284,13 @@ async def _journey_rollup(session, tenant_id: str, app_id: str,
     }
 
 
-async def _journey_evidence(
-    session, tenant_id: str, app_id: str, journey: JourneyRow,
-) -> dict[str, Any]:
-    """The graph rows one journey compiles and is banded from.
-
-    Returns ``{nodes, edges, traversal, edge_labels, path_fps}`` for the
-    journey's most recent COMPLETED traversal, or empty collections when it has
-    none.  Completed on purpose: a specification generated from a walk the crawl
-    abandoned would assert a path nobody has ever finished, and a criticality
-    band derived from one would rank a dead end above a working funnel.
-    """
-    traversal = (await session.execute(
-        select(JourneyTraversalRow).where(
-            JourneyTraversalRow.tenant_id == tenant_id,
-            JourneyTraversalRow.app_id == app_id,
-            JourneyTraversalRow.journey_id == journey.journey_id,
-            JourneyTraversalRow.completed.is_(True),
-        ).order_by(JourneyTraversalRow.created_at.desc())
-        .limit(1))).scalar_one_or_none()
-    path_fps = [str(fp) for fp in ((traversal.path_fps if traversal else []) or [])]
-    if not path_fps:
-        return {"nodes": [], "edges": [], "traversal": traversal,
-                "edge_labels": [], "path_fps": []}
-    rows = (await session.execute(
-        select(JourneyNodeRow).where(
-            JourneyNodeRow.tenant_id == tenant_id,
-            JourneyNodeRow.app_id == app_id,
-            JourneyNodeRow.fingerprint.in_(set(path_fps)),
-        ))).scalars().all()
-    by_fp = {r.fingerprint: r for r in rows}
-    # WALK ORDER, not query order. The criticality projection and the compiled
-    # steps are both sequences, and a set-ordered node list would make both
-    # non-deterministic for a reason no reader could see.
-    nodes = [by_fp[fp] for fp in path_fps if fp in by_fp]
-    edges = (await session.execute(
-        select(JourneyEdgeRow).where(
-            JourneyEdgeRow.tenant_id == tenant_id,
-            JourneyEdgeRow.app_id == app_id,
-            JourneyEdgeRow.from_fp.in_(set(path_fps)),
-        ))).scalars().all()
-    walked = {(e.from_fp, e.to_fp): e for e in edges}
-    edge_labels = [
-        walked[(path_fps[i], path_fps[i + 1])].trigger_label_norm
-        for i in range(len(path_fps) - 1)
-        if (path_fps[i], path_fps[i + 1]) in walked
-    ]
-    return {"nodes": nodes, "edges": list(edges), "traversal": traversal,
-            "edge_labels": edge_labels, "path_fps": path_fps}
+#: ONE READER OF THE GRAPH, moved to ``services/journey_evidence`` when the fold
+#: gained a second need for it (persisting the criticality band). A router must
+#: not be imported from a service, and a second traversal->nodes->edges query in
+#: the store would be two readers that WILL eventually disagree about which
+#: traversal is the journey's — invisibly, because both would return a plausible
+#: band. The name is kept so every call site below reads unchanged.
+_journey_evidence = journey_evidence.journey_evidence
 
 
 async def _rank_journeys(
@@ -334,6 +333,24 @@ async def _rank_journeys(
             "registry_version": banded["registry_version"],
             "classifier": banded["classifier"],
             "subject": banded["subject"],
+            # THE DURABLE RECORD, BESIDE THE LIVE VERDICT — never instead of it
+            # (qec_025). The band above is what the tenant's ACTIVE pack says
+            # about the evidence as it stands now, and it is the one to act on.
+            # This is what the last FOLD stored, with the pack version that
+            # produced it, so a reader can see that a band has moved and on
+            # whose account. "" here means no fold has banded this journey yet,
+            # which is a different fact from a journey banded P1 by fail-up.
+            "stored": {
+                "band": journey.criticality_band or "",
+                "registry_version": journey.criticality_registry_version or "",
+                "banded_at": (journey.criticality_banded_at.isoformat()
+                              if journey.criticality_banded_at else ""),
+                "evidence": list(journey.criticality_evidence or []),
+                # Only ever True when there IS a stored band to differ from.
+                # An unbanded journey has not "changed"; it has not been asked.
+                "live_differs": bool(journey.criticality_band
+                                     and journey.criticality_band != banded["band"]),
+            },
         }
         entry["boundary_nodes"] = journey_criticality.boundary_node_count(
             evidence["nodes"])
@@ -384,17 +401,19 @@ async def _runnable_view_batched(
     if not artifact_id:
         return {"ok": False, "test_case_id": "", "display_name": "",
                 "reason": "no crawl artifact promoted for this app yet"}
+    # COMPILATION FIRST — see ``_runnable_view``. Free here: the caller already
+    # derives every journey's walk signature from the app-scoped batches, so
+    # preferring the journey's own evidence costs no additional round trip.
+    walked, walk_labels = walk_signature
+    if settings.journey_compile_first and _compiles_on_its_own_walk(walked, walk_labels):
+        return _direct_view(tenant_id, journey_id)
     if adopted is None:
         # The walk signature comes from the app-scoped node/edge batches, not
         # from a per-journey query that itself queried per NODE. On an app whose
         # cases have not been generated yet EVERY journey takes this branch, so
         # it is emphatically not a rare path — it was the dominant cost.
-        walked, walk_labels = walk_signature
-        if walk_labels or len(set(walked)) >= journey_case_linker.MIN_JOURNEY_PAGES:
-            return {"ok": True,
-                    "test_case_id": journey_spec.test_id_for(tenant_id, journey_id),
-                    "display_name": "Verify journey end to end", "reason": "",
-                    "provenance": "journey_direct"}
+        if _compiles_on_its_own_walk(walked, walk_labels):
+            return _direct_view(tenant_id, journey_id)
         if not walk_labels and len(set(walked)) < journey_case_linker.MIN_JOURNEY_PAGES:
             return {"ok": False, "test_case_id": "", "display_name": "",
                     "reason": ("this walk never advanced past its first page, "

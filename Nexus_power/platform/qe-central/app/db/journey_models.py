@@ -67,6 +67,29 @@ class JourneyRow(QecBase):
         DateTime(timezone=True), nullable=True)
     baseline_approved_by: Mapped[str] = mapped_column(
         String(200), nullable=False, default="")
+    # ── Tier 2 (qec_025) — THE BAND AS OF THE LAST FOLD ─────────────────
+    # NOT a cache the API serves from: ``_rank_journeys`` still evaluates live
+    # against the tenant's ACTIVE pack, because a stored band served as current
+    # would outlive both the evidence and the pack that produced it. These make
+    # the band comparable — did it change with the last crawl, what did we say
+    # when we certified this journey, which bands a new pack has left stale.
+    #: P0..P3 as of the last fold; "" until one has run. Deliberately not the
+    #: registry's fail-up band: "never banded" and "banded P1 because nothing
+    #: matched" are different facts.
+    criticality_band: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="")
+    #: WHICH signal pack said it — so a reader can tell a band the active pack
+    #: would still produce from one a superseded pack did.
+    criticality_registry_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="")
+    #: The markers that fired, verbatim from the registry. A band nobody can
+    #: audit is a number nobody should act on.
+    criticality_evidence: Mapped[list | None] = mapped_column(
+        JSONB, nullable=True)
+    #: When the band was last written. Distinct from ``updated_at``, which moves
+    #: for any change and cannot answer "how old is this band".
+    criticality_banded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     drift_traversal_id: Mapped[str] = mapped_column(
         String(64), nullable=False, default="")
     drift_detected_at: Mapped[datetime | None] = mapped_column(

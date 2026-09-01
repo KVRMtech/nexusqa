@@ -44,6 +44,7 @@ from .catalog import (
     RETIREMENT_MISS_THRESHOLD,
 )
 from .catalog_store import persist_catalog_version
+from .journey_criticality_store import persist_criticality_bands
 from .endpoint_map import merge_endpoints
 from .journey_baseline import BASELINE_CAPTURED, detect_drift
 from . import endpoint_map
@@ -521,6 +522,22 @@ async def fold_crawl(
     except Exception as exc:
         logger.warning(
             "qec.journey_fold.catalog_persist_failed tenant=%s app=%s err=%s",
+            tenant_id, app_id, str(exc)[:200])
+
+    # Tier 2: band every journey on the evidence this fold just committed and
+    # STORE the verdict (qec_025), so the next crawl can say which journeys
+    # changed criticality. Best-effort for the same reason the catalogue refresh
+    # above is: the graph, the traversals and the catalogue are all committed,
+    # and the band is an annotation on top of them. The ranked API surface keeps
+    # evaluating live and is unaffected either way.
+    try:
+        band_report = await persist_criticality_bands(
+            tenant_id=tenant_id, app_id=app_id, crawl_ref=exploration_id)
+        report["journeys_banded"] = band_report["banded"]
+        report["criticality_changed"] = band_report["changed"]
+    except Exception as exc:
+        logger.warning(
+            "qec.journey_fold.criticality_persist_failed tenant=%s app=%s err=%s",
             tenant_id, app_id, str(exc)[:200])
 
     logger.warning(
