@@ -49,19 +49,29 @@ _NOT_SECRETS = frozenset({
     "QEC_EXPLORER_TOKEN_PREVIOUS_EXPIRES_AT",
 })
 
-#: THE KNOWN INFRASTRUCTURE DEFAULTS, RECORDED RATHER THAN SILENTLY FIXED.
-#:
-#: These are real instances of the same class as R1 — a credential with a
-#: shipped default — and they are NOT fixed here. Making them required would
-#: change the database password that local development and CI's compose-based
-#: lanes boot with, and this test cannot verify that those still start. They
-#: are frozen instead: each is named, and any NEW secret default fails the
-#: build. A register that grows silently is how a finding becomes furniture.
+#: The frozen register is intentionally empty.  It exists to make a future
+#: exception conspicuous in review, and ``test_the_known_register_still...``
+#: below makes a stale exception fail as soon as its compose value is removed.
+#: Team F retired the previous postgres/minio/neo4j entries together with the
+#: CI compose lane that now supplies its own ephemeral credentials.
 _KNOWN_INFRA_DEFAULTS = frozenset({
-    ("POSTGRES_PASSWORD", "nexus-dev"),
-    ("MINIO_ROOT_PASSWORD", "minioadmin"),
-    ("MINIO_SECRET_ACCESS_KEY", "minioadmin"),
-    ("NEO4J_PASSWORD", "nexus-neo4j-dev"),
+    # 2026-09-01 · Team F/H. The DEV redis password, and the only entry here.
+    #
+    # RULE 2b (below) found three shipped credentials the key-name detector
+    # could not see. Two were in docker-compose.qec.yml — the stack that serves
+    # clients — and are now `${...:?}`. This third is in docker-compose.dev.yml,
+    # which another session holds uncommitted in this shared checkout, and a
+    # pathspec commit takes the WHOLE file (CLAUDE.md section 1, learned the
+    # hard way in d611592/e00ce6b earlier today).
+    #
+    # Registered rather than silently skipped, which is what this frozenset is
+    # for: it makes the exception conspicuous in review, and
+    # `test_the_known_register_still_matches_the_composes` fails the moment the
+    # value is removed, so a stale entry cannot outlive its subject.
+    #
+    # TO CLOSE: change line 25 and 27 of docker-compose.dev.yml to
+    # `${REDIS_PASSWORD:?...}` and delete this entry in the same commit.
+    ("REDIS_PASSWORD", "nexus-redis-dev"),
 })
 
 #: A default that is obviously inert (empty, or a pure placeholder reference)
@@ -92,6 +102,58 @@ def test_nexus_env_is_never_pinned_to_a_literal(compose):
         f"{compose.name} pins NEXUS_ENV to a literal at "
         f"{[i for i, _ in offenders]} — use ${{NEXUS_ENV:-development}} so the "
         f"deploy environment decides: {offenders[:3]}")
+
+
+#: A credential default ANYWHERE on a line, not only under a secret-named key.
+#:
+#: RULE 2 above matches the YAML KEY, which is right for `NEXUS_JWT_SECRET: ...`
+#: and blind to the two shapes that actually shipped:
+#:
+#:     QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@...
+#:     command: redis-server --requirepass ${REDIS_PASSWORD:-nexus-redis-dev}
+#:
+#: The keys are `QEC_DATABASE_URL` and `command` — no secret word in either — so
+#: the detector never looked, and the register could be emptied while three
+#: published credentials stayed in every checkout and image layer. A password
+#: inside a DSN is a password; where it sits in the YAML is not the point.
+_EMBEDDED_SECRET_RE = re.compile(
+    r"\$\{([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY|PRIVATE_KEY)[A-Z0-9_]*):-([^}]*)\}")
+
+
+@pytest.mark.parametrize("compose", _COMPOSES, ids=lambda p: p.name)
+def test_no_secret_carries_a_shipped_default_anywhere_on_the_line(compose):
+    """RULE 2b. The same rule, matched on the VARIABLE rather than on the key."""
+    offenders = []
+    for i, line in enumerate(compose.read_text(encoding="utf-8").splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        for key, fallback in _EMBEDDED_SECRET_RE.findall(line):
+            fallback = fallback.strip()
+            if key in _NOT_SECRETS or fallback in _INERT:
+                continue
+            if (key, fallback) in _KNOWN_INFRA_DEFAULTS:
+                continue
+            offenders.append((i, key, fallback[:40]))
+    assert not offenders, (
+        f"{compose.name} ships a credential DEFAULT inside a value — a password "
+        f"in a DSN is still a published password. Use ${{KEY:?message}} and let "
+        f"the deploy supply it: {offenders[:5]}")
+
+
+def test_the_embedded_detector_can_actually_fire():
+    """FALSIFICATION CONTROL for the rule above.
+
+    Without this, an expression that matched nothing would pass every compose in
+    the repository and read exactly like a clean result — which is the whole
+    reason the shipped credentials survived a green security suite."""
+    caught = _EMBEDDED_SECRET_RE.findall(
+        "  QEC_DATABASE_URL: postgresql://qec:${QEC_DB_PASSWORD:-qec-dev}@db:5432/x")
+    assert caught == [("QEC_DB_PASSWORD", "qec-dev")], caught
+    assert _EMBEDDED_SECRET_RE.findall(
+        "  command: redis-server --requirepass ${REDIS_PASSWORD:-nexus-redis-dev}")
+    # …and must NOT fire on a required variable, which is the fixed shape.
+    assert not _EMBEDDED_SECRET_RE.findall(
+        "  QEC_DATABASE_URL: postgresql://qec:${QEC_DB_PASSWORD:?set it}@db:5432/x")
 
 
 @pytest.mark.parametrize("compose", _COMPOSES, ids=lambda p: p.name)
@@ -168,6 +230,18 @@ def test_the_known_register_still_describes_reality():
             default = re.search(r"\$\{[A-Z0-9_]+:-(.*?)\}$", found.group(2).strip())
             if default:
                 seen.add((found.group(1), default.group(1).strip()))
+    # …AND WHATEVER RULE 2b SEES, or this guard is blind exactly where the
+    # detector was. Scanning only by key name, it could not see a password
+    # embedded in a DSN or a `command:` line — so an entry registered for one of
+    # those reads as "gone" and the guard demands its deletion, which would
+    # delete the record of a credential that is still shipped. The register and
+    # the detector must look at the same thing.
+    for compose in _COMPOSES:
+        for line in compose.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            for key, fallback in _EMBEDDED_SECRET_RE.findall(line):
+                seen.add((key, fallback.strip()))
     stale = _KNOWN_INFRA_DEFAULTS - seen
     assert not stale, (
         f"these known defaults are gone — delete them from "

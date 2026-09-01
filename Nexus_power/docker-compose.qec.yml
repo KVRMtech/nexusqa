@@ -52,8 +52,8 @@ services:
       QEC_LOG_LEVEL: ${QEC_LOG_LEVEL:-INFO}
       # ── Two DSNs (R-7): qecentral DB (role qec) + nexus DB (role
       #    qec_substrate, least-privilege substrate writes only) ──────────
-      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
-      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
+      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:?set it in .env.production - scripts/verdict_box_bootstrap.sh generates one}@postgres:5432/qecentral
+      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:?set it in .env.production - scripts/verdict_box_bootstrap.sh generates one}@postgres:5432/nexus
       # ── Shared HS256 secret — MUST match platform-api's (docker-compose.yml).
       # M0.5 T-SEC-01: NO DEFAULT, and the ``:?`` form makes compose REFUSE to
       # start without it. The previous default was
@@ -400,8 +400,8 @@ services:
     environment:
       NEXUS_ENV: ${NEXUS_ENV:-development}
       QEC_LOG_LEVEL: ${QEC_LOG_LEVEL:-INFO}
-      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:-qec-dev}@postgres:5432/qecentral
-      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:-qec-substrate-dev}@postgres:5432/nexus
+      QEC_DATABASE_URL: postgresql+asyncpg://qec:${QEC_DB_PASSWORD:?set it in .env.production - scripts/verdict_box_bootstrap.sh generates one}@postgres:5432/qecentral
+      NEXUS_DATABASE_URL_SUBSTRATE: postgresql+asyncpg://qec_substrate:${QEC_SUBSTRATE_DB_PASSWORD:?set it in .env.production - scripts/verdict_box_bootstrap.sh generates one}@postgres:5432/nexus
       # M0.5 T-SEC-01: no default (see the qe-central service above).
       NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?NEXUS_JWT_SECRET must be set to a strong random value (e.g. openssl rand -hex 32)}
       REPO_INTEL_WORKDIR_ROOT: /app/service/data/repos
