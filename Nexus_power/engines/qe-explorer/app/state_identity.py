@@ -473,10 +473,53 @@ def _is_password(control: dict[str, Any]) -> bool:
     return it == "password"
 
 
+def _selected_option(raw: str, value: str, control: Mapping[str, Any]) -> str:
+    """The option this member contributes to its question's row, or "".
+
+    ``value_committed`` arrives in TWO shapes, both real, and a rule that knows
+    only one of them silently drops half the applications we crawl
+    (``inventory_js.valueCommitted``):
+
+      * a NATIVE ``<input type=radio|checkbox>`` reports ``el.checked`` as the
+        string ``"true"`` or ``"false"``;
+      * a COMPONENT-LIBRARY choice (``<button role=radio>`` — Radix, shadcn,
+        MUI, Headless UI) reads ``aria-checked`` and, in that function's own
+        words, "mirrors the native branch exactly" — ``"true"``/``"false"``,
+        plus ``"mixed"`` for a tri-state checkbox.
+
+    So for a GROUP MEMBER the committed value is a checked STATE and never the
+    option: the member's own accessible name is the answer. The rendered-text
+    branch of that function belongs to combobox/listbox TRIGGERS, which are
+    single controls rather than members, so it cannot arrive here from a real
+    crawl — it is accepted anyway, because a fixture that describes a choice by
+    its chosen option is describing the same fact and should not be told it is
+    wrong.
+
+    ``"mixed"`` returns "" deliberately. It is neither checked nor unchecked,
+    and inventory_js refuses to collapse it into either because "reporting it as
+    either would be a fabricated answer". The same restraint applies here.
+
+    NOTE what is deliberately NOT in the negative list: ``"no"`` and ``"0"``.
+    Both are ordinary ANSWERS in this domain — every health question on the
+    target funnels is Yes/No — and listing them would read a real answer as an
+    absence.
+    """
+    normalized = str(raw).strip().lower()
+    if normalized in ("", "false", "mixed"):
+        return ""
+    if normalized == "true":
+        return str(control.get("name") or "").strip()
+    return value
+
+
 def _form_snapshot(controls: Sequence[dict[str, Any]]) -> tuple[dict[str, str], dict[str, dict]]:
     """Build ``form_snapshot`` (label→scrubbed committed value) + signals."""
     snapshot: dict[str, str] = {}
     signals: dict[str, dict] = {}
+    #: question label -> the option labels its group actually carries, in DOM
+    #: order. Accumulated rather than overwritten, which is what makes the row
+    #: independent of the order the members arrive in.
+    group_answers: dict[str, list[str]] = {}
     for control in controls:
         signal = form_signal_for(control)
         if signal is None:
@@ -506,10 +549,53 @@ def _form_snapshot(controls: Sequence[dict[str, Any]]) -> tuple[dict[str, str], 
         secret = _is_password(control)
         raw = control.get("value_committed") or ""
         value = emit.scrub_value(raw, is_secret=secret).value
-        # A question is one row fed by several controls. The ANSWER is whichever
-        # option carries a committed value; an unselected sibling arriving later
-        # must not erase it.
-        if not (label in snapshot and snapshot[label] and not value):
+        # A question is one row fed by several controls, and THE ROW NAMES THE
+        # ANSWER.
+        #
+        # The first attempt at this kept a checked-state and tried to stop an
+        # unselected sibling erasing a selected one with
+        # ``not (label in snapshot and snapshot[label] and not value)``. For a
+        # radio ``value`` is ``value_committed`` — the string "true" or "false",
+        # never "" — so ``not value`` is ``not "false"``, which is False. The
+        # guard never fired and the LAST member in DOM order always won:
+        #
+        #     [Term 10 SELECTED, Term 20 unselected]  ->  {"Term product": "false"}
+        #     [Term 20 unselected, Term 10 SELECTED]  ->  {"Term product": "true"}
+        #
+        # So an answered question could read as unanswered, the same state
+        # hashed differently depending on DOM order, and two DIFFERENT answers
+        # to one question hashed the SAME — the same-shape collapse, rebuilt
+        # inside the fix for the naming bug.
+        #
+        # Recording the SELECTED OPTION'S LABEL settles all three at once and
+        # trades nothing away: the row is still keyed by the question (which is
+        # what aee5214 was for), it now says which option was taken, and it no
+        # longer depends on the order the members happen to arrive in. Option
+        # labels are product UI text — the same class as the key itself and as
+        # ``options`` in the signal beside it — so nothing user-supplied enters
+        # the snapshot by this path.
+        # A RADIO IS ALWAYS ONE ANSWER AMONG SEVERAL, group_id or not: the id is
+        # what build_inventory stamps, and a fixture that omits it is still
+        # describing a choice. A checkbox is its own whole question UNLESS it is
+        # grouped, where the same "one question, several answers" shape applies.
+        ckind = str(control.get("kind") or "").strip().lower()
+        is_member = ckind == "radio" or (
+            ckind == "checkbox" and str(control.get("group_id") or "").strip())
+        if is_member:
+            chosen = group_answers.setdefault(label, [])
+            selected = _selected_option(raw, value, control)
+            if selected and selected not in chosen:
+                chosen.append(selected)
+            # A group with nothing selected is an UNANSWERED question and says
+            # so with "", which no option label can collide with. A multi-select
+            # group holds every option it carries, in DOM order.
+            snapshot[label] = ", ".join(chosen)
+        elif not (label in snapshot and snapshot[label] and not value):
+            # A control that is its own whole question keeps its committed value
+            # exactly as before — free text, and a standalone checkbox whose
+            # true/false IS the answer. The original non-erasing guard is kept
+            # verbatim for this path: two controls can still share one declared
+            # question, and a later empty one must not blank the answer.
             snapshot[label] = value
         if secret:
             # A password input refines to kind 'text' (its password-ness lives in
