@@ -20,7 +20,8 @@ reproducibility gap.
 | A4 | Record a crawl-wide performance baseline | **INSTRUMENT DELIVERED + RUN; baseline NOT committed** — no quiet machine; the run found a reproducible 61 s stall |
 | A5 | Require *both* CI lanes before merge | **BLOCKED ON ACCESS** — script and workflow fixes delivered; the push that would let any lane report is denied to this machine |
 | A5 · *correction 2026-08-31* | — | **THE ACCESS BLOCK IS GONE.** The `gh` token now reports `admin: true` on `KVRMtech/nexusqa` and pushes have been landing over the `origin-https` remote since 2026-08-27. §5's "Step 1 is the gate" no longer holds; steps 2–5 of that handover are unblocked and still not done |
-| H1 | Nothing deploys without a green CI run | **BUILT AND DEMONSTRATED** — §9. `deploy.ps1` refuses a red sha before it pushes (three live refusals + a positive control); reconciliation and bootstrap-trigger removal NOT done |
+| H1 | Nothing deploys without a green CI run | **BUILT AND DEMONSTRATED** — §9. `deploy.ps1` refuses a red sha before it pushes (three live refusals + a positive control) |
+| H1 · *closure 2026-08-31* | Reconciliation + refusal proof | **CLOSED** — §10. `origin/develop` reconciled at `dd9351a` (no force-push, `ba4fd8f` preserved); branch protection proven by a REFUSED ADMIN merge on a failing check. Bootstrap trigger deliberately retained, precondition stated in §10.3 |
 
 ---
 
@@ -1023,3 +1024,106 @@ recommendation. Until one is taken the audit will keep failing, correctly.
   lanes remain advisory.
 * **Nothing was deployed to the VM in this session.** The fleet still runs
   whatever it ran before.
+
+---
+
+## §10 · H1 closure — the reconciliation landed, and the refusal is proven
+
+**Status: H1 scope bullets 1 and 2 CLOSED. Bullet 3 half closed — branch
+protection is now proven by a refused admin merge; the rollback drill is not
+automated per-deploy.**
+
+### §10.1 · The two histories are one
+
+`origin/develop` had been a single flattened `ba4fd8f` ("Initial commit",
+**2026-04-14**) sharing no history with any working branch. It is now
+`dd9351a`, and every claim §6 of `BRANCH_RECONCILIATION_SCOPE.md` made for
+Option D held when executed:
+
+```
+$ gh pr merge 2 --merge          →  merged, 18/18 required checks green
+$ git rev-parse origin/develop   →  dd9351a
+$ git merge-base origin/develop feat/qec-dynamic-catalog-p0-p6
+                                 →  d5130e4843ff   PRs are POSSIBLE
+$ git merge-base --is-ancestor ba4fd8f origin/develop
+                                 →  true           nothing destroyed
+```
+
+No force-push. No protection weakened. No path migration. The 2026-04-14
+snapshot is still reachable, so the operation is reversible by revert rather
+than by archaeology.
+
+**What this unblocked, and it is the whole point:** until this merge, no branch
+in this repository could open a pull request at all, so no team's work could be
+reviewed by pull request and three workflows had never once executed. The first
+PR opened after it ran **32 checks where a push had only ever run 4**.
+
+### §10.2 · Branch protection, proven by refusal
+
+Configuration is not evidence. The M0 pattern, executed live on
+`gate0/prove-refusal-2026-08-31` — a branch cut from the reconciled `develop`,
+carrying one deliberate `F811` redefinition, which `ruff.toml` selects:
+
+```
+lint conclusion: FAILURE
+
+$ gh pr merge 3 --merge --admin
+GraphQL: 18 of 18 required status checks have not succeeded:
+         11 expected and 1 failing. (mergePullRequest)
+
+$ gh pr merge 3 --merge
+X Pull request KVRMtech/nexusqa#3 is not mergeable:
+  the base branch policy prohibits the merge.
+
+PR #3: state=OPEN  mergeStateStatus=BLOCKED  — NOT merged
+```
+
+Two facts worth separating, because only the second is the interesting one:
+
+* an ordinary merge is refused by the base branch policy;
+* **an ADMIN merge is refused too.** `enforce_admins: true` is not decorative —
+  the repository owner cannot wave a failing check through. That is the property
+  the M0 record claimed and this is it, re-proven on the reconciled branch.
+
+This proof could not have been run before §10.1. `gate0_require_ci_lanes.sh`'s
+header has carried the recipe since it was written, and its own note said the
+proof "must therefore be run from a branch cut from `origin/develop`, not from
+this one" — which was impossible while `origin/develop` shared no history with
+anything.
+
+The proof branch and PR #3 were closed and deleted immediately after the refusal
+was recorded. `git ls-remote --heads origin gate0/prove-refusal-2026-08-31`
+returns nothing.
+
+### §10.3 · The bootstrap trigger stays, and this is the reason
+
+H1's scope says "remove the bootstrap trigger", and `ci.yml`'s own comment says
+"remove once the histories below are reconciled". The histories are reconciled.
+**The trigger is deliberately NOT removed, because removing it today would
+create the exact hole H1 exists to close.**
+
+`ci.yml` fires on `pull_request: [main, develop]` and on pushes to the two
+bootstrap branches. The working trunk `feat/qec-dynamic-catalog-p0-p6` is still
+where ~9 concurrent sessions commit directly. Remove its push trigger before
+that flow moves to pull requests and **every one of those commits gets no CI run
+at all** — taking "every trunk commit has a CI run" from bad to zero.
+
+The removal has a precondition, and it is not a date: **the working trunk's
+content must reach `develop` through Team X's merge train (weeks 9–10), after
+which `develop` is the trunk and pull requests are the only route in.** Removing
+the line at that moment costs nothing and closes the loop. Removing it now
+trades a measured gap for a total one.
+
+Recorded here rather than left as a silent omission, because the next reader
+will otherwise find a scope bullet that looks skipped.
+
+### §10.4 · What H1 closed, measured
+
+| bullet | state | evidence |
+|---|---|---|
+| Reconcile the two histories so PRs work | **CLOSED** | §10.1 — `dd9351a`; merge-base exists; 32 checks on the first PR |
+| One remote of record: deploy refuses a SHA with no green run on `origin` | **CLOSED** | §9.4 — three live refusals + a positive control; `mine` is now a mirror step behind the gate |
+| Branch protection proven by a refused admin merge | **CLOSED** | §10.2 — admin merge refused on a failing required check |
+| Rollback drill automated and run on every deploy | **NOT DONE** | `deploy.ps1` runs `gate_rollback.sh` on a red gate, which is not the same as a drill on every deploy |
+| Remove the bootstrap trigger | **DEFERRED, with a stated precondition** | §10.3 |
+| Every trunk commit has a CI run | **NOT MET, and structurally unreachable as written** | §9.6 — a push of N commits fires ONE run; `cancel-in-progress` kills it when the next push lands |
