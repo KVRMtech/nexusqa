@@ -662,3 +662,7 @@ def scan_resume_state(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "next_frame_index": next_frame,
         "last_timestamp_ms": last_ts,
     }
+
+
+import os
+import os  # PROOF ONLY - deliberate F811, do not merge
