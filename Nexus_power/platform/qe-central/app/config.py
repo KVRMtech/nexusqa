@@ -208,6 +208,22 @@ class Settings(BaseSettings):
     #: an honest count — never silently dropped, never extrapolated.
     journey_path_enum_cap: int = Field(
         default=512, alias="QEC_JOURNEY_PATH_ENUM_CAP")
+    #: WHICH DOOR TO A RUNNABLE JOURNEY IS TRIED FIRST (Tier 2).
+    #:
+    #: A journey's runnability used to be a property of whether some OTHER
+    #: artifact-level case happened to walk the same pages in the same order
+    #: (``journey_case_linker`` ADOPTION). M2.4 built the alternative — the
+    #: journey compiles on its own walk — but left it as the fallback, so the
+    #: adopted case still won wherever one existed, and an adopted case can
+    #: assert things the journey never claimed.
+    #:
+    #: ON (default): the journey's OWN evidence is tried first and adoption is
+    #: the fallback for a journey too shallow to compile. OFF restores the
+    #: pre-Tier-2 precedence exactly — kept because "replace adoption" is a
+    #: change of which evidence a run rests on, and a fleet that needs to go
+    #: back must not need a deploy to do it.
+    journey_compile_first: bool = Field(
+        default=True, alias="QEC_JOURNEY_COMPILE_FIRST")
     #: Env-level switch for planned branch walks (C4). BOTH this AND the
     #: tenant's ``branch_walks_enabled`` flag must be on (fail-closed).
     branch_walks_enabled: bool = Field(
