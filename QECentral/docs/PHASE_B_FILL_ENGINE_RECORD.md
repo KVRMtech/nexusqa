@@ -278,16 +278,35 @@ hypothesis, and this record does not carry hypotheses as findings.
 > What this does and does not change. The **crossing stands** — agent mode
 > answers choices through the generator, not through the unblock experiment,
 > and the user-mode control stopped on step 0's `Gender` long before any radio
-> was reached, so the measured pair in the table above is unaffected. What is
-> now **less certain is the interpretation of the silence**: an unanswered
-> radio leaving the form genuinely invalid is a *better* candidate cause for
-> the zod refusal than the re-mount hypothesis named above, and it would mean
-> B1-S found nothing because there was a real refusal the application still
-> did not render — or because the refusal was about a field the reader did
-> reach. A post-fix re-crawl may NAME a rejection where this one found
-> silence. That re-crawl is owed anyway for provenance (below); it now settles
-> two questions instead of one. Team H (`nexusqa-6f`) is carrying it, and has
-> the required flags.
+> was reached, so the measured pair in the table above is unaffected.
+>
+> **The obvious follow-on hypothesis — "an unanswered radio left the form
+> invalid, and that is why zod refused" — is REFUTED by this run's own
+> bundle.** Checked rather than reasoned about:
+>
+>     Tobacco "No"   provenance=synthesized  filled=True  widget=radio_group
+>                    choice='true'
+>     Tobacco "Yes"  provenance=group_sibling  filled=False   (correct: the
+>                    browser owns exclusivity; the sibling is not a gap)
+>     filled_by_kind: {... 'radio': 1 ...}
+>
+> The radio was answered, by the persona's own tobacco rung. The commit
+> `044ca10` restored `_radio_unblock_groups`, which is the **unblock
+> experiment** — it runs only where the fill DECLINED a question. Here the
+> fill did not decline; it answered. So the regression was live during this
+> run and **did not bite it**, and the silence in §7.3 still has no diagnosed
+> cause. The re-mount candidate named above returns to being the leading one,
+> still unproven.
+>
+> The same bundle incidentally live-proves two Phase-B generalisations that
+> had only unit coverage: `Product → 'term life - 10 year'` and
+> `Premium Mode → 'monthly'`, both `synthesized` from the household rather
+> than taken from list order (§5).
+>
+> A post-fix re-crawl is still owed **for provenance**, and it is still worth
+> running — but it should not be expected to name a rejection on the strength
+> of the radio fix, because on this evidence the radio path was never the
+> blocker. Team H (`nexusqa-6f`) is carrying it and has the required flags.
 
 #### The bundle is REFUSED, on two grounds, and both are recorded
 
