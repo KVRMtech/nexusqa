@@ -151,7 +151,7 @@ export default function CoveragePanel({ appId }: { appId: string }) {
 }
 
 function labelForAccount(key: string): string {
-  return key.replaceAll('_', ' ');
+  return key.replace(/_/g, ' ');
 }
 
 function ClientCoverageSummary({ report }: { report: {
