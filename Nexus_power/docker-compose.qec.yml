@@ -287,6 +287,27 @@ services:
     # one second can never collapse into a missed reload the way an mtime
     # compare could. The watcher initialises L to the current content so boot
     # never fires a spurious HUP at the entrypoint shell (PID 1 pre-exec).
+    #
+    # THEN HAND THE FENCE ROOT TO qe-central. This container is root and
+    # qe-central runs as uid 999, so everything seeded above lands root-owned
+    # and mode 644/755 - readable by qe-central, WRITABLE BY NOBODY BUT ROOT.
+    # qe-central then cannot write crawls/allowlist.<crawl_id>.txt, refuses to
+    # dispatch a crawl it could not fence, and every crawl on the box dies at:
+    #
+    #   503 egress allowlist unavailable - refusing to dispatch a crawl that
+    #       could not be network-fenced
+    #
+    # Measured on verdict-box 2026-09-01/02: this took out crawling entirely on
+    # two consecutive deploys. The refusal was correct - a crawl with no fence
+    # must not run - but the cause was a chown, not the build, and the deploy
+    # gate rolled a good build back twice on the strength of it.
+    #
+    # Unconditional, not create-only: the volume PERSISTS, so a root-owned
+    # crawls/ from an earlier boot outlives any fix that only touches the files
+    # it creates itself. Non-fatal and loud: squid still starting means egress
+    # stays fenced and the 503 is still an honest refusal, but the log line now
+    # names the cause. squid reads these as `proxy` through the o+r/o+x bits,
+    # which chown preserves.
     entrypoint: ["/bin/sh", "-c"]
     command:
     - >
@@ -296,6 +317,7 @@ services:
           > /etc/squid/allowlist/crawls.conf; } &&
       { [ -f /etc/squid/allowlist/reload.stamp ] ||
         echo boot > /etc/squid/allowlist/reload.stamp; } &&
+      { chown -R ${QEC_FENCE_UID:-999}:${QEC_FENCE_GID:-999} /etc/squid/allowlist || echo 'FENCE-OWNERSHIP-FAILED: qe-central cannot write the per-crawl fence; every dispatch will 503' >&2; } &&
       { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
       { S=/etc/squid/allowlist/reload.stamp; L=$$(cat "$$S" 2>/dev/null); while :; do
           C=$$(cat "$$S" 2>/dev/null || echo 0);
@@ -365,6 +387,7 @@ services:
           > /etc/squid/allowlist/crawls.conf; } &&
       { [ -f /etc/squid/allowlist/reload.stamp ] ||
         echo boot > /etc/squid/allowlist/reload.stamp; } &&
+      { chown -R ${QEC_FENCE_UID:-999}:${QEC_FENCE_GID:-999} /etc/squid/allowlist || echo 'FENCE-OWNERSHIP-FAILED: qe-central cannot write the per-crawl fence; every dispatch will 503' >&2; } &&
       { chown proxy:proxy /dev/stdout /dev/stderr 2>/dev/null || true; } &&
       { S=/etc/squid/allowlist/reload.stamp; L=$$(cat "$$S" 2>/dev/null); while :; do
           C=$$(cat "$$S" 2>/dev/null || echo 0);
