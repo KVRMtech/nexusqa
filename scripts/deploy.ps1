@@ -412,11 +412,74 @@ Write-Host "`n[4/4] Golden crawl gate (this runs a REAL crawl; ~5-40 min)..." -F
     $ErrorActionPreference = "Continue"
     # No backtick continuation here: a single trailing space after one turns the
     # whole block into a parse error, which is exactly how this shipped broken.
-    $gateCmd = "cd $VM_SRC/Nexus_power && bash scripts/golden_crawl_gate.sh $GoldenAppId"
-    # Tee the transcript: the gate's last line carries a machine-readable verdict,
-    # which is the only thing that survives an SSH drop that eats the exit code.
-    $gateOut = (& gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$gateCmd" 2>&1 | Tee-Object -Variable _t | Out-String)
-    $gateExit = $LASTEXITCODE
+    # RUN IT DETACHED AND POLL, rather than holding one pipe open for an hour.
+    #
+    # The gate legitimately takes ~45 minutes. Holding a single ssh session open
+    # for that long makes the whole verification hostage to one TCP connection,
+    # and on 2026-09-02 that connection died at minute 88 with "Network error:
+    # Connection reset by peer". The crawl itself was running fine; the pipe was
+    # not. Every long-lived-pipe failure looks like a build failure from here.
+    #
+    # setsid + nohup + </dev/null detaches the gate from this session entirely,
+    # so it keeps running whatever happens to the operator's laptop, VPN or
+    # wifi. The rc file is written by the SAME subshell that runs the gate, so
+    # its existence is the completion signal and its content is the gate's own
+    # exit code — never the ssh client's.
+    #
+    # Polls are short, cheap connections. A FAILED poll is just a retry: it can
+    # no longer kill the run, which is the whole point of the change.
+    #
+    # NOTE the backtick in `$?: PowerShell escapes with a BACKTICK, not a
+    # backslash. Written \$? this expands PowerShell's own $? (a boolean) and
+    # ships `echo \True` to the box, so the rc file never holds a number, the
+    # poll never matches, and every deploy hangs the full 90 minutes before
+    # exiting 2. Caught by expanding the string before trusting it.
+    $stamp    = Get-Date -Format "yyyyMMddHHmmss"
+    $gateLog  = "/tmp/gate.$stamp.log"
+    $gateRc   = "/tmp/gate.$stamp.rc"
+    $startCmd = "cd $VM_SRC/Nexus_power && setsid nohup sh -c 'bash scripts/golden_crawl_gate.sh $GoldenAppId > $gateLog 2>&1; echo `$? > $gateRc' </dev/null >/dev/null 2>&1 & echo GATE_STARTED"
+    $startOut = (& gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="$startCmd" 2>&1 | Out-String)
+    if ($startOut -notmatch "GATE_STARTED") {
+        Write-Host "`nCould not START the gate on the box:" -ForegroundColor Red
+        Write-Host $startOut
+        Write-Host "NOT rolling back: the gate never ran, so nothing is known about this build." -ForegroundColor Yellow
+        exit 2
+    }
+    Write-Host "  gate running detached on the box (log: $gateLog)" -ForegroundColor DarkGray
+    Write-Host "  polling every 30s; a dropped poll is retried, not fatal." -ForegroundColor DarkGray
+
+    $gateExit   = $null
+    $pollFails  = 0
+    $maxMinutes = 90
+    $deadline   = (Get-Date).AddMinutes($maxMinutes)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 30
+        $probe = (& gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="cat $gateRc 2>/dev/null || echo RUNNING" 2>&1 | Out-String)
+        # PARSE THE LAST NON-EMPTY LINE, not the whole blob. gcloud merges ssh
+        # warnings ("Permanently added ... to the list of known hosts") into the
+        # stream, so the probe is rarely just the number and an anchored match
+        # against the whole string never fires — every deploy would then poll out
+        # the full 90 minutes and report a healthy build as unverified.
+        $probeLast = ($probe -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 1)
+        if ($probeLast -match "^\s*(\d+)\s*$") { $gateExit = [int]$Matches[1]; break }
+        if ($probeLast -match "RUNNING") { $pollFails = 0; continue }
+        # Neither a number nor RUNNING: the probe itself failed. Tolerate a run
+        # of these — the gate is unaffected by our inability to ask about it.
+        $pollFails++
+        Write-Host "  poll failed ($pollFails) - the gate is unaffected; retrying" -ForegroundColor DarkGray
+        if ($pollFails -ge 20) {
+            Write-Host "`n20 consecutive polls failed - cannot reach the box." -ForegroundColor Yellow
+            Write-Host "NOT rolling back: this says nothing about the build. The gate may" -ForegroundColor Yellow
+            Write-Host "still be running; read $gateLog on the box." -ForegroundColor Yellow
+            exit 2
+        }
+    }
+    if ($null -eq $gateExit) {
+        Write-Host "`nGate did not finish within $maxMinutes minutes." -ForegroundColor Yellow
+        Write-Host "NOT rolling back: a slow gate is not a failed build. Read $gateLog." -ForegroundColor Yellow
+        exit 2
+    }
+    $gateOut = (& gcloud compute ssh "$VM_USER@$VM_NAME" --zone="$VM_ZONE" --project="$VM_PROJECT" --command="cat $gateLog" 2>&1 | Out-String)
     $ErrorActionPreference = "Stop"
 
     # SHOW THE GATE ITS OWN VOICE. Tee-Object -Variable captures without echoing,
