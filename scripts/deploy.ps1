@@ -419,6 +419,24 @@ Write-Host "`n[4/4] Golden crawl gate (this runs a REAL crawl; ~5-40 min)..." -F
     $gateExit = $LASTEXITCODE
     $ErrorActionPreference = "Stop"
 
+    # SHOW THE GATE ITS OWN VOICE. Tee-Object -Variable captures without echoing,
+    # so for two consecutive deploys the gate printed exactly why it refused the
+    # build and NOBODY EVER SAW IT - the console showed only this script's
+    # one-line paraphrase, and diagnosing it meant SSHing in afterwards and
+    # reading Postgres by hand, after the rollback had already destroyed the
+    # containers holding the logs.
+    #
+    # A gate that cannot explain a refusal is not a gate, it is a coin toss with
+    # extra steps. The transcript is printed unconditionally - a PASS is worth
+    # reading too, because it is the only place the funnel numbers appear.
+    Write-Host "`n--- golden crawl gate transcript -------------------------------"
+    if ([string]::IsNullOrWhiteSpace($gateOut)) {
+        Write-Host "  (the gate produced NO output - suspect the SSH transport, not the build)" -ForegroundColor Yellow
+    } else {
+        Write-Host $gateOut.TrimEnd()
+    }
+    Write-Host "--- end gate transcript (exit=$gateExit) -----------------------`n"
+
     # ── THE ROLLBACK DECISION MATRIX (T-GT-05) ─────────────────────────────
     # Rollback follows DEPLOYMENT CORRECTNESS, never monitoring availability.
     #
@@ -440,15 +458,37 @@ Write-Host "`n[4/4] Golden crawl gate (this runs a REAL crawl; ~5-40 min)..." -F
     $gateVerdict = ""
     if ($gateOut -match 'GATE_VERDICT=(\w+)') { $gateVerdict = $Matches[1] }
 
+    # NO VERDICT LINE => NO ROLLBACK, WHATEVER THE EXIT CODE SAYS.
+    #
+    # The matrix below always said "SSH dropped, no verdict line -> NO, abort",
+    # but the branches read `-or $gateExit -eq 1`, and the TRANSPORT shares exit
+    # code 1 with the gate. Measured 2026-09-02: an 88-minute gate run ended
+    # `FATAL ERROR: Network error: Connection reset by peer`, plink exited 1, and
+    # a build nobody had found any fault with was rolled back for it.
+    #
+    # The gate's exit code is only meaningful when the gate SPOKE. Its verdict
+    # line is printed by `finish` on every path it controls, so its absence means
+    # the gate never reached a conclusion — which is the definition of learning
+    # nothing about the build, and the fleet must not move on nothing.
+    if (-not $gateVerdict) {
+        Write-Host "`nGATE REACHED NO VERDICT - no GATE_VERDICT line in the transcript." -ForegroundColor Yellow
+        Write-Host "That is a TRANSPORT failure (dropped SSH, killed session), not a" -ForegroundColor Yellow
+        Write-Host "statement about this build. NOT rolling back: exit $gateExit from the" -ForegroundColor Yellow
+        Write-Host "ssh client is not the gate's exit code." -ForegroundColor Yellow
+        Write-Host "The fleet stays on this build and this build is UNVERIFIED. Re-run:" -ForegroundColor Yellow
+        Write-Host "  bash scripts/golden_crawl_gate.sh $GoldenAppId" -ForegroundColor Yellow
+        exit 2
+    }
+
     if ($gateExit -eq 0 -and $gateVerdict -eq "PASS") {
         # fall through to finalize
     }
-    elseif ($gateVerdict -eq "REGRESSION" -or $gateExit -eq 3) {
+    elseif ($gateVerdict -eq "REGRESSION") {
         Write-Host "`nGOLDEN CRAWL GATE FAILED - the funnel regressed on this deploy." -ForegroundColor Red
         Invoke-GateRollback -Reason "funnel regression" | Out-Null
         exit 1
     }
-    elseif ($gateVerdict -eq "APP_UNHEALTHY" -or $gateExit -eq 1) {
+    elseif ($gateVerdict -eq "APP_UNHEALTHY") {
         # The gate confirmed the host was healthy and the containers were up, and
         # the application STILL could not produce a crawl. That is a statement
         # about this build. Live example: a 409 single-flight lock let an ungated
@@ -457,7 +497,7 @@ Write-Host "`n[4/4] Golden crawl gate (this runs a REAL crawl; ~5-40 min)..." -F
         Invoke-GateRollback -Reason "deployed application unhealthy" | Out-Null
         exit 1
     }
-    elseif ($gateVerdict -eq "HOST_UNAVAILABLE" -or $gateExit -eq 4) {
+    elseif ($gateVerdict -eq "HOST_UNAVAILABLE") {
         Write-Host "`nGATE ABORTED - the HOST is unhealthy. NO verdict on this build." -ForegroundColor Yellow
         Write-Host "NOT rolling back: infrastructure failure is not deployment failure." -ForegroundColor Yellow
         Write-Host "The fleet stays on this build, and this build is UNVERIFIED." -ForegroundColor Yellow
