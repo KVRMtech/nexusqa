@@ -80,38 +80,58 @@ echo "    $TARGET"
 echo "    env_kind=$ENV_KIND  expires=$EXPIRES"
 echo
 
-# Written via a file rather than an inline literal: the basis and terms are
-# free prose and would otherwise have to survive two levels of shell quoting
-# into SQL, which is how an attestation ends up silently truncated.
+# Built as a SQL FILE read by the psql CLIENT, not via pg_read_file(). The
+# server runs as `postgres` and `docker cp` lands files owned by root, so
+# pg_read_file() fails with "Permission denied" while reporting success around
+# it — the first run of this script wrote an EMPTY attestation that way and the
+# guard would have gone on refusing with no clue why.
+#
+# Values are passed as argv, never interpolated into the heredoc: a basis or
+# terms string containing an apostrophe would otherwise break out of the shell
+# quoting, the SQL quoting, or both.
 TMP="$(mktemp)"
-python3 - "$TMP" <<PY
+python3 - "$TMP" "$APP" "$SIGNER" "$ENV_KIND" "$EXPIRES" "$NOW" "$BASIS" "$TERMS" <<'PY'
 import json, sys
-json.dump({
-    "env_kind": "$ENV_KIND",
-    "attested_by": """$SIGNER""",
-    "expires_at": "$EXPIRES",
-    "preflight": {"passed": True, "passed_by": """$SIGNER""", "passed_at": "$NOW"},
+tmp, app, signer, env_kind, expires, now, basis, terms = sys.argv[1:9]
+doc = {
+    "env_kind": env_kind,
+    "attested_by": signer,
+    "expires_at": expires,
+    "preflight": {"passed": True, "passed_by": signer, "passed_at": now},
     "authorization": {
-        "authorized": True,
-        "authorized_by": """$SIGNER""",
-        "authorized_at": "$NOW",
-        "basis": """$BASIS""",
+        "authorized": True, "authorized_by": signer,
+        "authorized_at": now, "basis": basis,
     },
     "rules_of_engagement": {
-        "signed": True,
-        "signed_by": """$SIGNER""",
-        "signed_at": "$NOW",
-        "terms": """$TERMS""",
+        "signed": True, "signed_by": signer, "signed_at": now, "terms": terms,
     },
     "reset_procedure": "",
-}, open(sys.argv[1], "w"), indent=2)
+}
+lit = json.dumps(doc).replace("'", "''")          # SQL single-quote escaping
+with open(tmp, "w", encoding="utf-8") as fh:
+    sql = "UPDATE client_apps SET env_attestation = '%s'::jsonb WHERE app_id = '%s';" % (
+        lit, app.replace("'", "''"))
+    fh.write(sql + chr(10))
 PY
 
-docker cp "$TMP" "$PG:/tmp/_attest.json" >/dev/null
+docker cp "$TMP" "$PG:/tmp/_attest.sql" >/dev/null
 rm -f "$TMP"
-docker exec "$PG" psql -U "$PG_USER" -d "$DB" -A -t -c \
-  "UPDATE client_apps SET env_attestation = pg_read_file('/tmp/_attest.json')::jsonb WHERE app_id = '$APP';"
-docker exec "$PG" sh -c "rm -f /tmp/_attest.json"
+OUT=$(docker exec "$PG" psql -U "$PG_USER" -d "$DB" -A -t -v ON_ERROR_STOP=1 -f /tmp/_attest.sql 2>&1)
+RC=$?
+docker exec "$PG" sh -c "rm -f /tmp/_attest.sql"
+if [ $RC -ne 0 ] || [ "${OUT#UPDATE }" = "$OUT" ]; then
+  echo "ATTESTATION NOT WRITTEN: $OUT" >&2
+  exit 1
+fi
+echo "  $OUT"
+
+# A write that reports success and stores nothing is the failure mode that made
+# the first version of this script useless. Prove the record is really there.
+CHECK=$(docker exec "$PG" psql -U "$PG_USER" -d "$DB" -A -t -c   "SELECT (env_attestation->'authorization'->>'authorized') || '/' || coalesce(env_attestation->>'attested_by','') FROM client_apps WHERE app_id = '$APP';" | tr -d ' ')
+if [ "$CHECK" != "true/$SIGNER" ]; then
+  echo "ATTESTATION DID NOT PERSIST (read back: '$CHECK')" >&2
+  exit 1
+fi
 
 echo
 echo "--- recorded ---"
