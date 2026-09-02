@@ -62,13 +62,38 @@ sys.path.insert(0, str(EXPLORER))
 #:   journeys         - flow_summary.journeys_completed
 DECLARED: dict[str, dict[str, Any]] = {
     "acme-life": {
-        "population": {"flows": 3, "walked_depth": 3, "proven_depth": 3},
-        "crossings": 2,
+        "population": {"flows": 2, "walked_depth": 3, "proven_depth": 3},
+        "crossings": 1,
         "confirmation": True,
         "journeys": 1,
-        "note": "Completes. Two crossings of 'Bind policy' at two URLs "
-                "(#/review and #/quote) = two boundary_keys, each crossed "
-                "once; the #/review one lands on a dialog confirmation.",
+        # THE COUNT WENT DOWN BECAUSE THE ENGINE GOT BETTER.
+        #
+        # Bisected to 7436cde ("feat(crossing): answer the challenge an
+        # approved commit raises"), its parent 3b2a28d confirmed good, both
+        # measured against a locally served copy of THIS fixture:
+        #
+        #   3b2a28d   flows 3, crossed 2, journeys_completed 0
+        #             Bind policy @ #/review  outcome=dialog       confirmed=False
+        #             Bind policy @ #/quote   outcome=dom_changed  confirmed=False
+        #
+        #   7436cde+  flows 2, crossed 1, journeys_completed 1
+        #             Bind policy @ #/review  outcome=confirmation confirmed=True
+        #
+        # The old two were clicks that never BOUND anything: the crawler could
+        # not answer the bind challenge modal, so it stalled at each one and
+        # wandered on to a third flow. Now the modal is answered and the policy
+        # is really bound. The second crossing is not lost, it is IMPOSSIBLE —
+        # index.html renders the button as (state.bound ? "" : <Bind policy>),
+        # so a real bind removes it.
+        #
+        # One CONFIRMED crossing is strictly stronger than two unconfirmed ones,
+        # and journeys_completed went 0 -> 1 — the number this file exists to
+        # defend. Lowering a declared count needs a written reason; this is it.
+        "note": "Completes. ONE crossing of Bind policy at #/review, actually "
+                "bound and confirmed. The button is removed once state.bound "
+                "is true, so a second crossing cannot exist. Before 7436cde "
+                "this read 2 crossings — both unconfirmed clicks that bound "
+                "nothing, with journeys_completed 0.",
     },
     "vkpower-life": {
         "population": {"flows": 3, "walked_depth": 9, "proven_depth": 0},
