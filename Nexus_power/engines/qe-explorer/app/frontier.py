@@ -39,11 +39,35 @@ class FrontierItem:
     key: str = ""
 
 
-def _section_signature(url_template: str) -> str:
+def _section_signature(url_template: str, mount: str = "") -> str:
     """The app SECTION an item belongs to — the first two path segments of its
     (id-collapsed) ``url_template`` (``/account/settings/*`` → ``account/settings``,
-    ``/`` → ``""``).  The unit of novelty for the information-gain planner."""
+    ``/`` → ``""``).  The unit of novelty for the information-gain planner.
+
+    A ``url_template`` carries no scheme, so the HOST is the first segment and
+    this is really "host + first path segment". That is a real section only for
+    an application whose top-level paths differ. For one mounted entirely under
+    a single prefix it is a CONSTANT: every item lands in one section, novelty
+    rank merely increments, and the information-gain planner silently does
+    nothing whatsoever.
+
+    Measured on parabank.parasoft.com 2026-09-02, whose whole app lives under
+    /parabank/: marketing pages, Swagger docs and banking transactions ALL
+    signed as "parabank.parasoft.com/parabank". Ordering degenerated to FIFO,
+    the docs multiply per click and took 86 of 101 states, and the two real
+    submits were then refused - "SUBMIT window closed, exceeded the
+    request/time budget". /app/, /portal/ and /web/ share the shape.
+
+    ``mount`` strips that application prefix so sections are relative to the
+    app root ("api-docs", "overview.htm", "transfer.htm" - distinct). It
+    defaults to "" and is then byte-for-byte the original function: this module
+    decides traversal order, so the default must move no manifest.
+    """
     path = urlsplit(url_template or "").path or ""
+    if mount:
+        stripped, whole = mount.strip("/"), path.strip("/")
+        if stripped and (whole == stripped or whole.startswith(stripped + "/")):
+            path = whole[len(stripped):]
     segs = [s for s in path.split("/") if s][:2]
     return "/".join(segs)
 
@@ -95,13 +119,17 @@ class Frontier:
     distinct URLs that render the SAME state are visited once.
     """
 
-    def __init__(self, plan_patterns: Sequence[tuple[str, int]] = ()) -> None:
+    def __init__(self, plan_patterns: Sequence[tuple[str, int]] = (),
+                 *, section_mount: str = "") -> None:
         self._heap: list[tuple[int, int, int, int, FrontierItem]] = []
         self._seq = 0
         self._enqueued_keys: set[str] = set()
         #: information-gain planner: items already queued per app section, so a
         #: newly-seen section outranks the Nth sibling of a saturated one.
         self._section_counts: dict[str, int] = {}
+        #: Application mount prefix stripped before sectioning. Empty means the
+        #: original signature exactly, so every existing crawl is unchanged.
+        self._section_mount: str = str(section_mount or "")
         #: CAGED-PLANNER priorities: (lowercased substring, weight 1..3) grounded +
         #: validated in qe-central. A frontier item whose reach key contains a
         #: pattern gets priority -weight (min-heap ⇒ visited earlier). This ONLY
@@ -131,7 +159,7 @@ class Frontier:
         item.key = key
         # Novelty rank = how many items are ALREADY queued from this item's section
         # (the reach key IS the url_template). 0 for the first, growing per sibling.
-        section = _section_signature(key)
+        section = _section_signature(key, self._section_mount)
         novelty_rank = self._section_counts.get(section, 0)
         self._section_counts[section] = novelty_rank + 1
         # An EXPLICIT caller priority (a Phase-2 seed) wins; otherwise the caged
