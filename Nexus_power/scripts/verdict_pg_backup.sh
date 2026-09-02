@@ -76,6 +76,20 @@ backup() {
     sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
     echo "   $db dump = ${sz} bytes -> $out"
     [ "$sz" -gt 1000 ] || { echo "DUMP_TOO_SMALL:$db (refusing to keep a suspect backup)"; rm -f "$out"; exit 1; }
+    # ROW-COUNT MANIFEST, read at the SAME instant as the dump. The drill has to
+    # know what THIS DUMP contained. Comparing a restore against the LIVE
+    # database is only sound while the two are the same snapshot, and the moment
+    # a dump is stored off-host and drilled a day later that stops being true:
+    # every table that gained its FIRST row after the dump reads as data loss.
+    # Measured 2026-09-02: a perfectly recoverable Sep-1 dump was reported
+    # RESTORE_DRILL_FAIL ("do not go to client #2") because explorer_workers and
+    # cost_ledger had gone from 0 rows to 2 and 4 that evening.
+    man="$LOCAL_BACKUP_DIR/${db}_${STAMP}.rowcounts"
+    if ! counts_for "$db" > "$man" 2>/dev/null || [ ! -s "$man" ]; then
+      echo "ROWCOUNTS_FAILED:$db (refusing a dump the drill could not later judge)"
+      rm -f "$out" "$man"; exit 1
+    fi
+
     # An explicitly configured GCS destination is the off-host system of
     # record. Do not report a local-only run as a successful production backup.
     if [ -n "$GCS_BACKUP_BUCKET" ]; then
@@ -85,10 +99,16 @@ backup() {
       if ! gsutil cp "$out" "$GCS_BACKUP_BUCKET/${db}/${db}_${STAMP}.dump" >/dev/null 2>&1; then
         echo "GCS_COPY_FAILED:$db (local dump retained; off-host backup failed)"; exit 1
       fi
+      # The manifest travels WITH the dump: a dump that is off-host but whose
+      # expectation is not cannot be judged from anywhere but this one host.
+      if ! gsutil cp "$man" "$GCS_BACKUP_BUCKET/${db}/${db}_${STAMP}.rowcounts" >/dev/null 2>&1; then
+        echo "GCS_ROWCOUNTS_COPY_FAILED:$db (off-host dump would not be judgeable)"; exit 1
+      fi
       echo "   copied $db to $GCS_BACKUP_BUCKET"
     fi
     # Retention: keep the newest N local dumps per db.
     ls -1t "$LOCAL_BACKUP_DIR/${db}_"*.dump 2>/dev/null | tail -n +"$((BACKUP_RETENTION+1))" | xargs -r rm -f
+    ls -1t "$LOCAL_BACKUP_DIR/${db}_"*.rowcounts 2>/dev/null | tail -n +"$((BACKUP_RETENTION+1))" | xargs -r rm -f
   done
   echo "BACKUP_OK $STAMP"
   emit_textfile_metric verdict_backup_last_success_timestamp_seconds "$(date -u +%s)" \
@@ -111,10 +131,18 @@ alembic_head() {
     "select version_num from alembic_version;" 2>/dev/null | tr -d '[:space:]'
 }
 
-# Restore ONE db's fresh dump into a throwaway and PROVE recovery: (1) the restored
-# DB is at the SAME alembic head as the source, and (2) no table that has rows in
-# the source is EMPTY in the restore (catches the "schema-present but data-missing"
+# Restore ONE db's dump into a throwaway and PROVE recovery: (1) the restored DB is
+# at the SAME alembic head as the source, and (2) no table that HAD ROWS IN THIS
+# DUMP is EMPTY in the restore (catches the "schema-present but data-missing"
 # green-wash the old table-count check let through). Returns non-zero on failure.
+#
+# (2) reads the dump's own .rowcounts manifest, NOT the live database. The two are
+# the same thing only for a dump taken seconds ago; for the off-host copy this
+# drill actually exists to exercise, the live DB has moved on, and every table
+# that gained its first row since is otherwise indistinguishable from data loss.
+# Without a manifest (dumps written before this change) the live comparison is
+# kept but DEMOTED TO A WARNING, and the drill then proves only what it honestly
+# can: the dump restores, at the right schema revision, carrying real rows.
 drill_one() {
   # Lowercase the throwaway DB name: an UNQUOTED `CREATE DATABASE` folds identifiers to
   # lowercase, but pg_restore/-d would use the original mixed-case stamp (…T…Z) and fail
@@ -139,6 +167,24 @@ drill_one() {
       _run pg_dump -U "$PG_USER" -d "$db" -Fc > "$dump" || { echo "DRILL_DUMP_FAIL:$db"; return 1; }
     fi
   fi
+  # The dump's OWN expectation, fetched from beside it.
+  local man="$WORK/drill_${db}.rowcounts" have_manifest=0
+  if [ -n "$latest" ]; then
+    if [ -n "$GCS_BACKUP_BUCKET" ]; then
+      gsutil cp "${latest%.dump}.rowcounts" "$man" >/dev/null 2>&1 && have_manifest=1
+    elif [ -f "${latest%.dump}.rowcounts" ]; then
+      cp "${latest%.dump}.rowcounts" "$man" >/dev/null 2>&1 && have_manifest=1
+    fi
+  fi
+  [ -s "$man" ] || have_manifest=0
+  if [ "$have_manifest" -eq 1 ]; then
+    echo "   expectation: this dump's own rowcounts manifest"
+  else
+    echo "   expectation: NO manifest beside this dump - comparing to the LIVE db,"
+    echo "                so per-table gaps are WARNINGS, not failures (the live db"
+    echo "                has moved on since this dump was taken)."
+  fi
+
   _run psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
   _run psql -U "$PG_USER" -d postgres -c "CREATE DATABASE ${drill};" >/dev/null 2>&1 || { echo "DRILL_CREATE_FAIL:$db"; return 1; }
   _run_i pg_restore -U "$PG_USER" -d "${drill}" --no-owner < "$dump" 2>&1 | tail -3
@@ -153,24 +199,39 @@ drill_one() {
   fi
 
   # (2) per-table row counts — no table with rows in src may be EMPTY in the drill.
-  local empty_restores=0 total_dst=0 dst_tables=0 t
+  local empty_restores=0 total_dst=0 dst_tables=0 t warn_gaps=0
   # set +u for this block: expanding an EMPTY associative array (${!A[@]} / ${#A[@]})
   # trips 'unbound variable' under set -u on this bash; the :- defaults keep it safe.
   set +u
   declare -A SRC=() DST=()
-  while read -r t n; do [ -n "$t" ] && SRC["$t"]="$n"; done < <(counts_for "$db")
+  if [ "$have_manifest" -eq 1 ]; then
+    while read -r t n; do [ -n "$t" ] && SRC["$t"]="$n"; done < "$man"
+  else
+    while read -r t n; do [ -n "$t" ] && SRC["$t"]="$n"; done < <(counts_for "$db")
+  fi
   while read -r t n; do [ -n "$t" ] && DST["$t"]="$n"; done < <(counts_for "$drill")
   dst_tables=${#DST[@]}
   for t in "${!SRC[@]}"; do
     local s="${SRC[$t]:-0}" d="${DST[$t]:-0}"
     total_dst=$(( total_dst + d ))
     if [ "$s" -gt 0 ] && [ "$d" -eq 0 ]; then
-      echo "   EMPTY_RESTORE:$db.$t (src=$s drill=0)"; empty_restores=$(( empty_restores + 1 ))
+      if [ "$have_manifest" -eq 1 ]; then
+        echo "   EMPTY_RESTORE:$db.$t (dump=$s drill=0)"; empty_restores=$(( empty_restores + 1 ))
+      else
+        echo "   WARN_GAP_VS_LIVE:$db.$t (live=$s drill=0 - expected if the table gained its first rows after this dump)"
+        warn_gaps=$(( warn_gaps + 1 ))
+      fi
     fi
   done
   set -u
-  echo "   restored rows total(drill)=$total_dst  tables=$dst_tables  empty_restores=$empty_restores"
+  echo "   restored rows total(drill)=$total_dst  tables=$dst_tables  empty_restores=$empty_restores  warn_gaps=$warn_gaps"
   [ "$empty_restores" -eq 0 ] || rc=1
+  # A restore carrying NO rows at all is data-missing under any expectation, and
+  # is the one thing the manifest-less path must still fail on - otherwise the
+  # demotion above would turn a genuinely empty restore into a pile of warnings.
+  if [ "$total_dst" -eq 0 ]; then
+    echo "   DRILL_RESTORED_NOTHING:$db (schema only - this is not a recoverable backup)"; rc=1
+  fi
 
   _run psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS ${drill};" >/dev/null 2>&1
   return $rc
