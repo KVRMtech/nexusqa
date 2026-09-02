@@ -452,7 +452,33 @@ class ManifestEmitter:
         record = {"type": REC_CRAWL_META, **meta}
         append_record(self.work_dir, self.crawl_id, record)
 
+    #: Locations a BROWSER invents when a navigation fails. They are not states
+    #: of the application under test — they are the browser saying it could not
+    #: load one — and the substrate refuses them outright
+    #: (``substrate/schema._require_http_url`` -> ``invalid_location``).
+    _NON_NAVIGABLE_PREFIXES: tuple[str, ...] = (
+        "chrome-error://", "chrome://", "about:", "edge://", "data:", "blob:",
+    )
+
     def emit_page_state(self, page: PageStateRecord) -> None:
+        # A FAILED NAVIGATION IS NOT A PAGE. Measured 2026-09-02 crawling
+        # parabank.parasoft.com: two navigations failed, Chromium reported the
+        # location as 'chrome-error://chromewebdata/', both were recorded as page
+        # states, and qe-central then refused the ENTIRE crawl at ingest —
+        # discarding 115 page states, 90 crossings and 45 outcome milestones over
+        # two records that described no page at all.
+        #
+        # Dropped LOUDLY, never silently: a vanishing state is exactly the kind of
+        # gap that later reads as "the app has nothing there". The log line names
+        # the location so a real navigation failure stays diagnosable.
+        loc = str(getattr(page, "location", "") or "")
+        if loc.startswith(self._NON_NAVIGABLE_PREFIXES) or not loc:
+            logger.warning(
+                "qec.emit.non_navigable_location_skipped location=%r sequence_index=%s "
+                "— a failed navigation is not a state of the application; not recorded",
+                loc[:200], getattr(page, "sequence_index", "?"),
+            )
+            return
         record = {"type": REC_PAGE_STATE, **asdict(page)}
         append_record(self.work_dir, self.crawl_id, record)
 
