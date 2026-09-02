@@ -117,7 +117,32 @@ PG=nexus-postgres
 #: names its own door rather than inheriting Summit's.
 GATE_ENTRY_CONTROL="${GATE_ENTRY_CONTROL:-New Application}"
 POLL_SECONDS="${GOLDEN_POLL_SECONDS:-60}"
+#: 55 x 60s. Summit's full crawl has been measured twice at ~43 min end to end
+#: (2026-09-02), so the budget stays well clear of it - a healthy run must never
+#: be terminated as a stall.
 MAX_POLLS="${GOLDEN_MAX_POLLS:-55}"
+
+#: WHICH APP THIS BASELINE BELONGS TO.
+#:
+#: golden_crawl_baseline.json is ONE flat set of floors - it is not keyed by
+#: app. The gate accepts any app_id, so pointing it at a different application
+#: silently ratchets that app's funnel against THIS app's numbers. Measured
+#: 2026-09-02 by running the gate on a vkpowerlife app: the SAME run reported
+#: deepest_flow 9 (was 4) and wizard_advances 25 (was 3) as RISES while forms 3
+#: (best 8) and catalog_questions 35 (best 83) came out as FAILS. Rises and
+#: falls together in one run is the signature of two different applications,
+#: not a funnel going backwards - but the verdict was REGRESSION, which inside
+#: a deploy means an automatic rollback of a blameless build.
+#:
+#: The worse form is silent: a mismatched app that happened to run clean under
+#: --update-baseline would RAISE these floors to another app's numbers, and the
+#: real golden app would then fail its own gate for ever. That did not happen -
+#: raising needs --update-baseline AND a clean run, and the baseline was checked
+#: byte-unchanged afterwards - but nothing prevented it.
+#:
+#: Prefers the baseline's own `_app_id` when it grows one; the constant keeps
+#: the guard LIVE today instead of leaving an inert check in the file.
+GOLDEN_APP_EXPECTED="${GOLDEN_APP_EXPECTED:-86203785-1fed-4930-8edf-d83988adafab}"
 
 say() { printf '%s\n' "$*"; }
 psql_qec() { docker exec "$PG" psql -U nexus -d qecentral -A -t -c "$1" 2>/dev/null | tr -d '\r'; }
@@ -130,6 +155,28 @@ psql_qec() { docker exec "$PG" psql -U nexus -d qecentral -A -t -c "$1" 2>/dev/n
 # the investigation that a half-degraded crawl always triggers.
 say "=== GOLDEN CRAWL GATE ==="
 say "app: $APP_ID"
+
+# Refuse BEFORE spending 40 minutes on a crawl whose numbers cannot be judged.
+# HOST_UNAVAILABLE, not REGRESSION: "this baseline is not about your app" is an
+# absence of any verdict, and the deploy must not roll back on it.
+_baseline_app="$(python3 -c "
+import json
+try:
+    print(json.load(open('$BASELINE')).get('_app_id') or '')
+except Exception:
+    print('')
+" 2>/dev/null || echo "")"
+_expected="${_baseline_app:-$GOLDEN_APP_EXPECTED}"
+if [ -n "$_expected" ] && [ "$APP_ID" != "$_expected" ]; then
+  say ""
+  say "GATE ABORTED — this baseline belongs to app '$_expected', not '$APP_ID'."
+  say "  golden_crawl_baseline.json holds ONE set of floors, so judging another"
+  say "  app against them reports a REGRESSION that is really just a different"
+  say "  application. NOT rolling back: no verdict about this build was reached."
+  say "  Give that app its own baseline, or set GOLDEN_APP_EXPECTED=$APP_ID if"
+  say "  you have deliberately rebaselined onto it."
+  finish HOST_UNAVAILABLE $EXIT_HOST_UNAVAILABLE
+fi
 
 # ONE definition of healthy, shared with the pre-swap preflight deploy.ps1 runs
 # (scripts/host_health.sh). A preflight that checked something subtly different
