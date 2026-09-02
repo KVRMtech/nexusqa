@@ -328,6 +328,20 @@ services:
     mem_limit: 512m
     networks:
     - qec-egress
+    # THE INTERNET ROUTE. qec-egress is internal:true - a proxy on it ALONE
+    # cannot resolve or reach anything, so every crawl dies at the first
+    # navigation with ERR_TUNNEL_CONNECTION_FAILED, which the explorer then
+    # reports as stop_reason=auth_failed. Nothing is wrong with the login.
+    #
+    # Dropped from THIS proxy by 1cfb892 (fleet Phase A), which simultaneously
+    # gave it to the new qec-egress-proxy-2. Crawling has been dead since.
+    # Measured 2026-09-02: getent on the target host inside this container
+    # returned DNS-FAIL while proxy-2, on the identical image, resolved fine.
+    #
+    # squid remains the SINGLE NAT hop: the explorer is never on this network,
+    # it reaches only the proxy over internal-only qec-egress, and the
+    # per-crawl dstdomain fence still decides what the proxy will carry.
+    - qec-egress-public
 
   # ── Team A / Phase A — a SECOND worker + its own proxy (profile `fleet2`) ──
   # The A-team exit measurement needs two REGISTERED workers. Off by default:
