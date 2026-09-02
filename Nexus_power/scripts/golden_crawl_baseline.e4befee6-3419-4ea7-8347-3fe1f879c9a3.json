@@ -1,0 +1,18 @@
+{
+  "_rebaselined": {
+    "exploration": "29615288-d8cf-48df-a9c5-69778e623258",
+    "lowered": {},
+    "reason": "onboarding: first floors for the vkpowerlife quote app, taken from one clean crawl"
+  },
+  "auto_filled": 8,
+  "catalog_questions": 35,
+  "deepest_flow": 15,
+  "flows": 6,
+  "forms": 4,
+  "forms_confirmed": 1,
+  "pages": 44,
+  "selects_filled": 55,
+  "submitted": 3,
+  "tests": 0,
+  "wizard_advances": 35
+}

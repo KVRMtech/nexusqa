@@ -108,7 +108,19 @@ if [ -z "$APP_ID" ]; then
 fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BASELINE="$HERE/golden_crawl_baseline.json"
+#: ONE BASELINE FILE PER APP. The floors are an APP's contract, not the
+#: product's: pages/forms/submits mean nothing across two different
+#: applications. The golden app keeps golden_crawl_baseline.json unchanged, so
+#: nothing about today's gate moves; every other app is judged against its own
+#: golden_crawl_baseline.<app_id>.json.
+#:
+#: Named FLOORS_* rather than BASELINE_*: a contract test requires every line
+#: mentioning $BASELINE to be an assignment or a $RATCHET call, and "$BASELINE_APP"
+#: contains "$BASELINE" as a substring. The test is right - the baseline has one
+#: owner - so the variables are named not to collide with it.
+FLOORS_DEFAULT="$HERE/golden_crawl_baseline.json"
+FLOORS_APP="$HERE/golden_crawl_baseline.$APP_ID.json"
+BASELINE="$FLOORS_DEFAULT"
 RATCHET="$HERE/gate_baseline.py"
 QEC=nexus-qe-central
 PG=nexus-postgres
@@ -156,25 +168,40 @@ psql_qec() { docker exec "$PG" psql -U nexus -d qecentral -A -t -c "$1" 2>/dev/n
 say "=== GOLDEN CRAWL GATE ==="
 say "app: $APP_ID"
 
-# Refuse BEFORE spending 40 minutes on a crawl whose numbers cannot be judged.
-# HOST_UNAVAILABLE, not REGRESSION: "this baseline is not about your app" is an
-# absence of any verdict, and the deploy must not roll back on it.
-# Read from the constant, NOT from the baseline file. Two contract tests keep
-# this honest: the baseline may only be NAMED as an argument to the ratchet
-# (test_the_gate_has_no_inline_baseline_writer), and the ratchet's subcommand
-# set is asserted to be exactly {evaluate, raise, rebaseline, gaps}, so a fifth
-# one to look the id up is not available either. Both guards are correct — the
-# baseline has exactly one owner — and an inline read here was the wrong shape.
-# If the baseline ever becomes per-app, the ratchet should own that lookup.
-_expected="$GOLDEN_APP_EXPECTED"
-if [ -n "$_expected" ] && [ "$APP_ID" != "$_expected" ]; then
+# WHICH FLOORS JUDGE THIS APP — resolved BEFORE a 40-minute crawl is spent.
+#
+#   its own baseline exists   -> use it
+#   it IS the golden app      -> the original file, exactly as before
+#   --rebaseline was passed   -> create its baseline from this run
+#   otherwise                 -> refuse, and say how to onboard it
+#
+# The refusal is HOST_UNAVAILABLE, never REGRESSION: "no floors exist for your
+# app" is the ABSENCE of a verdict, and deploy.ps1 maps that to abort-without-
+# rollback. Measured 2026-09-02, before this existed: running the gate on a
+# vkpowerlife app against Summit's floors reported deepest_flow 9 (was 4) as a
+# RISE and forms 3 (best 8) as a FAIL in the SAME run - rises and falls together
+# being the signature of two different applications - and the verdict was
+# REGRESSION, which inside a deploy rolls back a blameless build.
+if [ -f "$FLOORS_APP" ]; then
+  BASELINE="$FLOORS_APP"
+  say "floors: golden_crawl_baseline.$APP_ID.json (this app's own)"
+elif [ "$APP_ID" = "$GOLDEN_APP_EXPECTED" ]; then
+  BASELINE="$FLOORS_DEFAULT"
+  say "floors: golden_crawl_baseline.json (the golden app)"
+elif [ -n "$REBASELINE_REASON" ]; then
+  BASELINE="$FLOORS_APP"
+  say "floors: golden_crawl_baseline.$APP_ID.json — CREATING from this run"
+else
   say ""
-  say "GATE ABORTED — this baseline belongs to app '$_expected', not '$APP_ID'."
-  say "  golden_crawl_baseline.json holds ONE set of floors, so judging another"
-  say "  app against them reports a REGRESSION that is really just a different"
-  say "  application. NOT rolling back: no verdict about this build was reached."
-  say "  Give that app its own baseline, or set GOLDEN_APP_EXPECTED=$APP_ID if"
-  say "  you have deliberately rebaselined onto it."
+  say "GATE ABORTED — no baseline exists for app '$APP_ID'."
+  say "  Floors are an APP's contract. Judging this app against another's"
+  say "  reports a REGRESSION that is really just a different application,"
+  say "  so no verdict about this build is possible. NOT rolling back."
+  say ""
+  say "  To put this app under the gate, take one clean crawl as its floor:"
+  say "    bash scripts/golden_crawl_gate.sh $APP_ID --rebaseline \"onboarding <client>\""
+  say "  That writes golden_crawl_baseline.$APP_ID.json, reviewable in git,"
+  say "  and every later run is judged against it alone."
   finish HOST_UNAVAILABLE $EXIT_HOST_UNAVAILABLE
 fi
 
