@@ -84,6 +84,48 @@ CTRL=$(docker exec $PG psql -U nexus -d qecentral -A -t -c \
 echo "  as superuser (RLS bypassed): $CTRL   (must be 1 - proves the row EXISTS)"
 
 echo
+
+# ── WRITES (all inside BEGIN ... ROLLBACK) ──────────────────────────────────
+VICTIM=$(docker exec $PG psql -U nexus -d qecentral -A -t -c "SELECT app_id FROM client_apps WHERE tenant_id='$TA' ORDER BY created_at LIMIT 1;" | tr -d ' ')
+q() { docker exec $PG psql -U "$1" -d qecentral -A -t -c "$2" 2>&1 | tr -d ''; }
+
+echo
+echo "=== 5. WRITES — can $TB touch $TA's rows? ==="
+echo "  target row owned by $TA: $VICTIM"
+
+W1=$(q qec "BEGIN; SELECT set_config('nexus.current_tenant_id','$TB',true); INSERT INTO client_apps (app_id, tenant_id, name, base_url) VALUES ('11111111-1111-1111-1111-111111111111','$TA','forged','https://x.invalid'); ROLLBACK;")
+echo "$W1" | grep -qiE "row-level security|violates" && W1R=REFUSED || W1R=ACCEPTED
+echo "  forge a row for another tenant : $W1R    (must be REFUSED)"
+
+W2=$(q qec "BEGIN; SELECT set_config('nexus.current_tenant_id','$TB',true); UPDATE client_apps SET name='hijacked' WHERE app_id='$VICTIM'; ROLLBACK;")
+W2R=$(echo "$W2" | grep -oE 'UPDATE [0-9]+' | tail -1)
+echo "  update another tenant's row    : $W2R    (must be UPDATE 0)"
+
+W3=$(q qec "BEGIN; SELECT set_config('nexus.current_tenant_id','$TB',true); DELETE FROM client_apps WHERE app_id='$VICTIM'; ROLLBACK;")
+W3R=$(echo "$W3" | grep -oE 'DELETE [0-9]+' | tail -1)
+echo "  delete another tenant's row    : $W3R    (must be DELETE 0)"
+
+W4=$(q qec "BEGIN; SELECT set_config('nexus.current_tenant_id','$TA',true); UPDATE client_apps SET tenant_id='$TB' WHERE app_id='$VICTIM'; ROLLBACK;")
+echo "$W4" | grep -qiE "row-level security|violates" && W4R=REFUSED || W4R=ACCEPTED
+echo "  hand your own row to another   : $W4R    (must be REFUSED)"
+
+# control_mechanics is the ONE policy with no explicit WITH CHECK. Postgres
+# reuses USING as the check for an ALL policy - asserted here rather than
+# trusted, because the docs are not a statement about THIS database.
+W5=$(q qec "BEGIN; SELECT set_config('nexus.current_tenant_id','$TA',true); UPDATE control_mechanics SET tenant_id='$TB'; ROLLBACK;")
+echo "$W5" | grep -qiE "row-level security|violates" && W5R=REFUSED || W5R=ACCEPTED
+echo "  control_mechanics re-tenant    : $W5R    (must be REFUSED)"
+
+# CONTROL for the write half: without it, every "0 rows" above is also what you
+# would see if the target row simply did not exist.
+W6=$(q nexus "BEGIN; UPDATE client_apps SET name='control-probe' WHERE app_id='$VICTIM'; ROLLBACK;")
+W6R=$(echo "$W6" | grep -oE 'UPDATE [0-9]+' | tail -1)
+echo "  CONTROL, RLS bypassed          : $W6R    (must be UPDATE 1)"
+
+PERSISTED=$(q nexus "SELECT count(*) FROM client_apps WHERE name IN ('hijacked','forged','control-probe');")
+echo "  rows persisted by this section : $PERSISTED    (must be 0)"
+
+echo
 echo "=== VERDICT ==="
 FAIL=0
 [ "$A_SEES" = "0" ] || { echo "  FAIL: tenant A saw tenant B's app through the API"; FAIL=1; }
@@ -92,7 +134,14 @@ FAIL=0
 [ "$R_B" = "1" ]    || { echo "  FAIL: RLS hid the row from its OWNING tenant"; FAIL=1; }
 [ "$CTRL" = "1" ]   || { echo "  FAIL: the control did not see the row - the row may not exist,"; \
                          echo "        which would make every 0 above meaningless"; FAIL=1; }
-[ "$FAIL" = "0" ] && echo "  TENANT ISOLATION HOLDS — at the API layer AND at RLS, with a control that leaks."
+[ "$W1R" = "REFUSED" ]  || { echo "  FAIL: a tenant forged a row for another tenant"; FAIL=1; }
+[ "$W2R" = "UPDATE 0" ] || { echo "  FAIL: a tenant updated another tenant's row"; FAIL=1; }
+[ "$W3R" = "DELETE 0" ] || { echo "  FAIL: a tenant deleted another tenant's row"; FAIL=1; }
+[ "$W4R" = "REFUSED" ]  || { echo "  FAIL: a tenant handed its row to another tenant"; FAIL=1; }
+[ "$W5R" = "REFUSED" ]  || { echo "  FAIL: control_mechanics accepted a cross-tenant write"; FAIL=1; }
+[ "$W6R" = "UPDATE 1" ] || { echo "  FAIL: the write CONTROL did not succeed - every 0 above is meaningless"; FAIL=1; }
+[ "$PERSISTED" = "0" ]  || { echo "  FAIL: this proof PERSISTED writes to production"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "  TENANT ISOLATION HOLDS — reads AND writes, API layer AND RLS, controls leaking."
 
 # Clean up by default: a multi-tenant system should not accumulate fake tenants,
 # and the EVIDENCE is this transcript, not the row. KEEP=1 retains it.
