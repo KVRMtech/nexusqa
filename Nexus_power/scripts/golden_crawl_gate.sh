@@ -140,8 +140,8 @@ MAX_POLLS="${GOLDEN_MAX_POLLS:-55}"
 #: raising needs --update-baseline AND a clean run, and the baseline was checked
 #: byte-unchanged afterwards - but nothing prevented it.
 #:
-#: Prefers the baseline's own `_app_id` when it grows one; the constant keeps
-#: the guard LIVE today instead of leaving an inert check in the file.
+#: Held here rather than in the baseline: that file has exactly one writer (the
+#: ratchet), and the gate's contract tests enforce it. Override per run.
 GOLDEN_APP_EXPECTED="${GOLDEN_APP_EXPECTED:-86203785-1fed-4930-8edf-d83988adafab}"
 
 say() { printf '%s\n' "$*"; }
@@ -159,14 +159,14 @@ say "app: $APP_ID"
 # Refuse BEFORE spending 40 minutes on a crawl whose numbers cannot be judged.
 # HOST_UNAVAILABLE, not REGRESSION: "this baseline is not about your app" is an
 # absence of any verdict, and the deploy must not roll back on it.
-_baseline_app="$(python3 -c "
-import json
-try:
-    print(json.load(open('$BASELINE')).get('_app_id') or '')
-except Exception:
-    print('')
-" 2>/dev/null || echo "")"
-_expected="${_baseline_app:-$GOLDEN_APP_EXPECTED}"
+# Read from the constant, NOT from the baseline file. Two contract tests keep
+# this honest: the baseline may only be NAMED as an argument to the ratchet
+# (test_the_gate_has_no_inline_baseline_writer), and the ratchet's subcommand
+# set is asserted to be exactly {evaluate, raise, rebaseline, gaps}, so a fifth
+# one to look the id up is not available either. Both guards are correct — the
+# baseline has exactly one owner — and an inline read here was the wrong shape.
+# If the baseline ever becomes per-app, the ratchet should own that lookup.
+_expected="$GOLDEN_APP_EXPECTED"
 if [ -n "$_expected" ] && [ "$APP_ID" != "$_expected" ]; then
   say ""
   say "GATE ABORTED — this baseline belongs to app '$_expected', not '$APP_ID'."
