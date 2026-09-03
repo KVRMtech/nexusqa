@@ -397,6 +397,34 @@ def _public_view(row: ClientAppRow) -> dict:
     d["has_webhook_secret"] = has_webhook_secret
     # Multi-env: surface the bound run environment (the daemon reads schedule.run_environment).
     d["run_environment"] = str((row.schedule or {}).get("run_environment") or "")
+    # WHICH MODE THIS APP IS IN, and what it is confined to.
+    #
+    # The settings form can SET schedule.crawl_mode and schedule.scope_paths, and
+    # the dispatch honours them, but this view returned neither — so nothing could
+    # read back which mode an app was actually in. An operator who set Target scope
+    # saw the app list unchanged and reasonably concluded the setting had not taken.
+    #
+    # Asked by a client 2026-09-03, of a real crawl: they pointed the app at
+    # /recruitment/viewCandidates, chose end-to-end, and asked why every other
+    # module was explored. The answer is that e2e means the WHOLE application by
+    # design (182f39f) and Target is the mode that confines — but with the mode
+    # invisible here, neither they nor the UI could see which had been selected.
+    #
+    # "" is reported when unset rather than a guessed default: the resolved mode
+    # depends on scope_paths and any walk plan (routers/explorations
+    # _resolve_crawl_mode), and inventing "explore" here would state a scope this
+    # view has not actually resolved.
+    d["crawl_mode"] = str((row.schedule or {}).get("crawl_mode") or "")
+    # A LIST, or nothing. schedule is client-supplied JSON straight off a PATCH,
+    # so scope_paths can arrive as a bare string - and iterating a string yields
+    # its CHARACTERS. "/recruitment" would be reported back as eleven
+    # single-character scopes, which reads as a confined crawl that is really
+    # nonsense. Caught by the parametrised case in the test beside this.
+    _scope = (row.schedule or {}).get("scope_paths")
+    d["scope_paths"] = [
+        str(_p).strip() for _p in (_scope if isinstance(_scope, (list, tuple)) else [])
+        if str(_p).strip()
+    ]
     # Onboarding legibility (crawl gate): surface the DERIVED status (draft/attested/
     # live) + the EXACT unmet requirements + attestation expiry, so the app UI can show
     # WHY an app can't crawl and offer a one-click (re-)attest — instead of a raw PATCH.
