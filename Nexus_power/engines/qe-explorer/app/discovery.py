@@ -358,8 +358,7 @@ class DiscoveryMixin:
             if reason:
                 self._stop_reason = reason
                 return
-            item = self._frontier.pop()
-            if item is None:
+            if not len(self._frontier):
                 # An application that navigates WITHOUT URLs leaves the frontier
                 # empty after the entry, however many screens it has. Sweep its
                 # own navigation once before calling the crawl complete.
@@ -368,13 +367,22 @@ class DiscoveryMixin:
                     if await self._sweep_view_navigation():
                         continue
                 return  # frontier exhausted → completed
+            # Write a checkpoint while the in-flight item is still queued. A
+            # worker can die inside a multi-step wizard, long before _expand
+            # returns; a post-pop empty frontier cannot resume that journey.
+            self._emit_checkpoint()
+            item = self._frontier.pop()
+            if item is None:  # pragma: no cover - guarded by len() above
+                return
             # Depth reached is recorded on DEQUEUE, not on enqueue: a URL pushed
             # at depth 5 that the budget never let us visit was never reached,
             # and counting it would report coverage the crawl does not have.
             if item.depth > self._max_depth_reached:
                 self._max_depth_reached = item.depth
+            expanded = False
             try:
                 await self._expand(item)
+                expanded = True
             except Exception:
                 logger.exception("qec.crawler.expand_failed url_scope=%s depth=%d",
                                  _host_of(item.url), item.depth)
@@ -385,14 +393,11 @@ class DiscoveryMixin:
                 # and losing them there would leave the exception above with no
                 # context. Best-effort; never raises.
                 await self._drain_browser_events()
-                # M1.7 / T-GW-03 — CHECKPOINT THE WORK LIST, also in the
-                # ``finally``. The expansion that threw is exactly the one after
-                # which the process is most likely to die, so it is the one whose
-                # frontier is most worth persisting. Written per expansion rather
-                # than per N states because the unit of lost work on a kill is one
-                # expansion, and a cheaper cadence would trade durability for an
-                # append the crawl is already paying for on every state.
-                self._emit_checkpoint()
+                # Advance the durable cursor only after the expansion completed.
+                # On an exception (or process kill) the write-ahead checkpoint
+                # above remains the newest snapshot and keeps this item queued.
+                if expanded:
+                    self._emit_checkpoint()
 
     async def _goto_entry(self, url: str) -> Any:
         """The crawl's ENTRY navigation, with a small bounded retry.
@@ -543,6 +548,34 @@ class DiscoveryMixin:
                         item.depth, nav.error[:120])
             return
 
+        # A PAGE THAT ERRORED IS NOT A STATE OF THE APPLICATION.
+        #
+        # The status has always been captured (NavResult.status) and never
+        # read: a 500 was inventoried, recorded and EXPANDED exactly like a
+        # 200, so its links were followed and its budget spent.
+        #
+        # Measured on parabank.parasoft.com 2026-09-02: nine of nineteen states
+        # in a 20-minute crawl went to /parabank/services/* SOAP endpoints
+        # returning 500 and 404. transfer.htm and billpay.htm — the two pages
+        # that would have produced a real transaction — were never reached,
+        # and the crawl ended with crossings=0. The budget was not short; it
+        # was spent on pages the server had already said were broken.
+        #
+        # 401 and 403 are DELIBERATELY not here. They are the auth wall, which
+        # is a meaningful state this crawler exists to answer, and skipping
+        # them would silently stop every gated application from being crawled.
+        # 3xx never arrives (the browser follows redirects before this point).
+        _status = int(getattr(nav, "status", 0) or 0)
+        if _status >= 500 or _status == 404:
+            self._emitter.emit_edge(from_state=item.parent_fingerprint, to_state="",
+                                    verb="navigate",
+                                    target_label=item.discovered_via)
+            logger.info(
+                "qec.crawler.http_error_not_a_state status=%d depth=%d url=%s"
+                " — recorded as unreachable, not inventoried or expanded",
+                _status, item.depth, str(item.url)[:160])
+            return
+
         # Materialize lazy / virtual-scroll content before inventorying this state so
         # windowed data grids + below-the-fold controls are captured, not only the
         # initial viewport. Read-only + best-effort; a port without it is a no-op.
@@ -674,9 +707,25 @@ class DiscoveryMixin:
             self._emitter.emit_edge(from_state=item.parent_fingerprint,
                                     to_state=fingerprint, verb="navigate",
                                     target_label=item.discovered_via)
-        if fingerprint in self._visited_fingerprints:
+        replay_key = str(getattr(item, "key", "") or _url_key(item.url))
+        checkpointed_item = replay_key in self._resume_replay_keys
+        if checkpointed_item:
+            self._resume_replay_keys.discard(replay_key)
+        # A queued, never-observed child also appears in a pre-expansion
+        # checkpoint. It remains a normal first visit and MUST enter the visited
+        # set; only a checkpointed item whose state was already observed needs
+        # the one-time replay path.
+        replaying_checkpointed_item = (
+            checkpointed_item and fingerprint in self._visited_fingerprints)
+        if fingerprint in self._visited_fingerprints and not replaying_checkpointed_item:
             return  # unique-state dedup: already recorded this exact state
-        self._visited_fingerprints.add(fingerprint)
+        if replaying_checkpointed_item:
+            logger.warning(
+                "qec.crawler.resume_replaying_inflight_item crawl_id=%s url=%s "
+                "- re-driving one checkpointed journey; crossing ledger remains spent",
+                self.crawl_id, (item.url or "")[:160])
+        else:
+            self._visited_fingerprints.add(fingerprint)
 
         first_seen = self._clock.now_ms()
         entry_png = await self._port.screenshot_png()
