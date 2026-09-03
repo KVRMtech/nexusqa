@@ -1439,6 +1439,25 @@ __FRAME_SELECTOR_JS__
       frame_selector: frameSelector || "",
       testid: testId(el),
       css_hint: cssHint(el),
+      // THE FORM CONTROL'S OWN name= ATTRIBUTE. Not the accessible name: this
+      // is the handle the application itself uses to identify the field, and
+      // for old-style markup it is the ONLY unambiguous one.
+      //
+      // Measured on parabank.parasoft.com 2026-09-02:
+      //   <p><b>Username</b></p>
+      //   <div class="login"><input type="text" class="input" name="username"></div>
+      // no id, no aria-label, no aria-labelledby, no <label for>. The input has
+      // NO accessible name at all, so get_by_role and get_by_label match
+      // nothing and the port fell through to get_by_text, which matched the
+      // <b>Username</b> LABEL. fill() then failed with "Element is not an
+      // <input>" and the crawl never authenticated — 8 public pages, the whole
+      // banking application unseen.
+      //
+      // css_hint cannot rescue that here: it is `input.input` for the username
+      // AND the password, so .first would type the password into the username
+      // box. [name="..."] is unique where css_hint is not.
+      name_attr: lc(el.tagName) === "input" || lc(el.tagName) === "select"
+                 || lc(el.tagName) === "textarea" ? clip(attr(el, "name"), 120) : "",
       value_committed: valueCommitted(el),
       href: hrefOf(el),
       haspopup: lc(attr(el, "aria-haspopup")),

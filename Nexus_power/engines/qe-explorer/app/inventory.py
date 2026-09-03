@@ -1136,6 +1136,12 @@ def build_control_record(
             "role": role,
             "testid": _s(raw.get("testid")),
             "css_hint": _s(raw.get("css_hint")),
+            # The form control's own name= attribute. Diagnostics-only for the
+            # compiler (which binds on the accessible name), but the PORT uses it
+            # as a locator rung for a field that declares no accessible name at
+            # all — old-style markup where the label is a sibling <b> and the
+            # text rung would otherwise bind the LABEL instead of the input.
+            "name_attr": _s(raw.get("name_attr")),
             "input_type": input_type,
             "options": options,
             "frame_selector": frame_selector,

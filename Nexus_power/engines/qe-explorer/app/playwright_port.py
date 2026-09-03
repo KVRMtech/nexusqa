@@ -2716,6 +2716,9 @@ class PlaywrightBrowserPort(BrowserPort):
         name = str(control.get("name") or "").strip()
         css_hint = str((control.get("qec") or {}).get("css_hint")
                        or control.get("css_hint") or "").strip()
+        #: The form control's own name= attribute (see the rung below).
+        name_attr = str((control.get("qec") or {}).get("name_attr")
+                        or control.get("name_attr") or "").strip()
         # POSITIONAL targeting: when a control is one of several IDENTICAL ones
         # (same role+name) and has no anchor to scope by, target it by its DOM
         # ORDINAL — get_by_role(role, name).nth(k) — instead of always .first.
@@ -2733,6 +2736,22 @@ class PlaywrightBrowserPort(BrowserPort):
         return [b for b in (
             _role_name_loc if role and name else None,
             (lambda: scope.get_by_label(name).first) if name else None,
+            # THE FIELD'S OWN name= ATTRIBUTE, above the text rung and below the
+            # declared-name rungs. An explicit form-control name is a stronger
+            # handle than matching page TEXT, and get_by_text is the rung that
+            # breaks old-style markup: for an input with no accessible name it
+            # matches the LABEL element, so fill() lands on a <b> and fails with
+            # "Element is not an <input>". Measured on parabank.parasoft.com
+            # 2026-09-02 — the login never happened and the entire authenticated
+            # banking application went unseen.
+            #
+            # Deliberately BELOW role+name and label: where those already match,
+            # this rung is never reached, so an application whose fields carry
+            # accessible names is untouched. It only fires where today's ladder
+            # was falling through to a text match, which for a form field is
+            # nearly always the label rather than the input.
+            (lambda: scope.locator('[name="%s"]' % name_attr.replace('"', '\\"')).first)
+            if name_attr else None,
             (lambda: scope.get_by_text(name).nth(nth)) if name and nth is not None else
             (lambda: scope.get_by_text(name).first) if name else None,
             (lambda: scope.locator(css_hint).first) if css_hint else None,
