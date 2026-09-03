@@ -30,6 +30,7 @@
     "min": "",
     "minlength": "",
     "name": "Term Length",
+    "name_attr": "",
     "name_source": "aria-labelledby",
     "options": [
       "10 years",
@@ -85,6 +86,7 @@
     "min": "",
     "minlength": "",
     "name": "Optional Rider",
+    "name_attr": "",
     "name_source": "aria-labelledby",
     "options": [
       "Waiver of Premium",
@@ -139,6 +141,7 @@
     "min": "",
     "minlength": "",
     "name": "Payment Mode",
+    "name_attr": "",
     "name_source": "aria-label",
     "options": [
       "Monthly",
@@ -193,6 +196,7 @@
     "min": "",
     "minlength": "",
     "name": "Beneficiary Relationship",
+    "name_attr": "",
     "name_source": "aria-label",
     "options": [],
     "options_total": 0,

@@ -30,6 +30,7 @@
     "min": "",
     "minlength": "",
     "name": "Empty Enumeration",
+    "name_attr": "empty",
     "name_source": "label-for",
     "options": [],
     "options_total": 0,
@@ -80,6 +81,7 @@
     "min": "",
     "minlength": "",
     "name": "Single Answer",
+    "name_attr": "single",
     "name_source": "label-for",
     "options": [
       "Only Choice"
@@ -132,6 +134,7 @@
     "min": "",
     "minlength": "",
     "name": "Selected Near The End",
+    "name_attr": "late_selected",
     "name_source": "label-for",
     "options": [
       "Option 001",
@@ -243,6 +246,7 @@
     "min": "",
     "minlength": "",
     "name": "Duplicate Labels",
+    "name_attr": "duplicates",
     "name_source": "label-for",
     "options": [
       "Other",
@@ -298,6 +302,7 @@
     "min": "",
     "minlength": "",
     "name": "Long Labels",
+    "name_attr": "long_labels",
     "name_source": "label-for",
     "options": [
       "Coverage tier extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-descriptive-suffix extremely-long-d",
@@ -351,6 +356,7 @@
     "min": "",
     "minlength": "",
     "name": "Some Disabled Options",
+    "name_attr": "with_disabled",
     "name_source": "label-for",
     "options": [
       "Available One",
@@ -405,6 +411,7 @@
     "min": "",
     "minlength": "",
     "name": "Disabled Control",
+    "name_attr": "disabled_select",
     "name_source": "label-for",
     "options": [
       "Locked Choice"

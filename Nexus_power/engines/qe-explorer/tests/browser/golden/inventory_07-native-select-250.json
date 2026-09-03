@@ -30,6 +30,7 @@
     "min": "",
     "minlength": "",
     "name": "Country of Residence",
+    "name_attr": "country",
     "name_source": "label-for",
     "options": [
       "Country 001",
@@ -331,6 +332,7 @@
     "min": "",
     "minlength": "",
     "name": "Year of Birth",
+    "name_attr": "birth_year",
     "name_source": "label-for",
     "options": [
       "1700",
@@ -682,6 +684,7 @@
     "min": "",
     "minlength": "",
     "name": "State",
+    "name_attr": "state",
     "name_source": "label-for",
     "options": [
       "Select state",
@@ -737,6 +740,7 @@
     "min": "",
     "minlength": "",
     "name": "Riders",
+    "name_attr": "riders",
     "name_source": "label-for",
     "options": [
       "Waiver of Premium",
