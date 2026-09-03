@@ -29,6 +29,14 @@ the file passed green having never once called the function it was written to
 pin. A test that cannot fail is worth less than no test, because it also
 occupies the space where a real one would go. ``ClientAppRow`` needs no database
 to instantiate, and using it means the columns under test are the real columns.
+
+MEASURED FALSIFICATION. c917102's message claims "8 of its 9 tests go red"
+with the two lines removed. Re-run rather than believed, because a claim about
+one's own artefact is still a claim: removing BOTH assignments gives 5 failed /
+4 passed, and removing only ``crawl_mode`` gives 3 failed / 6 passed. The
+guard, the unset-control and the list-normalisation cases survive by design -
+they assert what must NOT happen, so an absent field satisfies them. The
+record overstated it; these are the numbers.
 """
 
 from __future__ import annotations
