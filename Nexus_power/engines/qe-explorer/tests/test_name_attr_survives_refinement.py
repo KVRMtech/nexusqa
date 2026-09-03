@@ -58,12 +58,32 @@ def _find(controls):
     return controls[0]
 
 
+def _name_attr(ctrl):
+    """Where the value actually lives: the control's TOP LEVEL.
+
+    Deliberately NOT the ``qec`` bucket. That bucket is serialised verbatim into
+    every action record, so carrying it there moved all four characterization
+    goldens for a field the evidence has no use for (see
+    test_login_fields_without_an_accessible_name). Reading it here through one
+    helper keeps every assertion in this file honest about the location, instead
+    of an ``or`` fallback that passes whichever side happens to hold it.
+    """
+    return (ctrl.get("name_attr") if isinstance(ctrl, dict)
+            else getattr(ctrl, "name_attr", "")) or ""
+
+
+def _qec(ctrl):
+    return (ctrl.get("qec") if isinstance(ctrl, dict)
+            else getattr(ctrl, "qec", {})) or {}
+
+
 def test_name_attr_reaches_the_port():
     """The seam that made the first fix inert."""
     ctrl = _find(_controls([_raw()]))
-    qec = ctrl.get("qec") if isinstance(ctrl, dict) else getattr(ctrl, "qec", {})
-    carried = (qec or {}).get("name_attr") or (
-        ctrl.get("name_attr") if isinstance(ctrl, dict) else "")
+    carried = _name_attr(ctrl)
+    assert not _qec(ctrl).get("name_attr"), (
+        "name_attr must stay OUT of the serialised qec bucket, or every "
+        "characterization golden moves for a field the evidence never reads")
     assert carried == "username", (
         "name_attr was dropped in refinement. The port reads it as a locator "
         "rung for fields with no accessible name; dropped, the rung silently "
@@ -80,29 +100,53 @@ def test_it_is_not_confused_with_the_accessible_name():
     them.
     """
     ctrl = _find(_controls([_raw(name="Login ID")]))
-    qec = (ctrl.get("qec") if isinstance(ctrl, dict) else getattr(ctrl, "qec", {})) or {}
-    assert qec.get("name_attr") == "username"
+    assert _name_attr(ctrl) == "username"
     accessible = ctrl.get("name") if isinstance(ctrl, dict) else getattr(ctrl, "name", "")
     assert accessible == "Login ID"
 
 
 @pytest.mark.parametrize("tag", ["div", "span", "a", "button"])
 def test_only_form_controls_carry_one(tag):
-    """CONTROL — a non-field must not acquire a name_attr rung.
+    """CONTROL — refinement must not INVENT a name_attr.
 
-    Without this the guard could be satisfied by capturing `name` off anything,
-    and the port would start binding links and buttons by an attribute that
-    means something else on them.
+    Scoped honestly to what this layer can prove. build_inventory carries the
+    field through; it does not gate on tag, so a button handed a name_attr in
+    its raw record keeps it (measured). The tag gate is in the CAPTURE, and
+    test_the_capture_gates_the_tag below pins it there rather than here.
+
+    What this does pin: given a raw record with no name_attr, refinement must
+    not manufacture one out of `name` — which would hand the port a rung that
+    binds links and buttons by an attribute meaning something else on them.
     """
     ctrl = _find(_controls([_raw(tag=tag, name_attr="", kind="button", role="button",
                                  name="Log In")]))
-    qec = (ctrl.get("qec") if isinstance(ctrl, dict) else getattr(ctrl, "qec", {})) or {}
-    assert not qec.get("name_attr")
+    assert _name_attr(ctrl) == "", (
+        "a link or button must not acquire a name_attr rung - on those "
+        "elements name= means something else entirely")
 
 
 def test_a_field_without_one_is_unchanged():
     """Most applications label their fields properly; they must not move."""
     ctrl = _find(_controls([_raw(name="Email address", name_attr="")]))
-    qec = (ctrl.get("qec") if isinstance(ctrl, dict) else getattr(ctrl, "qec", {})) or {}
-    assert qec.get("name_attr", "") == ""
+    assert _name_attr(ctrl) == ""
     assert (ctrl.get("name") if isinstance(ctrl, dict) else "") == "Email address"
+
+
+def test_the_capture_gates_the_tag():
+    """The tag restriction lives in the JS capture, so it is asserted there.
+
+    Pinned at the source because the Python layer above cannot see it: by the
+    time build_inventory runs, a non-field simply arrives with name_attr="" and
+    an assertion here would pass whether the gate existed or not — the shape of
+    blind verifier this repository keeps finding.
+    """
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "app" / "inventory_js.py"
+    text = src.read_text(encoding="utf-8")
+    assert 'name_attr: lc(el.tagName) === "input"' in text, (
+        "the capture no longer gates name_attr on the tag; a link or button "
+        "would acquire a rung bound to an attribute that means something else")
+    for tag in ('"select"', '"textarea"'):
+        assert 'lc(el.tagName) === %s' % tag in text, (
+            "%s must keep its name_attr - a nameless <%s> is exactly the case "
+            "the ParaBank fix exists for" % (tag, tag.strip('"')))
