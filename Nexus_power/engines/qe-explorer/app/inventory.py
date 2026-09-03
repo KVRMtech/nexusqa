@@ -1126,6 +1126,16 @@ def build_control_record(
         "anchor": None,   # filled by build_inventory only on collision
         "match_index": None,  # DOM ordinal among identical controls (collision only)
         "locator": None,  # filled by build_inventory pass 4 (needs whole-page uniqueness)
+        # THE FORM CONTROL'S OWN name= ATTRIBUTE — top level, NOT in `qec`.
+        #
+        # The port needs it as a locator rung for a field that declares no
+        # accessible name at all (old-style markup where the label is a sibling
+        # <b>, so the text rung binds the LABEL and fill() dies on it). But `qec`
+        # rides VERBATIM into every action record, so putting it there added a
+        # key to the manifest and moved all four characterization goldens —
+        # for a field the evidence has no use for. Top level is read by the port
+        # and never serialised, so the recorded evidence is byte-unchanged.
+        "name_attr": _s(raw.get("name_attr")),
         "danger": danger,
         "danger_rule_id": danger_rule_id,
         "danger_severity": danger_severity,
@@ -1136,12 +1146,6 @@ def build_control_record(
             "role": role,
             "testid": _s(raw.get("testid")),
             "css_hint": _s(raw.get("css_hint")),
-            # The form control's own name= attribute. Diagnostics-only for the
-            # compiler (which binds on the accessible name), but the PORT uses it
-            # as a locator rung for a field that declares no accessible name at
-            # all — old-style markup where the label is a sibling <b> and the
-            # text rung would otherwise bind the LABEL instead of the input.
-            "name_attr": _s(raw.get("name_attr")),
             "input_type": input_type,
             "options": options,
             "frame_selector": frame_selector,

@@ -320,10 +320,65 @@ def _match_secret_control(controls: Sequence[Mapping[str, Any]]) -> Optional[Map
     return None
 
 
+def _auth_identifiable(c: Optional[Mapping[str, Any]]) -> bool:
+    """Can this login field be named in the evidence at all?
+
+    The fill branches below required a non-empty ACCESSIBLE name, so that a
+    nameless control is never typed into and then recorded as a question
+    nobody can read. Right rule, wrong scope for a login form: measured on
+    parabank.parasoft.com 2026-09-02, both login inputs have NO accessible
+    name, the branches were skipped, and the crawl reported "no username field
+    could be filled" while the fields sat there with name="username" and
+    name="password" on them.
+
+    A form control's own name= attribute IS a name for the evidence — it is
+    what the application calls the field, it is stable, and it is what the port
+    now binds the locator on. So a login field is identifiable by either.
+    """
+    if c is None:
+        return False
+    return bool(_norm(c.get("name")) or _control_name_attr(c))
+
+
+def _control_name_attr(c: Mapping[str, Any]) -> str:
+    """The field's own name= attribute, wherever the record carries it."""
+    qec = c.get("qec")
+    if isinstance(qec, Mapping):
+        got = _norm(qec.get("name_attr"))
+        if got:
+            return got
+    return _norm(c.get("name_attr"))
+
+
 def _text_fields(controls: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Text-like fields this login sequence may drive.
+
+    A field with NO accessible name is skipped everywhere else in the crawler,
+    and rightly: a nameless control cannot be catalogued, so filling it would
+    record a question nobody can read (``qec.forms.skip_nameless_field``).
+
+    THE LOGIN FORM IS THE ONE PLACE THAT RULE IS FATAL. Measured on
+    parabank.parasoft.com 2026-09-02:
+
+        <p><b>Username</b></p>
+        <div class="login"><input type="text" class="input" name="username"></div>
+
+    no id, no aria-label, no <label for> — the input has no accessible name at
+    all. The password field beside it IS found, because type="password" is a
+    STRUCTURAL signal; the username field has no such signal, so it was dropped
+    here and _match_username_control returned None. The crawl reported "no
+    username field could be filled" and never authenticated: 8 public pages,
+    the whole banking application unseen.
+
+    So a nameless field is admitted HERE — and only here — when it declares a
+    name= attribute, which is the application's own identifier for it and is
+    what the port now binds on. The catalogue is unaffected: this list feeds
+    the auth sequence, not the question inventory.
+    """
     return [
         c for c in controls
-        if _norm(c.get("kind")) in _TEXT_LIKE_KINDS and not _is_password(c) and _norm(c.get("name"))
+        if _norm(c.get("kind")) in _TEXT_LIKE_KINDS and not _is_password(c)
+        and (_norm(c.get("name")) or _control_name_attr(c))
     ]
 
 
@@ -364,7 +419,13 @@ def _match_username_control(
     text_fields = _text_fields(controls)
     if not text_fields:
         return None
-    hit = next((c for c in text_fields if _name_matches_any(str(c.get("name")), username_hints)), None)
+    # Hints match the accessible name first, then the name= attribute: for the
+    # nameless case above, "username" is exactly what the application calls the
+    # field, so the hint still identifies it rather than falling through to a
+    # positional guess.
+    hit = next((c for c in text_fields
+                if _name_matches_any(str(c.get("name")), username_hints)
+                or _name_matches_any(_control_name_attr(c), username_hints)), None)
     if hit is not None:
         return hit
     if password is not None:
@@ -812,7 +873,7 @@ class Authenticator:
                                                   self._creds.username_hints)))
 
             acted = False
-            if username_ctrl is not None and _norm(username_ctrl.get("name")) and not filled_username:
+            if _auth_identifiable(username_ctrl) and not filled_username:
                 obs_u = await self._port.fill(dict(username_ctrl), self._creds.username)
                 if obs_u.committed_value is None:
                     # The fill DID NOT TAKE (e.g. the username heuristic grabbed a
@@ -859,7 +920,7 @@ class Authenticator:
             # advance the "stuck" check below breaks the loop, and a screen that
             # rejected the credential is caught by the live-error branch. It can
             # only ever repeat a secret into a page that has moved on.
-            if (password_ctrl is not None and _norm(password_ctrl.get("name"))
+            if (_auth_identifiable(password_ctrl)
                     and not filled_password):
                 obs_p = await self._port.fill(dict(password_ctrl), self._creds.password)
                 if obs_p.committed_value is None:
@@ -1027,7 +1088,29 @@ class Authenticator:
             if acted and after_fp and after_fp == screen_fp and not has_otp:
                 break
 
-        logger.info("qec.auth.login_attempt success=False reason=login_unverified")
+        # SAY WHICH ONE. The reason below lists three possibilities, and an
+        # operator reading it learns nothing: "username/password/MFA not
+        # groundable, OR state did not advance" is a menu, not a diagnosis.
+        # Measured on parabank.parasoft.com 2026-09-02: the login failed on
+        # every attempt and this was the only output, so which of the three had
+        # happened could not be told without attaching a debugger.
+        #
+        # These are exactly the conditions the success test above reads, so the
+        # diagnosis cannot drift from the decision it explains.
+        _why = []
+        if not filled_username:
+            _why.append("no username field could be filled")
+        if not filled_password:
+            _why.append("no password field could be filled")
+        if filled_password and has_password:
+            _why.append("the password field is STILL PRESENT after submit - the "
+                        "form did not advance (submit not found, not clicked, or refused)")
+        if filled_password and not acted:
+            _why.append("nothing was clicked after filling - no submit control matched")
+        logger.info(
+            "qec.auth.login_attempt success=False reason=login_unverified detail=%s",
+            "; ".join(_why) or "the sequence ended without a verifiable state change",
+        )
         return AuthResult(
             success=False,
             reason="login_unverified: could not complete the login sequence "
