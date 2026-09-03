@@ -388,16 +388,6 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         prior = emit.scan_resume_state(records)
         self._resume_requested = bool(resume)
         self._resume_plan = resume_state.rebuild(records, resuming=bool(resume))
-        # A pre-expansion checkpoint carries the item that was in flight when a
-        # worker died. Only those explicitly checkpointed reach keys may replay
-        # an already-seen entry state on resume; this is not a blanket dedup
-        # bypass. The crossing ledger remains authoritative for every replayed
-        # irreversible control.
-        self._resume_replay_keys: set[str] = {
-            str(snapshot.key or _url_key(snapshot.url))
-            for snapshot in self._resume_plan.frontier
-            if str(snapshot.key or snapshot.url)
-        }
         self._visited_fingerprints: set[str] = set(prior["visited_fingerprints"])
         self._next_seq = int(prior["next_sequence_index"])
         self._clock = emit.MonotonicClock(offset_ms=int(prior["last_timestamp_ms"]))
