@@ -675,6 +675,45 @@ def login_screen_is_still_settling(
     return (not fingerprint_moved) and password_present
 
 
+#: Words that make a live region an ASSERTION ABOUT THE LOGIN rather than about
+#: the page behind it. Deliberately conservative: anything matching here still
+#: fails the login exactly as before, so this can only ever NARROW the guard,
+#: and only for regions carrying none of this vocabulary.
+_LOGIN_ERROR_WORDS = re.compile(
+    r"invalid|incorrect|wrong|failed|failure|denied|unauthor|forbidden|"
+    r"not\s+match|no\s+match|does\s+not\s+match|expired|locked|disabled|"
+    r"suspended|required|missing|try\s+again|error|unable",
+    re.IGNORECASE,
+)
+
+
+def _reads_as_login_error(text: Any) -> bool:
+    """Does this live region assert that the LOGIN went wrong?
+
+    MEASURED on orangehrm.136-85-106-73.sslip.io, 2026-09-04. A Target-mode
+    crawl entered at /web/index.php/recruitment/viewCandidates, authenticated
+    correctly, and was then failed with
+
+        login_failed: error region present ('Info
+
+No Records Found
+
+×')
+        stop_reason=auth_failed  states=1
+
+    "No Records Found" is the EMPTY-LIST notice on the candidates page - the
+    page reached BY logging in. OrangeHRM renders informational toasts with
+    role="alert", which is exactly what ``BrowserPort.error_texts`` collects, so
+    a benign notice was indistinguishable from a rejected password.
+
+    The cost was total: auth_failed, one state captured, nothing catalogued.
+    Entering at the site root had always worked because the dashboard shows no
+    banner - so this bit only the deep entry point, which is the whole reason a
+    user chooses Target mode in the first place.
+    """
+    return bool(_LOGIN_ERROR_WORDS.search(str(text or "")))
+
+
 def verify_login_success(
     *,
     before_fingerprint: str,
@@ -692,9 +731,20 @@ def verify_login_success(
         return False, "login_unverified: state fingerprint unchanged after submit"
     if any(_is_password(c) for c in after_controls):
         return False, "login_unverified: a password field is still present"
+    # A live region fails the login only when it SAYS the login failed. Reaching
+    # this line already means the fingerprint moved and no password field
+    # remains - two independent pieces of evidence that the form was left behind
+    # - so a region carrying no error vocabulary is describing the page we
+    # arrived at, not the credentials we submitted.
     live_errors = [e for e in after_errors if _norm(e)]
+    blocking = [e for e in live_errors if _reads_as_login_error(e)]
+    if blocking:
+        return False, f"login_failed: error region present ({blocking[0][:120]!r})"
     if live_errors:
-        return False, f"login_failed: error region present ({live_errors[0][:120]!r})"
+        logger.info(
+            "qec.auth.informational_live_region_ignored text=%r - no error "
+            "vocabulary, password field gone and the screen moved; treating it "
+            "as the landing page's own notice", live_errors[0][:120])
     return True, "login_verified"
 
 
@@ -1058,10 +1108,22 @@ class Authenticator:
             intermediate_mfa_step = mfa_pending and (after_submit or after_delivery)
 
             # Honest failure: an error live-region after a secret was submitted.
-            if live_errors and (filled_password or filled_otp):
+            #
+            # NARROWED, not removed. A region blocks the login when it reads as
+            # an error, OR when the password field is STILL ON SCREEN - the case
+            # where we demonstrably never left the form, and where a rejected
+            # password is re-rendered with its message. A region with neither is
+            # the landing page talking about itself (see _reads_as_login_error).
+            _blocking = [e for e in live_errors if _reads_as_login_error(e)]
+            if live_errors and not _blocking and not has_password:
+                logger.info(
+                    "qec.auth.informational_live_region_ignored text=%r - the "
+                    "login form is gone and the text carries no error wording",
+                    live_errors[0][:120])
+            if (_blocking or (live_errors and has_password)) and (filled_password or filled_otp):
                 return AuthResult(
                     success=False,
-                    reason=f"login_failed: error region present ({live_errors[0][:120]!r})",
+                    reason=f"login_failed: error region present ({(_blocking or live_errors)[0][:120]!r})",
                     actions=actions, before_fingerprint=before_fp, after_fingerprint=after_fp,
                     secret_submitted=(filled_password or filled_otp),
                 )
