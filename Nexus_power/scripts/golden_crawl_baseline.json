@@ -18,14 +18,14 @@
     }
   },
   "_rebaselined": {
-    "exploration": "173f2af6-061d-42a4-ae0a-5ed867bb8ca3",
+    "exploration": "eeb84591-7eda-4dea-94e1-ee88ee2cb446",
     "lowered": {
-      "pages": [
-        32,
-        31
+      "tests": [
+        23,
+        22
       ]
     },
-    "reason": "pages 32 -> 31: one of the 32 was a 404. d0c010b stops inventorying a page the server declared broken; the golden app's /settings/preferences answers HTTP 404 and was being counted as application coverage, its links followed. PROVEN, not inferred: the crawl logged qec.crawler.http_error_not_a_state status=404 depth=1 url=https://summitlife-admin.136-85-106-73.sslip.io/settings/preferences, and curl confirms 404 while /dashboard/overview, /underwriting/new-business, /claims/reported and /payments/process all answer 200. Reproduced on two independent gate runs (db7666b9, 173f2af6) after seven consecutive crawls at 32; every other floor held exactly. The old floor counted a page that does not exist."
+    "reason": "tests 23 -> 22: one scenario removed, and it was the site nav. 1ca4690 stops emitting a journey for site chrome, because a Target-mode crawl of OrangeHRM's recruitment funnel produced 15 scenarios of which 13 were 'navigate ... via <sidebar item>', several pointing outside the crawl's own scope. PROVEN on THIS app, not assumed: of 368 click-bearing pages the only label meeting the rule is 'Dashboard' at 285 pages (78%); the next most frequent controls are 'MC Margaret Chen' 130, the Financial/Health Profile/Overview tabs 87, 'Continue' 67 and the named underwriting cases 66 - all below the ratio and all kept. So exactly one navigation case was dropped and it was the Dashboard nav link. Every other floor held: pages 31, forms 8, auto_filled 33, submitted 14, flows 13, deepest_flow 4, catalog_questions 83. NOT CLAIMED: the rule is conservative on large crawls - this app's other nav links sit at ~18% and are still counted as journeys."
   },
   "_rebaselined_2026_08_31": {
     "exploration": "7f427431-31fd-4c23-94b6-5b32e4e7d323",
@@ -50,6 +50,6 @@
   "pages": 31,
   "selects_filled": 11,
   "submitted": 14,
-  "tests": 23,
+  "tests": 22,
   "wizard_advances": 3
 }
