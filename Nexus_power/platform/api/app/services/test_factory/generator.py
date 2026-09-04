@@ -31,12 +31,15 @@ Design notes
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Sequence
 
 from nexus_sdk.models import Precondition, ProductionTestCase, ProductionTestStep
+
+logger = logging.getLogger(__name__)
 
 # Deterministic namespace so re-generating the same artifact yields stable
 # test_ids (idempotent storage / upserts downstream).
@@ -1846,6 +1849,66 @@ def _host_of(url: str) -> str:
 _MAX_JOURNEYS = 60
 
 
+
+#: Verbs that count as a click for chrome detection — the same set the journey
+#: loop itself filters on, kept in one place so the two cannot drift apart.
+_CHROME_CLICK_VERBS = frozenset({"click", "press", "tap"})
+
+
+def site_chrome_labels(page_actions: Sequence[PageActionInput]) -> set[str]:
+    """Labels that are SITE CHROME rather than steps in any one journey.
+
+    THE DEFECT. ``generate_grounded_journeys`` emitted one journey per grounded
+    navigation click, with no notion of chrome, so every item in a sidebar became
+    its own test. MEASURED on orangehrm 2026-09-04, a Target-mode crawl of the
+    recruitment funnel produced 15 scenarios of which 13 were
+    "Verify user can navigate from 'viewCandidates' to X via '<sidebar item>'",
+    three steps each. Several named destinations OUTSIDE the crawl's own scope
+    (defineLeavePeriod, purgeEmployee, viewBuzz), because the sidebar links there
+    even though the crawl never went. One scenario of the fifteen was a journey a
+    client would recognise as worth having.
+
+    It is the same misjudgement as the crossing counts on the same application —
+    42 of 50 "boundary crossings" were the sidebar and 6 were Cancel. The
+    pipeline is sound; what it lacked was any idea that navigation chrome is not
+    business behaviour.
+
+    THE SIGNAL, and why this one. A control that appears on SEVERAL DIFFERENT
+    PAGES is by definition not part of any single page's journey — that is what
+    makes it chrome. An in-content action lives on the page that owns it.
+    Measured on that crawl the separation is exact:
+
+        13 sidebar links   on 2 of 2 click-bearing pages
+        Add    (button)    on 1
+        Save   (button)    on 1
+
+    Both conditions are required. The COUNT (>= 2 pages) is what keeps a genuine
+    one-page action like "Add" out. The RATIO (>= half the click-bearing pages)
+    is what stops a legitimately repeated action being called chrome on a large
+    crawl — appearing on 2 pages of 20 is a repeated action, not a nav bar.
+
+    Returns an empty set when fewer than two pages recorded clicks: with one
+    page there is no evidence either way, and guessing would silently delete the
+    only journeys the crawl found.
+    """
+    pages_by_label: dict[str, set[str]] = {}
+    click_pages: set[str] = set()
+    for a in page_actions:
+        if (a.verb or "").strip().lower() not in _CHROME_CLICK_VERBS:
+            continue
+        click_pages.add(a.page_visit_id)
+        label = _norm(a.target_label or "")
+        if label:
+            pages_by_label.setdefault(label, set()).add(a.page_visit_id)
+
+    if len(click_pages) < 2:
+        return set()
+
+    half = len(click_pages) / 2.0
+    return {label for label, pages in pages_by_label.items()
+            if len(pages) >= 2 and len(pages) >= half}
+
+
 def generate_grounded_journeys(
     *,
     artifact_id: str,
@@ -1877,6 +1940,10 @@ def generate_grounded_journeys(
 
     cases: list[ProductionTestCase] = []
     seen: set = set()  # dedup by (source_path, dest_path, nav-label)
+    # Site chrome is not a journey. Computed once for the whole artifact — a
+    # per-page view cannot see that a control recurs, which is the whole signal.
+    chrome = site_chrome_labels(page_actions)
+    chrome_skipped = 0
 
     for v in sorted(page_visits, key=lambda v: getattr(v, "sequence_index", 0) or 0):
         # Only start a journey from a page we can trustworthily open (its URL is
@@ -1903,6 +1970,12 @@ def generate_grounded_journeys(
             and (a.target_label or "").strip()
         ]
         for i, a in enumerate(clicks):
+            if _norm(a.target_label or "") in chrome:
+                # A nav-bar item, not a journey. Counted and reported below:
+                # a silently shortened list reads later as "the crawl found
+                # nothing there", which is how this defect stayed invisible.
+                chrome_skipped += 1
+                continue
             if not _action_navigated(a):
                 continue
             dest = (a.after_detail or "").strip()
@@ -2012,6 +2085,11 @@ def generate_grounded_journeys(
             cases.append(case)
             if len(cases) >= _MAX_JOURNEYS:
                 return cases
+    if chrome_skipped:
+        logger.info(
+            "qec.generate.site_chrome_skipped artifact=%s clicks=%d labels=%d "
+            "- nav-bar controls are not journeys; %s",
+            artifact_id, chrome_skipped, len(chrome), sorted(chrome)[:12])
     return cases
 
 
