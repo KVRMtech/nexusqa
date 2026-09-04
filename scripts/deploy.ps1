@@ -257,7 +257,30 @@ if ($qecBuild.Count -gt 0) {
     if ($qecBuild -contains "qe-explorer") { $qecUpList = "$qecSvcList qec-egress-proxy" }
     $cmds += "; cd $VM_SRC/Nexus_power"
     $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE build $qecSvcList"
+    # ── SCHEMA BEFORE CODE ──────────────────────────────────────────────────
+    # `alembic upgrade head` existed in this repository exactly once: as a
+    # COMMENT in docker-compose.qec.yml describing a one-time bootstrap. No
+    # deploy had ever run it, so the code advanced on every deploy and the
+    # schema advanced only when a human remembered.
+    #
+    # MEASURED 2026-09-04: production sat at qec_023 while the repo shipped
+    # qec_025. `journeys.criticality_band` and `catalog_questions.revealed_by`
+    # did not exist, and the failure was SILENT - a crawl of a NEW app captured
+    # its questions and then wrote no catalogue and no journeys at all:
+    #     OrangeHRM  57 questions -> 0 catalog_questions, 0 journeys
+    # The golden app looked healthy only because its rows predate the drift.
+    #
+    # Run from the freshly BUILT image and BEFORE the swap, so the schema is
+    # never behind the code that serves it. The image's entrypoint is not a
+    # shell, hence the explicit --entrypoint.
+    $cmds += "; echo '>> applying database migrations (alembic upgrade head)'"
+    $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE run --rm --no-deps" +
+             " --entrypoint sh qe-central -c 'cd /app/service && alembic -c alembic_qec/alembic.ini upgrade head'"
     $cmds += "; docker compose --env-file $ENV_FILE -f $QEC_COMPOSE up -d --force-recreate $qecUpList"
+    # PROVE the upgrade actually landed. A migration step that silently no-ops
+    # is the same defect wearing a different hat, so the deploy fails here if
+    # the serving database is not at this checkout's head.
+    $cmds += "; bash scripts/gate_schema_deployed.sh"
 }
 
 if ($mainBuild.Count -gt 0) {
