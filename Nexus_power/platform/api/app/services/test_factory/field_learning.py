@@ -52,7 +52,14 @@ _logger = logging.getLogger(__name__)
 #: import would make a prior written by one unreadable by the other after a
 #: partial rollout. Any type not in this set is refused, never stored.
 VOCABULARY = frozenset({
-    "unknown", "given_name", "family_name", "full_name", "email", "phone",
+    # "middle_name" added 2026-09-04 alongside the explorer's own entry. A live
+    # crawl answered a "Middle Name" box with the applicant's WHOLE name, because
+    # the field carried the token "name", matched neither the first- nor
+    # last-name rung, and fell through to full_name. Both sides move together or
+    # test_the_two_vocabularies_cannot_drift_apart fails - which is exactly what
+    # it did when only the explorer was changed, and exactly what it is for.
+    "unknown", "given_name", "family_name", "full_name", "middle_name",
+    "email", "phone",
     "date_of_birth", "age", "national_id", "street_address", "street_address_2",
     "city", "region", "postal_code", "country", "company", "job_title", "url",
     "card_number", "card_expiry", "card_cvc", "currency_amount", "percent",
