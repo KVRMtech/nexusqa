@@ -207,6 +207,7 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         field_priors: Optional[dict[str, Any]] = None,
         identity_seed: str = "",
         data_mode: str = "user",
+        data_llm: bool = False,
         crawl_mode: str = "explore",
         traversal: str = TRAVERSAL_PROBE,
         credentials: Optional[Credentials] = None,
@@ -294,6 +295,10 @@ class Crawler(AuthFlowMixin, SubmitMixin, DiscoveryMixin, WalkerMixin,
         # "user" = today's behaviour (a radio group is the client's choice to make);
         # "agent" = answer everything honestly answerable, recording each choice.
         self._data_mode = str(data_mode or "user").strip().lower()
+        # Whether THIS crawl may consult the data agent. Decided per crawl by
+        # qe-central from the operator's portal choice; the deployment-wide
+        # QEC_DATA_LLM remains a default for crawls that carry no choice.
+        self._data_llm = bool(data_llm)
         # "explore" / "target" / "e2e". Only the step budget differs — every safety
         # gate is identical in all three, because a deeper walk must not be a
         # laxer one.

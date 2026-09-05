@@ -1314,7 +1314,15 @@ class DiscoveryMixin:
             except Exception:                        # noqa: BLE001
                 settings = None
             self._branch_settings = settings
-        if not getattr(settings, "data_llm", False):
+        # THIS CRAWL'S OWN CHOICE FIRST, the deployment default second.
+        #
+        # Reading only the settings flag made the operator's choice inert:
+        # qe-central resolves data_llm per crawl and sends it, and a fleet
+        # with QEC_DATA_LLM unset ignored it every time. The symptom was not
+        # an error - the crawl completed, wrote "autotest" into every field
+        # whose meaning it had not recognised, and reported success.
+        per_crawl = bool(getattr(self, "_data_llm", False))
+        if not (per_crawl or getattr(settings, "data_llm", False)):
             self._llm_agent = None
             return None
         from .llm_data import LLMDataAgent

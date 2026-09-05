@@ -137,6 +137,18 @@ class ExploreRequest(BaseModel):
     #: and is left to the client. "agent" answers everything honestly answerable so
     #: a funnel completes unattended, recording each choice in the field ledger.
     data_mode: str = Field(default="user", max_length=16)
+    #: PER-CRAWL LLM DATA FILL — the operator's own choice, resolved by
+    #: qe-central (services/data_posture) from the portal mode and the
+    #: environment attestation, and sent on every dispatch.
+    #:
+    #: MEASURED 2026-09-04: qe-central computed this correctly and sent it,
+    #: and the explorer had no field to receive it — so the flag was dropped
+    #: and the agent fell back to the container-wide QEC_DATA_LLM, which is
+    #: unset on the fleet. A Target crawl with data_mode="llm" therefore ran
+    #: with llm_calls=0 and wrote the deterministic filler "autotest" into 8
+    #: of 11 fields, two of them date fields. The operator chose a feature
+    #: and silently did not get it.
+    data_llm: bool = Field(default=False)
     #: CRAWL MODE — "explore" / "target" / "e2e". Only the wizard STEP BUDGET
     #: differs: e2e walks a funnel to its end rather than sampling six steps of it.
     #: Every safety gate is identical in all three, because a deeper walk must not
@@ -1574,6 +1586,7 @@ async def _run_job(
                 # that has nothing to do with the application.
                 identity_seed=req.identity_seed or f"{req.tenant_id}::{req.target_url}",
                 data_mode=req.data_mode,
+                data_llm=bool(req.data_llm),
                 crawl_mode=req.crawl_mode,
                 traversal=req.traversal,
                 advance_oracle=(
