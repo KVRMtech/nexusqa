@@ -42,10 +42,19 @@ from ..clients import platform_api
 logger = logging.getLogger(__name__)
 
 #: Mirrored from the explorer's field_semantics. Duplicated rather than imported
-#: because the two services deploy independently: a shared import would let a
+#: because the services deploy independently: a shared import would let a
 #: partial rollout produce types the other side cannot read.
+#:
+#: THERE ARE THREE COPIES, not two - here, platform-api's
+#: services/test_factory/field_learning, and the explorer's field_semantics -
+#: and each is pinned by its own test in its own process, because the two
+#: services cannot share an interpreter. Adding "middle_name" to the explorer
+#: alone failed platform-api's test_the_two_vocabularies_cannot_drift_apart;
+#: fixing that pair alone then failed this one. A type that is not in ALL THREE
+#: is written by one service and silently dropped by the next.
 VOCABULARY = frozenset({
-    "unknown", "given_name", "family_name", "full_name", "email", "phone",
+    "unknown", "given_name", "family_name", "full_name", "middle_name",
+    "email", "phone",
     "date_of_birth", "age", "national_id", "street_address", "street_address_2",
     "city", "region", "postal_code", "country", "company", "job_title", "url",
     "card_number", "card_expiry", "card_cvc", "currency_amount", "percent",
