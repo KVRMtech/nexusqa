@@ -33,6 +33,7 @@ UNKNOWN = "unknown"
 GIVEN_NAME = "given_name"
 FAMILY_NAME = "family_name"
 FULL_NAME = "full_name"
+MIDDLE_NAME = "middle_name"
 EMAIL = "email"
 PHONE = "phone"
 DOB = "date_of_birth"
@@ -64,7 +65,7 @@ CONSENT = "consent"
 
 #: Every type a classifier may return. Anything else is coerced to UNKNOWN.
 VOCABULARY = frozenset({
-    UNKNOWN, GIVEN_NAME, FAMILY_NAME, FULL_NAME, EMAIL, PHONE, DOB, AGE, SSN,
+    UNKNOWN, GIVEN_NAME, FAMILY_NAME, FULL_NAME, MIDDLE_NAME, EMAIL, PHONE, DOB, AGE, SSN,
     STREET, STREET_2, CITY, REGION, POSTAL_CODE, COUNTRY, COMPANY, JOB_TITLE,
     URL, CARD_NUMBER, CARD_EXPIRY, CARD_CVC, CURRENCY, PERCENT, QUANTITY,
     DATE, TIME, PASSWORD, OTP, USERNAME, FREE_TEXT, CHOICE, CONSENT,
@@ -75,7 +76,7 @@ VOCABULARY = frozenset({
 #: for a single client. The classifier marks them so callers cannot forget.
 SENSITIVE = frozenset({
     SSN, DOB, CARD_NUMBER, CARD_CVC, CARD_EXPIRY, PASSWORD, OTP,
-    PHONE, EMAIL, STREET, STREET_2, FULL_NAME, GIVEN_NAME, FAMILY_NAME,
+    PHONE, EMAIL, STREET, STREET_2, FULL_NAME, GIVEN_NAME, FAMILY_NAME, MIDDLE_NAME,
 })
 
 #: Types no generator may ever satisfy — they need something from outside the
@@ -152,6 +153,16 @@ _TOKEN_RULES: tuple[tuple[frozenset[str], frozenset[str], str], ...] = (
     (frozenset({"date"}), frozenset(), DATE),
 )
 
+#: A field whose only NAME is a date MASK is a date field. Applications with
+#: no accessible name are labelled by their placeholder, and "yyyy-mm-dd" is
+#: then the whole label. MEASURED: such a field classified UNKNOWN, fell to
+#: the free-text rung and was answered "autotest" - a string a date input
+#: cannot accept, so the submit could never have been valid.
+_DATE_MASK_RE = re.compile(
+    r"^[\s(\[]*(?:yyyy|yy|dd|mm|hh)(?:[^A-Za-z0-9]{1,3}(?:yyyy|yy|dd|mm|hh)){1,3}[\s)\]]*$",
+    re.IGNORECASE,
+)
+
 #: A name half is (a qualifier that needs the word "name" beside it, a spelling
 #: that stands alone). "Last" only means a surname next to "name" — a live crawl
 #: classified "Tobacco use in the last 12 months" as a family name because the
@@ -161,6 +172,19 @@ _NAME_PAIR = (
                                                "givenname"}), GIVEN_NAME),
     (frozenset({"last", "family"}), frozenset({"surname", "lname", "lastname",
                                                "familyname"}), FAMILY_NAME),
+    # A MIDDLE NAME IS NOT A FULL NAME, and the difference is not cosmetic.
+    #
+    # MEASURED on orangehrm 2026-09-04. "Middle Name" carries the token "name"
+    # and matched neither half above, so it fell to the FULL_NAME rung below and
+    # the funnel was answered "Amelia Lockhart" - the applicant's whole name
+    # typed into the middle-name box. The value LOOKS right, which is what makes
+    # it worse than a blank: it reads as a working fill in every report.
+    #
+    # It also cannot be rescued downstream. The model is rung 8 and
+    # forms._llm_should_answer only consults it when the ladder produced nothing
+    # or its own "autotest" placeholder - so a confidently WRONG deterministic
+    # answer silently locks the model out of correcting it.
+    (frozenset({"middle"}), frozenset({"middlename", "midname"}), MIDDLE_NAME),
 )
 
 
@@ -240,6 +264,12 @@ def classify(sig: Mapping[str, Any], *,
                     except (TypeError, ValueError):
                         conf = 0.7
                 return _verdict(sem, "learned_prior", conf)
+
+    # A name that IS a date mask ("yyyy-mm-dd", "dd/mm/yyyy") names the FORMAT,
+    # which is the application telling us the type in the only place it had.
+    raw_name = str(sig.get("name") or sig.get("placeholder") or "").strip()
+    if raw_name and _DATE_MASK_RE.match(raw_name):
+        return _verdict(DATE, "date_mask", 0.7)
 
     # structural fallbacks — a shape we can fill safely without claiming meaning
     if it in _INPUT_TYPE:

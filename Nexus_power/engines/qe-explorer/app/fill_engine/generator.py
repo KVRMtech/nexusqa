@@ -382,11 +382,34 @@ def _least_assertive(options: Sequence[str]) -> Optional[str]:
 
 # ── text generation ──────────────────────────────────────────────────────────
 
+
+def _middle_name_for(person) -> str:
+    """A middle name for this person: stable, and never their first name.
+
+    Derived from the person's OWN already-generated names rather than from the
+    persona byte stream. Drawing a fresh byte there would shift every subsequent
+    value for every field in every crawl - a golden-moving change to fix one
+    box - so the derivation reads what the persona already decided.
+    """
+    from .persona import _RELATIVE_GIVEN
+    given = str(getattr(person, "given_name", "") or "")
+    family = str(getattr(person, "family_name", "") or "")
+    if not _RELATIVE_GIVEN:                                  # pragma: no cover
+        return "Lee"
+    seed = sum(ord(c) for c in (given + family)) or 1
+    pool = list(_RELATIVE_GIVEN)
+    pick = pool[seed % len(pool)]
+    if pick.strip().lower() == given.strip().lower() and len(pool) > 1:
+        pick = pool[(seed + 1) % len(pool)]
+    return pick
+
+
 def _person_text(sem: str, person, persona: Persona) -> tuple[Optional[str], str]:
     mapping = {
         S.GIVEN_NAME: (person.given_name, "given_name"),
         S.FAMILY_NAME: (person.family_name, "family_name"),
         S.FULL_NAME: (person.full_name, "full_name"),
+        S.MIDDLE_NAME: (_middle_name_for(person), "middle_name"),
         S.EMAIL: (person.email, "email"),
         S.PHONE: (person.phone, "phone"),
         S.SSN: (person.national_id, "national_id"),
