@@ -59,9 +59,25 @@ _SYSTEM = (
     "verbatim. "
     "(2) Respect every stated constraint (pattern, min, max, maxlength, date "
     "windows). "
+    # NO LITERAL CARD NUMBER HERE, and it is not a style choice.
+    #
+    # MEASURED 2026-09-04. This instruction used to carry the classic Visa test
+    # PAN as an example. That number passes Luhn BY DESIGN, so the egress guard
+    # scanned this very system prompt, matched credit_card, and refused the
+    # request — every field, every crawl, every application:
+    #
+    #     qec.egress.pii_detected site=llm:field_value patterns=['credit_card']
+    #     qec.platform_api.egress_blocked
+    #     Middle Name -> status=unavailable
+    #
+    # The safety instruction tripped the safety scanner, and the only visible
+    # symptom was a crawl quietly falling back to its deterministic filler.
+    # The guard was RIGHT: a Luhn-valid PAN in an outbound payload is exactly
+    # what it exists to stop. So the prompt loses the literal and keeps the
+    # instruction; the model does not need the digits spelled out.
     "(3) For government or financial identifiers use designated TEST ranges "
-    "only: SSNs in the 900-series, card numbers that pass Luhn from published "
-    "test prefixes (e.g. 4111111111111111), routing number 021000021. "
+    "only: SSNs in the 900-series, and card numbers from the card networks' "
+    "own published test ranges - never a real or realistic PAN. "
     "(4) Prefer a plausible, internally consistent value over a clever one; "
     "short over long. "
     "(5) If a rejection message from the application is provided, your value "
