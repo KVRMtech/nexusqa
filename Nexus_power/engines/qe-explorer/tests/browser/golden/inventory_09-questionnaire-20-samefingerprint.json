@@ -22,7 +22,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you used tobacco in the last 12 months? Yes No",
+      "name": "Have you used tobacco in the last 12 months?",
       "role": "group"
     },
     "max": "",
@@ -43,7 +43,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you used tobacco in the last 12 months? Yes No",
+    "section": "Have you used tobacco in the last 12 months?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -73,7 +73,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you used tobacco in the last 12 months? Yes No",
+      "name": "Have you used tobacco in the last 12 months?",
       "role": "group"
     },
     "max": "",
@@ -94,7 +94,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you used tobacco in the last 12 months? Yes No",
+    "section": "Have you used tobacco in the last 12 months?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -124,7 +124,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been hospitalised in the last 5 years? Yes No",
+      "name": "Have you been hospitalised in the last 5 years?",
       "role": "group"
     },
     "max": "",
@@ -145,7 +145,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been hospitalised in the last 5 years? Yes No",
+    "section": "Have you been hospitalised in the last 5 years?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -175,7 +175,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been hospitalised in the last 5 years? Yes No",
+      "name": "Have you been hospitalised in the last 5 years?",
       "role": "group"
     },
     "max": "",
@@ -196,7 +196,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been hospitalised in the last 5 years? Yes No",
+    "section": "Have you been hospitalised in the last 5 years?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -226,7 +226,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you have a diagnosis of diabetes? Yes No",
+      "name": "Do you have a diagnosis of diabetes?",
       "role": "group"
     },
     "max": "",
@@ -247,7 +247,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you have a diagnosis of diabetes? Yes No",
+    "section": "Do you have a diagnosis of diabetes?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -277,7 +277,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you have a diagnosis of diabetes? Yes No",
+      "name": "Do you have a diagnosis of diabetes?",
       "role": "group"
     },
     "max": "",
@@ -298,7 +298,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you have a diagnosis of diabetes? Yes No",
+    "section": "Do you have a diagnosis of diabetes?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -328,7 +328,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been prescribed medication for blood pressure? Yes No",
+      "name": "Have you been prescribed medication for blood pressure?",
       "role": "group"
     },
     "max": "",
@@ -349,7 +349,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been prescribed medication for blood pressure? Yes No",
+    "section": "Have you been prescribed medication for blood pressure?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -379,7 +379,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been prescribed medication for blood pressure? Yes No",
+      "name": "Have you been prescribed medication for blood pressure?",
       "role": "group"
     },
     "max": "",
@@ -400,7 +400,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been prescribed medication for blood pressure? Yes No",
+    "section": "Have you been prescribed medication for blood pressure?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -430,7 +430,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you ever been declined life insurance? Yes No",
+      "name": "Have you ever been declined life insurance?",
       "role": "group"
     },
     "max": "",
@@ -451,7 +451,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you ever been declined life insurance? Yes No",
+    "section": "Have you ever been declined life insurance?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -481,7 +481,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you ever been declined life insurance? Yes No",
+      "name": "Have you ever been declined life insurance?",
       "role": "group"
     },
     "max": "",
@@ -502,7 +502,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you ever been declined life insurance? Yes No",
+    "section": "Have you ever been declined life insurance?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -532,7 +532,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you engage in scuba diving? Yes No",
+      "name": "Do you engage in scuba diving?",
       "role": "group"
     },
     "max": "",
@@ -553,7 +553,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you engage in scuba diving? Yes No",
+    "section": "Do you engage in scuba diving?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -583,7 +583,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you engage in scuba diving? Yes No",
+      "name": "Do you engage in scuba diving?",
       "role": "group"
     },
     "max": "",
@@ -604,7 +604,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you engage in scuba diving? Yes No",
+    "section": "Do you engage in scuba diving?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -634,7 +634,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you engage in private aviation? Yes No",
+      "name": "Do you engage in private aviation?",
       "role": "group"
     },
     "max": "",
@@ -655,7 +655,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you engage in private aviation? Yes No",
+    "section": "Do you engage in private aviation?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -685,7 +685,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you engage in private aviation? Yes No",
+      "name": "Do you engage in private aviation?",
       "role": "group"
     },
     "max": "",
@@ -706,7 +706,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you engage in private aviation? Yes No",
+    "section": "Do you engage in private aviation?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -736,7 +736,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you travelled outside the country in the last 12 months? Yes No",
+      "name": "Have you travelled outside the country in the last 12 months?",
       "role": "group"
     },
     "max": "",
@@ -757,7 +757,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you travelled outside the country in the last 12 months? Yes No",
+    "section": "Have you travelled outside the country in the last 12 months?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -787,7 +787,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you travelled outside the country in the last 12 months? Yes No",
+      "name": "Have you travelled outside the country in the last 12 months?",
       "role": "group"
     },
     "max": "",
@@ -808,7 +808,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you travelled outside the country in the last 12 months? Yes No",
+    "section": "Have you travelled outside the country in the last 12 months?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -838,7 +838,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you have a family history of heart disease? Yes No",
+      "name": "Do you have a family history of heart disease?",
       "role": "group"
     },
     "max": "",
@@ -859,7 +859,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you have a family history of heart disease? Yes No",
+    "section": "Do you have a family history of heart disease?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -889,7 +889,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you have a family history of heart disease? Yes No",
+      "name": "Do you have a family history of heart disease?",
       "role": "group"
     },
     "max": "",
@@ -910,7 +910,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you have a family history of heart disease? Yes No",
+    "section": "Do you have a family history of heart disease?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -940,7 +940,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you had a surgical procedure in the last 2 years? Yes No",
+      "name": "Have you had a surgical procedure in the last 2 years?",
       "role": "group"
     },
     "max": "",
@@ -961,7 +961,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you had a surgical procedure in the last 2 years? Yes No",
+    "section": "Have you had a surgical procedure in the last 2 years?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -991,7 +991,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you had a surgical procedure in the last 2 years? Yes No",
+      "name": "Have you had a surgical procedure in the last 2 years?",
       "role": "group"
     },
     "max": "",
@@ -1012,7 +1012,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you had a surgical procedure in the last 2 years? Yes No",
+    "section": "Have you had a surgical procedure in the last 2 years?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1042,7 +1042,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you currently use recreational drugs? Yes No",
+      "name": "Do you currently use recreational drugs?",
       "role": "group"
     },
     "max": "",
@@ -1063,7 +1063,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you currently use recreational drugs? Yes No",
+    "section": "Do you currently use recreational drugs?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1093,7 +1093,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you currently use recreational drugs? Yes No",
+      "name": "Do you currently use recreational drugs?",
       "role": "group"
     },
     "max": "",
@@ -1114,7 +1114,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you currently use recreational drugs? Yes No",
+    "section": "Do you currently use recreational drugs?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1144,7 +1144,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you consumed more than 14 units of alcohol per week? Yes No",
+      "name": "Have you consumed more than 14 units of alcohol per week?",
       "role": "group"
     },
     "max": "",
@@ -1165,7 +1165,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you consumed more than 14 units of alcohol per week? Yes No",
+    "section": "Have you consumed more than 14 units of alcohol per week?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1195,7 +1195,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you consumed more than 14 units of alcohol per week? Yes No",
+      "name": "Have you consumed more than 14 units of alcohol per week?",
       "role": "group"
     },
     "max": "",
@@ -1216,7 +1216,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you consumed more than 14 units of alcohol per week? Yes No",
+    "section": "Have you consumed more than 14 units of alcohol per week?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1246,7 +1246,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been treated for a mental health condition? Yes No",
+      "name": "Have you been treated for a mental health condition?",
       "role": "group"
     },
     "max": "",
@@ -1267,7 +1267,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been treated for a mental health condition? Yes No",
+    "section": "Have you been treated for a mental health condition?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1297,7 +1297,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been treated for a mental health condition? Yes No",
+      "name": "Have you been treated for a mental health condition?",
       "role": "group"
     },
     "max": "",
@@ -1318,7 +1318,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been treated for a mental health condition? Yes No",
+    "section": "Have you been treated for a mental health condition?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1348,7 +1348,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you have a diagnosis of cancer? Yes No",
+      "name": "Do you have a diagnosis of cancer?",
       "role": "group"
     },
     "max": "",
@@ -1369,7 +1369,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you have a diagnosis of cancer? Yes No",
+    "section": "Do you have a diagnosis of cancer?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1399,7 +1399,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you have a diagnosis of cancer? Yes No",
+      "name": "Do you have a diagnosis of cancer?",
       "role": "group"
     },
     "max": "",
@@ -1420,7 +1420,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you have a diagnosis of cancer? Yes No",
+    "section": "Do you have a diagnosis of cancer?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1450,7 +1450,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you had a stroke or heart attack? Yes No",
+      "name": "Have you had a stroke or heart attack?",
       "role": "group"
     },
     "max": "",
@@ -1471,7 +1471,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you had a stroke or heart attack? Yes No",
+    "section": "Have you had a stroke or heart attack?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1501,7 +1501,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you had a stroke or heart attack? Yes No",
+      "name": "Have you had a stroke or heart attack?",
       "role": "group"
     },
     "max": "",
@@ -1522,7 +1522,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you had a stroke or heart attack? Yes No",
+    "section": "Have you had a stroke or heart attack?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1552,7 +1552,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Are you currently pregnant? Yes No",
+      "name": "Are you currently pregnant?",
       "role": "group"
     },
     "max": "",
@@ -1573,7 +1573,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Are you currently pregnant? Yes No",
+    "section": "Are you currently pregnant?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1603,7 +1603,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Are you currently pregnant? Yes No",
+      "name": "Are you currently pregnant?",
       "role": "group"
     },
     "max": "",
@@ -1624,7 +1624,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Are you currently pregnant? Yes No",
+    "section": "Are you currently pregnant?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1654,7 +1654,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you hold a commercial driving licence? Yes No",
+      "name": "Do you hold a commercial driving licence?",
       "role": "group"
     },
     "max": "",
@@ -1675,7 +1675,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you hold a commercial driving licence? Yes No",
+    "section": "Do you hold a commercial driving licence?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1705,7 +1705,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you hold a commercial driving licence? Yes No",
+      "name": "Do you hold a commercial driving licence?",
       "role": "group"
     },
     "max": "",
@@ -1726,7 +1726,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you hold a commercial driving licence? Yes No",
+    "section": "Do you hold a commercial driving licence?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1756,7 +1756,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you had a moving violation in the last 3 years? Yes No",
+      "name": "Have you had a moving violation in the last 3 years?",
       "role": "group"
     },
     "max": "",
@@ -1777,7 +1777,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you had a moving violation in the last 3 years? Yes No",
+    "section": "Have you had a moving violation in the last 3 years?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1807,7 +1807,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you had a moving violation in the last 3 years? Yes No",
+      "name": "Have you had a moving violation in the last 3 years?",
       "role": "group"
     },
     "max": "",
@@ -1828,7 +1828,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you had a moving violation in the last 3 years? Yes No",
+    "section": "Have you had a moving violation in the last 3 years?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1858,7 +1858,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you participate in motorsport? Yes No",
+      "name": "Do you participate in motorsport?",
       "role": "group"
     },
     "max": "",
@@ -1879,7 +1879,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you participate in motorsport? Yes No",
+    "section": "Do you participate in motorsport?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1909,7 +1909,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Do you participate in motorsport? Yes No",
+      "name": "Do you participate in motorsport?",
       "role": "group"
     },
     "max": "",
@@ -1930,7 +1930,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Do you participate in motorsport? Yes No",
+    "section": "Do you participate in motorsport?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -1960,7 +1960,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been advised to have a medical test not yet completed? Yes No",
+      "name": "Have you been advised to have a medical test not yet completed?",
       "role": "group"
     },
     "max": "",
@@ -1981,7 +1981,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been advised to have a medical test not yet completed? Yes No",
+    "section": "Have you been advised to have a medical test not yet completed?",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -2011,7 +2011,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Have you been advised to have a medical test not yet completed? Yes No",
+      "name": "Have you been advised to have a medical test not yet completed?",
       "role": "group"
     },
     "max": "",
@@ -2032,7 +2032,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Have you been advised to have a medical test not yet completed? Yes No",
+    "section": "Have you been advised to have a medical test not yet completed?",
     "step": "",
     "tag": "input",
     "testid": "",

@@ -48,7 +48,7 @@
     "required": false,
     "role": "combobox",
     "roledescription": "",
-    "section": "",
+    "section": "Coverage options",
     "step": "",
     "tag": "button",
     "testid": "",

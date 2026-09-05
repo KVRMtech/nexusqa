@@ -22,7 +22,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Term product Term 10 Term 20",
+      "name": "Term product",
       "role": "group"
     },
     "max": "",
@@ -43,7 +43,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Term product Term 10 Term 20",
+    "section": "Term product",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -73,7 +73,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Term product Term 10 Term 20",
+      "name": "Term product",
       "role": "group"
     },
     "max": "",
@@ -94,7 +94,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Term product Term 10 Term 20",
+    "section": "Term product",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -124,7 +124,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Whole life product Whole Life Universal Life",
+      "name": "Whole life product",
       "role": "group"
     },
     "max": "",
@@ -145,7 +145,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Whole life product Whole Life Universal Life",
+    "section": "Whole life product",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -175,7 +175,7 @@
     "inputmode": "",
     "kind": "radio",
     "landmark": {
-      "name": "Whole life product Whole Life Universal Life",
+      "name": "Whole life product",
       "role": "group"
     },
     "max": "",
@@ -196,7 +196,7 @@
     "required": false,
     "role": "radio",
     "roledescription": "",
-    "section": "Whole life product Whole Life Universal Life",
+    "section": "Whole life product",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -430,7 +430,7 @@
     "inputmode": "",
     "kind": "checkbox",
     "landmark": {
-      "name": "Health conditions Diabetes Asthma Cardiac None of these",
+      "name": "Health conditions",
       "role": "group"
     },
     "max": "",
@@ -451,7 +451,7 @@
     "required": false,
     "role": "checkbox",
     "roledescription": "",
-    "section": "Health conditions Diabetes Asthma Cardiac None of these",
+    "section": "Health conditions",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -481,7 +481,7 @@
     "inputmode": "",
     "kind": "checkbox",
     "landmark": {
-      "name": "Health conditions Diabetes Asthma Cardiac None of these",
+      "name": "Health conditions",
       "role": "group"
     },
     "max": "",
@@ -502,7 +502,7 @@
     "required": false,
     "role": "checkbox",
     "roledescription": "",
-    "section": "Health conditions Diabetes Asthma Cardiac None of these",
+    "section": "Health conditions",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -532,7 +532,7 @@
     "inputmode": "",
     "kind": "checkbox",
     "landmark": {
-      "name": "Health conditions Diabetes Asthma Cardiac None of these",
+      "name": "Health conditions",
       "role": "group"
     },
     "max": "",
@@ -553,7 +553,7 @@
     "required": false,
     "role": "checkbox",
     "roledescription": "",
-    "section": "Health conditions Diabetes Asthma Cardiac None of these",
+    "section": "Health conditions",
     "step": "",
     "tag": "input",
     "testid": "",
@@ -583,7 +583,7 @@
     "inputmode": "",
     "kind": "checkbox",
     "landmark": {
-      "name": "Health conditions Diabetes Asthma Cardiac None of these",
+      "name": "Health conditions",
       "role": "group"
     },
     "max": "",
@@ -604,7 +604,7 @@
     "required": false,
     "role": "checkbox",
     "roledescription": "",
-    "section": "Health conditions Diabetes Asthma Cardiac None of these",
+    "section": "Health conditions",
     "step": "",
     "tag": "input",
     "testid": "",

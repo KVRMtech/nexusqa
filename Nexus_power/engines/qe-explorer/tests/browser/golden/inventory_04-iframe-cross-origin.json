@@ -43,7 +43,7 @@
     "required": false,
     "role": "textbox",
     "roledescription": "",
-    "section": "",
+    "section": "Payment",
     "step": "",
     "tag": "input",
     "testid": "",

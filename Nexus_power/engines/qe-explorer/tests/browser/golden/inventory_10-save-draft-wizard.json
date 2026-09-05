@@ -22,7 +22,7 @@
     "inputmode": "",
     "kind": "spinbutton",
     "landmark": {
-      "name": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+      "name": "Coverage",
       "role": "group"
     },
     "max": "2000000",
@@ -43,7 +43,7 @@
     "required": true,
     "role": "spinbutton",
     "roledescription": "",
-    "section": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+    "section": "Coverage",
     "step": "1000",
     "tag": "input",
     "testid": "",
@@ -73,7 +73,7 @@
     "inputmode": "",
     "kind": "combobox",
     "landmark": {
-      "name": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+      "name": "Coverage",
       "role": "group"
     },
     "max": "",
@@ -98,7 +98,7 @@
     "required": true,
     "role": "combobox",
     "roledescription": "",
-    "section": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+    "section": "Coverage",
     "step": "",
     "tag": "select",
     "testid": "",
@@ -128,7 +128,7 @@
     "inputmode": "",
     "kind": "textbox",
     "landmark": {
-      "name": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+      "name": "Coverage",
       "role": "group"
     },
     "max": "",
@@ -149,7 +149,7 @@
     "required": false,
     "role": "textbox",
     "roledescription": "",
-    "section": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+    "section": "Coverage",
     "step": "",
     "tag": "textarea",
     "testid": "",
@@ -179,7 +179,7 @@
     "inputmode": "",
     "kind": "textbox",
     "landmark": {
-      "name": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+      "name": "Coverage",
       "role": "group"
     },
     "max": "",
@@ -200,7 +200,7 @@
     "required": false,
     "role": "textbox",
     "roledescription": "",
-    "section": "Coverage Face Amount Term Select term length 10 years 20 years Notes Underwriter",
+    "section": "Coverage",
     "step": "",
     "tag": "div",
     "testid": "",

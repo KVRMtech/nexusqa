@@ -910,10 +910,30 @@ def resolve_field(control: Mapping[str, Any], kind: str, name: str,
             f"{k}={str(control.get(k)).strip()}"
             for k in ("pattern", "minlength", "maxlength", "min", "max")
             if str(control.get(k) or "").strip())
+        # SECTION IS NOT SENT. It is the page's own heading text, and on a record
+        # page that is the record's identity.
+        #
+        # MEASURED 2026-09-05 with the real capture and the real egress guard.
+        # Headings that reach `section` and pass the guard untouched:
+        #     "Application for Jane Q. Doe"
+        #     "Beneficiary: Robert Alan Smith (DOB 11/02/1958)"
+        #     "Patient John Smith, MRN 004512, DOB 1948-03-02"
+        # nexus_sdk.llm.pii_guard is deliberately narrow - email, +E.164 phone,
+        # US SSN, Luhn card, IBAN, AWS key, GitHub token - so a person's name, a
+        # date of birth, a policy/member/MRN number and a national-format phone
+        # number all pass it. The path from capture to provider carries no other
+        # redaction, and services/pii_egress_guard rests its whole safety
+        # argument on the payload being "VALUE-FREE - only labels/types/options".
+        #
+        # This argument only became false when `section` started being populated
+        # (it was empty on 0 of 19,838 fields before), so the line below is the
+        # honest scope of the change: keep the capture, which is evidence and
+        # stays on the box, and stop handing the page's headings to a third
+        # party. A field's TYPE is what the section is useful for, and that is
+        # decided locally in field_semantics - no egress needed.
         _candidate = llm.value_for(
             name=name, semantic_type=str(verdict.get("type") or ""),
-            kind=kind, options=_opts, constraints=_cons,
-            section=str(control.get("section") or ""))
+            kind=kind, options=_opts, constraints=_cons)
         if _candidate is not None:
             generated = _candidate
             llm_answered = True

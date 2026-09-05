@@ -94,7 +94,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Are you currently pregnant? Yes No"
+            "label": "Are you currently pregnant?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -116,7 +116,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you currently use recreational drugs? Yes No"
+            "label": "Do you currently use recreational drugs?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -138,7 +138,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you engage in private aviation? Yes No"
+            "label": "Do you engage in private aviation?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -160,7 +160,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you engage in scuba diving? Yes No"
+            "label": "Do you engage in scuba diving?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -182,7 +182,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you have a diagnosis of cancer? Yes No"
+            "label": "Do you have a diagnosis of cancer?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -204,7 +204,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you have a diagnosis of diabetes? Yes No"
+            "label": "Do you have a diagnosis of diabetes?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -226,7 +226,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you have a family history of heart disease? Yes No"
+            "label": "Do you have a family history of heart disease?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -248,7 +248,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you hold a commercial driving licence? Yes No"
+            "label": "Do you hold a commercial driving licence?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -270,7 +270,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Do you participate in motorsport? Yes No"
+            "label": "Do you participate in motorsport?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -292,7 +292,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you been advised to have a medical test not yet completed? Yes No"
+            "label": "Have you been advised to have a medical test not yet completed?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -314,7 +314,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you been hospitalised in the last 5 years? Yes No"
+            "label": "Have you been hospitalised in the last 5 years?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -336,7 +336,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you been prescribed medication for blood pressure? Yes No"
+            "label": "Have you been prescribed medication for blood pressure?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -358,7 +358,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you been treated for a mental health condition? Yes No"
+            "label": "Have you been treated for a mental health condition?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -380,7 +380,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you consumed more than 14 units of alcohol per week? Yes No"
+            "label": "Have you consumed more than 14 units of alcohol per week?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -402,7 +402,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you ever been declined life insurance? Yes No"
+            "label": "Have you ever been declined life insurance?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -424,7 +424,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you had a moving violation in the last 3 years? Yes No"
+            "label": "Have you had a moving violation in the last 3 years?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -446,7 +446,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you had a stroke or heart attack? Yes No"
+            "label": "Have you had a stroke or heart attack?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -468,7 +468,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you had a surgical procedure in the last 2 years? Yes No"
+            "label": "Have you had a surgical procedure in the last 2 years?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -490,7 +490,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you travelled outside the country in the last 12 months? Yes No"
+            "label": "Have you travelled outside the country in the last 12 months?"
           },
           "bindable": true,
           "group_id": "<hash>",
@@ -512,7 +512,7 @@
         "locator": {
           "anchor": {
             "kind": "group",
-            "label": "Have you used tobacco in the last 12 months? Yes No"
+            "label": "Have you used tobacco in the last 12 months?"
           },
           "bindable": true,
           "group_id": "<hash>",

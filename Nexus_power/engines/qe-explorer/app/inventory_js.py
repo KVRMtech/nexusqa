@@ -902,6 +902,14 @@ INVENTORY_JS = (r"""
     if (an.name) return clip(an.name, MAX_LANDMARK);
     // heading inside, else first short text line
     try {
+      // A fieldset NAMES ITSELF with its legend. Falling through to the whole
+      // element's textContent produced "Beneficiary details Full Name" - the
+      // group label with the field's own label glued on, which then reaches the
+      // model as the section.
+      if (lc(el.tagName) === "fieldset") {
+        var lg0 = el.querySelector("legend");
+        if (lg0) { var lt = norm(lg0.textContent); if (lt) return clip(lt, MAX_LANDMARK); }
+      }
       var h = el.querySelector("h1,h2,h3,h4,h5,h6,[role=heading]");
       if (h) { var ht = norm(h.textContent); if (ht) return clip(ht, MAX_LANDMARK); }
     } catch (e) {}
@@ -1267,7 +1275,68 @@ INVENTORY_JS = (r"""
   // Product UI text, never a value — the same discipline as a label.
   function sectionOf(el, doc) {
     var lm = nearestLandmark(el, doc);
-    return lm && lm.name ? clip(lm.name, MAX_LANDMARK) : "";
+    if (lm && lm.name) return clip(lm.name, MAX_LANDMARK);
+    // FALLBACK: THE GROUP LABEL A HUMAN READS.
+    //
+    // MEASURED 2026-09-05 across every crawl ever recorded: 0 of 19,838 filled
+    // fields carried a section. The landmark rule needs a NAMED landmark
+    // ancestor, and real applications group form fields in plain divs - so the
+    // "Section:" line the value prompt supports was never once populated, for
+    // any application. A model asked to answer "From" was told only "From".
+    //
+    // Measured consequence on orangehrm: the date-range inputs labelled "From"
+    // and "To" were answered "John Smith" and an email address - fluent, and
+    // impossible to enter. The grouping that says "Date of Application" is
+    // right there in the markup; nothing was reading it.
+    //
+    // So: a <legend>, an aria-labelled group, or the nearest heading ABOVE the
+    // field - the three ways HTML actually expresses "these fields belong
+    // together". Product UI text only, never a value, exactly as a label is.
+    var cur = el, hops = 0;
+    while (cur && cur.nodeType === 1 && hops < 12) {
+      var tag = lc(cur.tagName);
+      if (tag === "fieldset") {
+        try {
+          var lg = cur.querySelector("legend");
+          if (lg) { var t = clip(norm(lg.textContent), MAX_LANDMARK); if (t) return t; }
+        } catch (e) {}
+      }
+      if (lc(attr(cur, "role")) === "group") {
+        var gl = clip(attr(cur, "aria-label"), MAX_LANDMARK);
+        if (gl) return gl;
+      }
+      // The nearest heading that PRECEDES this field among its ancestors'
+      // siblings - how a person decides which group a box belongs to.
+      //
+      // AND IT STOPS AT THE FIRST SIBLING THAT OWNS CONTROLS. Without that the
+      // scan walks backwards past OTHER groups and hands a field the heading of
+      // a section it is not in: measured on a synthetic page, a trailing
+      // ungrouped input inherited "Date of Application" from two groups away.
+      // Wrong context is worse than none - it is confidently misleading, and
+      // the model has no way to doubt it.
+      var sib = cur.previousElementSibling, sibs = 0;
+      while (sib && sibs < 4) {
+        var st = lc(sib.tagName);
+        if (st === "h1" || st === "h2" || st === "h3" || st === "h4" ||
+            st === "h5" || st === "h6" || lc(attr(sib, "role")) === "heading" ||
+            st === "legend") {
+          var ht = "";
+          try { ht = clip(norm(sib.textContent), MAX_LANDMARK); } catch (e) {}
+          if (ht) return ht;
+        }
+        // A CONTAINER holding controls is a different group. A BARE control is
+        // just the field next to this one - stopping on it stranded "To" in a
+        // From/To pair while "From" resolved, which is the same group split in
+        // half and half of a pair answered blind.
+        var owns = false;
+        try { owns = !!sib.querySelector("input,select,textarea"); } catch (e) {}
+        if (owns) return "";      // a different group begins here
+        sib = sib.previousElementSibling; sibs += 1;
+      }
+      cur = parentAcross(cur);   // crosses a shadow host, as the landmark walk does
+      hops += 1;
+    }
+    return "";
   }
 
   // IS THIS CONTROL IN A LIST'S FILTER ROW?

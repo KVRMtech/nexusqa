@@ -43,7 +43,7 @@
     "required": false,
     "role": "checkbox",
     "roledescription": "",
-    "section": "",
+    "section": "Review and confirm",
     "step": "",
     "tag": "input",
     "testid": "",
